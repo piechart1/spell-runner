@@ -4,9 +4,11 @@ A typing game for the browser in the style of late-1980s console games. Pip the 
 
 Level 1, QUILL MEADOWS, is complete: three sections, a boss with three phases, three difficulties, high scores and settings that are kept between visits.
 
+**Play it online: https://piechart1.github.io/spell-runner/** (needs a computer with a keyboard).
+
 ## Starting the game
 
-Open `index.html` in a browser (double-click it). Nothing needs to be installed and the game makes no network requests: all the art is pixel data in the scripts and all the sound is synthesised.
+To play without the internet, download the repository and open `index.html` in a browser (double-click it). Nothing needs to be installed and the game makes no network requests: all the art is pixel data in the scripts and all the sound is synthesised.
 
 If a browser does not run pages opened from a file, serve the folder instead, for example:
 
