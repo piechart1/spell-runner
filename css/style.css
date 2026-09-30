@@ -1,0 +1,162 @@
+/* css/style.css
+   SPELL RUNNER page layout (WP-G). CONTRACT 4.21 and 13.1, DESIGN 2 and 14.
+
+   TG.Main.resize() sets the size and position of #game, #crt, #btn-duck and #btn-jump as inline
+   styles (CSS px) and the class buttons-side or buttons-below on #stage. The rules below give the
+   look, and a usable layout (2x, buttons in a strip below the canvas) for the moment before the
+   script has run.
+
+   INK #0f0f1b, SHADOW #2b2d42, WHITE #f8f8f8, RED #d82c2c, MAROON #6a1428, ROYAL #2f5fd0,
+   DEEP_BLUE #1e2a78, GOLD #f8c020 (DESIGN 14.2). No web fonts and no images: nothing is fetched. */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0f0f1b;
+}
+
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+/* The letterbox: fills the window in INK. */
+#stage {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  background: #0f0f1b;
+}
+
+/* The game canvas keeps its 384 x 216 backing store; it is shown larger, pixel by pixel. */
+#game {
+  position: absolute;
+  display: block;
+  left: calc(50% - 384px);
+  top: calc(50% - 252px);
+  width: 768px;
+  height: 432px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: #0f0f1b;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+}
+
+/* CRT overlay (DESIGN 14.8, Tier 2): the lower third of every game pixel row darkened at 18%, and a
+   vignette reaching 15% in the corners. No curvature and no blur. The scanline tile height is set
+   by TG.Main.resize to one game pixel. */
+#crt {
+  position: absolute;
+  display: none;
+  left: calc(50% - 384px);
+  top: calc(50% - 252px);
+  width: 768px;
+  height: 432px;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to bottom, rgba(0, 0, 0, 0) 66.6%, rgba(0, 0, 0, 0.18) 66.6%),
+    radial-gradient(ellipse farthest-corner at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.15) 100%);
+  background-size: 100% 2px, 100% 100%;
+  background-repeat: repeat, no-repeat;
+}
+
+#stage.crt-on #crt {
+  display: block;
+}
+
+/* The buttons sit outside the canvas; only they take pointer events. */
+#controls {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#controls button {
+  position: absolute;
+  box-sizing: border-box;
+  width: 64px;
+  height: 64px;
+  margin: 0;
+  padding: 0 0 4px 0;
+  border: 3px solid #0f0f1b;
+  border-radius: 8px;
+  outline: none;
+  pointer-events: auto;
+  cursor: pointer;
+  color: #f8f8f8;
+  font: bold 13px/1 "Courier New", Courier, monospace;
+  letter-spacing: 1px;
+  text-align: center;
+  text-shadow: 2px 2px 0 #0f0f1b;
+  box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.35), 0 0 0 2px #2b2d42;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#controls button:active {
+  padding: 4px 0 0 0;
+  box-shadow: inset 0 4px 0 rgba(0, 0, 0, 0.35), 0 0 0 2px #f8c020;
+}
+
+#controls button:focus {
+  outline: none;
+}
+
+#btn-duck {
+  left: calc(50% - 384px);
+  top: calc(50% + 184px);
+  background: #2f5fd0;
+}
+
+#btn-jump {
+  left: calc(50% + 320px);
+  top: calc(50% + 184px);
+  background: #d82c2c;
+}
+
+/* Buttons beside the canvas: a small arrow above the word. */
+.buttons-side #btn-jump::before,
+.buttons-below #btn-jump::before {
+  content: "\25B2";
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.buttons-side #btn-duck::before,
+.buttons-below #btn-duck::before {
+  content: "\25BC";
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.noscript {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 40%;
+  margin: 0;
+  color: #f8f8f8;
+  font: bold 16px/1.5 "Courier New", Courier, monospace;
+  text-align: center;
+}

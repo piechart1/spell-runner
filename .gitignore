@@ -1,0 +1,9 @@
+# Built zips (make them again from the working tree when needed)
+dist/
+
+# Local tooling
+.claude/
+.review/
+
+# System files
+.DS_Store

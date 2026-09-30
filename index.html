@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>SPELL RUNNER</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="stage" class="buttons-below">
+  <canvas id="game" width="384" height="216">SPELL RUNNER needs a browser with canvas support.</canvas>
+  <div id="crt"></div>
+  <div id="controls">
+    <button id="btn-duck" tabindex="-1" type="button">DUCK</button>
+    <button id="btn-jump" tabindex="-1" type="button">JUMP</button>
+  </div>
+  <noscript><p class="noscript">SPELL RUNNER needs JavaScript. Please turn it on and reload the page.</p></noscript>
+</div>
+<script src="js/core.js"></script>
+<script src="js/words.js"></script>
+<script src="js/typing.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/gfx.js"></script>
+<script src="js/font.js"></script>
+<script src="js/sprites-chars.js"></script>
+<script src="js/sprites-world.js"></script>
+<script src="js/input.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/level.js"></script>
+<script src="js/boss.js"></script>
+<script src="js/levels/level1.js"></script>
+<script src="js/game.js"></script>
+<script src="js/effects.js"></script>
+<script src="js/hud.js"></script>
+<script src="js/render.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+<script>TG.Main.init();</script>
+</body>
+</html>
