@@ -48,8 +48,9 @@ Project root: the repository root, the folder that holds `index.html`.
 | 15 | `js/effects.js` | WP-F | `TG.Effects` |
 | 16 | `js/hud.js` | WP-F | `TG.Hud` |
 | 17 | `js/render.js` | WP-F | `TG.Render` |
-| 18 | `js/ui.js` | WP-G | `TG.UI` |
-| 19 | `js/main.js` | WP-G | `TG.Main` |
+| 18 | `js/board.js` | Lead | `TG.Board`: world scores, the one file that makes network requests (section 4.22) |
+| 19 | `js/ui.js` | WP-G | `TG.UI` |
+| 20 | `js/main.js` | WP-G | `TG.Main` |
 | | `test/stubs.js` | WP0 | Node loader with stubs |
 | | `test/test-core.js` | WP0 | Tests for core.js |
 | | `test/test-words.js` | WP-A | |
@@ -63,14 +64,19 @@ Project root: the repository root, the folder that holds `index.html`.
 | | `test/test-ui.js` | WP-G | |
 | | `test/run-all.js` | WP-H | Runs every test file and reports |
 | | `test/test-integration.js` | WP-H | The whole game driven by key events and the bots, with rendering and sound on (section 14) |
+| | `test/test-board.js` | Lead | `TG.Board` with a stand-in network function and a clock under the test's control |
+| | `test/test-board-server.js` | Lead | The game and the world scores service together, without a network: `TG.Board`'s requests are passed to the Worker's fetch handler |
+| | `server/` (`src/worker.js`, `src/blocklist.js`, `schema.sql`, `wrangler.toml`, `package.json`) | Lead | The world scores service, a Cloudflare Worker with a D1 database. Never loaded by `index.html` |
+| | `test/test-server.js` | Lead | Tests for the service |
 | | `tools/png.js`, `tools/softcanvas.js`, `tools/sheet.js` | WP0 | Headless drawing tools (section 13.2) |
 | | `test/test-tools.js` | WP0 | Tests for the three WP0 tools |
 | | `tools/shot.js` | WP-F | Screenshots of a bot run (section 13.2) |
 | | `tools/shot-ui.js` | WP-G | Screenshots of the interface screens (section 13.2) |
 | | `README.md` | WP-H | How to start and play the game, run the tests and add a level |
 | | `docs/DESIGN.md`, `docs/CONTRACT.md` | Lead | |
+| | `docs/LEADERBOARD.md` | Lead | The agreement between the world scores service and the game |
 
-**Script load order.** `index.html` loads the 19 JavaScript files with classic `<script src>` tags in the numbered order above, at the end of `<body>`, followed by one inline script:
+**Script load order.** `index.html` loads the 20 JavaScript files with classic `<script src>` tags in the numbered order above, at the end of `<body>`, followed by one inline script:
 
 ```html
 <script src="js/core.js"></script>
@@ -90,12 +96,13 @@ Project root: the repository root, the folder that holds `index.html`.
 <script src="js/effects.js"></script>
 <script src="js/hud.js"></script>
 <script src="js/render.js"></script>
+<script src="js/board.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/main.js"></script>
 <script>TG.Main.init();</script>
 ```
 
-No `type="module"`, no `defer`, no `async`. No network requests of any kind: no fonts, images, audio files or analytics.
+No `type="module"`, no `defer`, no `async`. The page loads nothing from the network: no fonts, images, audio files or analytics. The only network requests the game ever makes are those of `js/board.js` to the world scores service (rule 10 of section 2.2 and section 4.22), and with `TG.Board.URL` empty, as it is until a service is deployed, there are none.
 
 `test/stubs.js` exports the same list as `FILES`. `test/test-ui.js` checks that the script tags in `index.html` match it.
 
@@ -140,6 +147,7 @@ Every JavaScript file under `js/` is one IIFE that attaches to the single global
 7. **Language level.** ES2020 syntax is allowed (`let`, `const`, arrow functions, classes, template strings, spread, optional chaining). No ES modules, no top-level `await`, no `import`/`require` in files under `js/`.
 8. **Identifiers use American spelling** where the platform does (`color`, `center`), to match the Canvas API.
 9. **Errors.** Public functions validate their arguments only where this contract says they throw. Presentation failures (missing sprite, unknown sound name) warn once with `console.warn` and continue.
+10. **Network.** `js/board.js` (world scores, section 4.22) is the one module that makes network requests, and it makes them only to `TG.Board.URL`. It is neither a simulation nor a presentation module. It never touches the window, the document, storage, timers or the clock: `TG.Main` hands it the browser's `fetch`, bound to the window, and a clock, through `TG.Board.init`. No other file under `js/` calls `fetch` or any other network API, and the only remote address under `js/` is the value of `TG.Board.URL` (empty, or an `https` address ending in `.workers.dev`). The simulation modules never call `TG.Board`; `TG.UI` and `TG.Main` do, with every call guarded as in rule 6. `test/test-integration.js` checks this rule statically.
 
 ---
 
@@ -588,14 +596,15 @@ TG.Font.drawGlyph(ctx, ch, x, y, colorIndex, scale) -> void
 ```
 
 - Lowercase letters are drawn as uppercase. Unknown characters are drawn as `?`.
-- Character set: `A-Z 0-9 . , ! ? : ; ' " - + / % ( ) = * #` and space.
+- Character set: `A-Z 0-9 . , ! ? : ; ' " - + / % ( ) = * #`, the copyright sign `©` and space.
 - Special glyphs are reached through `TG.Font.SYM`, which maps names to the single characters that stand for them:
 
 ```js
 TG.Font.SYM = { UP: '^', DOWN: '_', LEFT: '<', RIGHT: '>', CHEV_UP: '{', CHEV_DOWN: '}',
-                HEART: '@', STAR: '&', DROP: '$', BLOCK: '|', RETURN: '~' };
+                HEART: '@', STAR: '&', DROP: '$', BLOCK: '|', RETURN: '~', COPY: '\u00a9' };
 ```
 
+- `COPY` is the copyright sign itself (U+00A9), so text may contain `©` directly; the scripts write it as `'\u00a9'` and stay ASCII. Its glyph is a ring with a small C inside. The other names stand for spare ASCII characters.
 - Glyph data is 8 rows of 8 characters (`#` = pixel, `.` = empty), drawn within the top-left 7x7 of the cell. Glyphs are cached per colour and scale through off-screen canvases.
 
 ### 4.11 `TG.Sprites`, `TG.Remaps`, `TG.Backdrops`, `TG.Levels` (registries in core.js, WP0)
@@ -656,6 +665,8 @@ How consumers read keys:
 |---|---|---|---|---|---|---|
 | `TG.Game` (sim screens) | `space`, `up`, `jump` | `enter`, `down`, `semicolon`, `duck` | `backspace` | `esc` | | |
 | `TG.UI` (other screens) | | | | | `enter`, `space` | `esc` |
+
+`semicolon` is the one queued key with no action in `TG.UI`: the menus ignore it. On the two "any key" screens (boot and the goodbye panel) `TG.Main` passes it on as an Enter press (4.21), so it counts there like every other key.
 
 ### 4.13 `TG.Entities` (entities.js, WP-E)
 
@@ -896,7 +907,9 @@ Who draws what on the screens where both take part:
 TG.UI.init() -> void                     // subscribes to screen:change
 TG.UI.update(dt) -> void                 // called by TG.Main once per step when the screen is not a sim screen. Drains TG.Input
 TG.UI.draw(ctx, state) -> void           // draws the current screen or overlay; draws nothing on playing, lifeLost, bossIntro, boss, levelComplete
-TG.UI.panel                              // read-only: 'menu' | 'scores' | 'options' | 'story' on the title screen, otherwise null
+TG.UI.panel                              // read-only: 'menu' | 'scores' | 'options' | 'story' | 'bye' on the title screen, otherwise null
+TG.UI.page                               // read-only: the page of the High Scores panel while world scores are on (see below):
+                                         // 'easy' | 'medium' | 'hard' (the WORLD pages) | 'local' (THIS COMPUTER). Otherwise null
 TG.UI.onFocusLost() -> void              // called by TG.Main on blur and on a hidden tab: a running resume countdown goes back
                                          // to the pause menu; the game over countdown stands still until onFocusGained
 TG.UI.onFocusGained() -> void            // called by TG.Main on focus and on a visible tab
@@ -904,11 +917,17 @@ TG.UI.setKeyboardHint(flag) -> void      // called by TG.Main: true after a touc
                                          // first keydown. While true, boot, title and How to Play say a keyboard is needed
 ```
 
-`TG.UI` owns: boot, title (with its options, high score and story panels), difficultySelect, howToPlay, paused (menu and resume countdown), gameOver (countdown), results (tally and rank), highScoreEntry. It changes screens only through `TG.Game.setScreen`, `newRun`, `resume`, `continueRun` and `endRun`. It emits the `ui:*` events.
+`TG.UI` owns: boot, title (with its options, high score, story and goodbye panels), difficultySelect, howToPlay, paused (menu and resume countdown), gameOver (countdown), results (tally and rank), highScoreEntry. It changes screens only through `TG.Game.setScreen`, `newRun`, `resume`, `continueRun` and `endRun`. It emits the `ui:*` events. It never touches the window or the document.
 
 `TG.UI.init` must not read `TG.Game.state`: `TG.Main` calls it before `TG.Game.init`. `TG.UI` sets up each screen, including `boot`, when it receives `screen:change`; `TG.Game.init` emits that event for `boot`. `TG.UI.update` and `TG.UI.draw` do nothing until the first `screen:change` has arrived.
 
 The `story` panel (title idle rotation) is Tier 2. If it is left out, `TG.UI.panel` never takes the value `story`.
+
+**EXIT and the `bye` panel.** The title menu is START, HOW TO PLAY, HIGH SCORES, OPTIONS, EXIT, in a box of 144 x 76 at (120, 91) with a row pitch of 13 px. Confirming EXIT (Enter, Space or the JUMP button; Esc does nothing on the menu) emits `ui:select`, sets the panel to `bye`, calls `TG.Audio.music(null)` and emits `ui:exit`. The other keys of that step are dropped. `TG.Main` answers `ui:exit` by asking the browser to close the window (4.21); `TG.UI` only shows the panel, which is what the player sees whenever the tab stays open. No screen change is involved: the screen stays `title`.
+
+The `bye` panel is the goodbye screen: "THANKS FOR PLAYING!" in GOLD at 2x, Pip (`hero_win` at 2x), "YOU CAN CLOSE THIS TAB NOW.", and in the bottom strip "PRESS ANY KEY TO PLAY AGAIN" (blinking) over the copyright line. Keys are ignored for its first 0.5 s. After that any key that `TG.UI` reads from the `TG.Input` queue (a letter, or a key with a menu action) returns to `menu` with START selected, emits `ui:select` and calls `TG.Audio.music('title')`; `TG.Main` passes the keys that `TG.Input` does not queue, the semicolon key (queued, but with no menu action: 4.12), and a click or tap outside the buttons, on as an Enter press, as it does on boot. So for the player every key except the bare modifier and function keys of 4.21 returns to the menu. The idle rotation does not run while the panel is `bye`, and the idle time starts from zero after the return to the menu. These are the only two calls `TG.UI` makes to `TG.Audio.music`.
+
+**Copyright line.** The text is the constant `COPYRIGHT` in `js/ui.js` (`'\u00a9 2026 DAVID SLEE'`), the one place that holds the year and the name. It is drawn centred at y 207, in SILVER on INK, on the boot screen and in the bottom strip of the title's `menu` (also while the logo is stamped), `story` and `bye` panels. That strip is INK, 22 px high (y 194 to 215), with the panel's help line (or the keyboard note) at y 197 above the copyright line. The `scores` and `options` panels fill the screen and do not show the line.
 
 `TG.UI` also does the saving that follows from play, because the simulation never writes to `TG.Save`:
 
@@ -917,14 +936,35 @@ The `story` panel (title idle rotation) is Tier 2. If it is left out, `TG.UI.pan
 - on `highScoreEntry` confirm: `TG.Save.addScore`;
 - when starting a run: `TG.Save.setSetting('lastDifficulty', difficulty)`. The seed for a run started from the menus is `(Date.now() >>> 0)`; only `TG.UI` may read the clock for this.
 
+**World scores** (`TG.Board`, section 4.22; DESIGN 8.9 and 12). `TG.UI` makes no network request. It calls `TG.Board` and reads `TG.Board.state` each frame, every call guarded. "World scores are on" below means `TG.Board.enabled()` is true. When `js/board.js` is absent, `TG.Board.URL` is empty, the browser has no `fetch` or the `worldScores` setting is off, every screen looks and behaves as it did before world scores existed, and the rest of this part does not apply.
+
+- **Options.** When `TG.Board.available()` is true the panel has a ninth line, WORLD SCORES (ON / OFF, the `worldScores` setting of 5.12), between ADAPTIVE PACE and RESET SCORES. Its help lines are "SENDS YOUR INITIALS AND SCORE" and "TO A BOARD SHARED BY ALL PLAYERS.". With nine lines the row pitch is 12 px from y 42 (eight lines: 13 px from y 44). The line stays while the setting is off.
+- **Run token.** Confirming a difficulty (on entering `howToPlay` from `difficultySelect`) calls `TG.Board.startRun(difficulty)`. A later confirm calls it again. Starting the run, a continue and a restart from a checkpoint do not.
+- **When the initials screen appears.** `results` goes on to `highScoreEntry` when the score reaches the top five of this computer (`TG.Save.qualifies`), or when the run goes to the world scores: world scores are on, `TG.Board.hasToken(result.difficulty)` is true, the score is above zero and `floor(result.time)` is at least `TG.Board.MIN_TIME` (10 s; the service refuses a shorter run, so it is not offered). Otherwise it goes to `title`, as before.
+- **Initials screen.** The heading is "NEW HIGH SCORE!" when the score reaches the local top five and "WORLD SCORES" when the screen is shown for the world scores alone. While a score will be sent, the screen says so: under the local table "INITIALS AND SCORE ALSO GO TO WORLD SCORES" (the table rows then have a pitch of 11 px from y 129, instead of 12 px from y 132), or, when there is no local table to show, "YOUR INITIALS AND SCORE GO ON THE WORLD SCORES FOR <DIFFICULTY>." and "WORLD SCORES CAN BE SWITCHED OFF IN OPTIONS ON THE TITLE SCREEN.". The line under the boxes (y 112) says what Enter does: "ENTER: SEND" (WORLD SCORES), "ENTER: SAVE AND SEND" (NEW HIGH SCORE! with a send) or "ENTER: SAVE" (nothing is sent), with " AS <INITIALS>" added while the boxes are empty and initials are offered; when nothing is sent the offer reads "ENTER: USE <INITIALS>", as before.
+- **Declining (Esc).** While the run can be sent, the bottom strip reads "TYPE 3 LETTERS, THEN ENTER   ESC: DO NOT SEND", the Esc part in SILVER. On the WORLD SCORES screen Esc emits `ui:back` and goes to `title` (the menu) with nothing saved and nothing sent: no `TG.Save.addScore`, no `initials` setting, no `TG.Board.submit`. On the NEW HIGH SCORE! screen the score still belongs in the local table, so Esc switches the sending off or on again (`ui:move`): off, the line under the table is "THIS SCORE STAYS ON THIS COMPUTER", the strip ends "ESC: SEND IT TOO" and Enter saves on this computer only. When nothing would be sent (world scores off, no token, a run under 10 s) Esc does nothing and the strip is "TYPE 3 LETTERS, THEN ENTER", as before.
+- **Key lock.** While world scores are on, Enter and Esc are not read for the first 0.5 s of the initials screen (`ENTRY_LOCK`), so a second Enter meant for the results screen cannot send a score. Letters and Backspace are read at once. With world scores off there is no lock.
+- **Offered initials.** The initials last used (the `initials` setting) are shown dim in the boxes, and Enter alone takes them. One exception: `PIP` is the game's placeholder, not initials somebody chose, so while the run will be sent it is not offered. The boxes are then empty, Enter alone shakes them and shows "TYPE 3 LETTERS FIRST", and nothing is saved or sent; a player who wants PIP types it. When nothing is sent, PIP is offered as before.
+- **Refused initials.** While world scores are on, Enter with initials for which `TG.Board.blocked(name)` is true is refused on the spot: the boxes shake for 0.3 s and turn CORAL, "TRY OTHER INITIALS" replaces the hint line, `ui:back` is emitted, and nothing is saved or sent (no `TG.Save.addScore`, no `initials` setting, no `TG.Board.submit`). The next letter starts the initials again; Backspace also clears the message. Saved initials that are blocked count as PIP.
+- **Confirm.** `TG.Save.addScore` as before (it adds the entry only when the score qualifies), `TG.Save.setSetting('initials', name)`, then `TG.Board.submit(entry, state.result)` when the run goes to the world scores and the player has not declined. Then `title`.
+- **High Scores panel.** With world scores on the panel has four pages, changed with Left and Right (they go round; `ui:move`): WORLD EASY, WORLD MEDIUM, WORLD HARD and THIS COMPUTER. The page header (y 31) is the page name between a left and a right arrow, with the page number ("2/4") at the right; the bottom line is "LEFT AND RIGHT: PAGE   ENTER OR ESC: BACK". A WORLD page shows ten rows (11 px pitch from y 56) under the column heads NAME, SCORE, WPM, ACC, RANK: place, initials, score (seven digits), WPM, accuracy and rank. THIS COMPUTER shows the three tables of five as the unpaged panel does, 6 px lower. Instead of rows a WORLD page shows "LOADING..." while `state.boards` is `idle` or `loading`, "WORLD SCORES CANNOT BE REACHED" with "PRESS RIGHT FOR THIS COMPUTER'S SCORES" when it is `failed` (on such a page Right goes straight to THIS COMPUTER), and "NO SCORES YET. BE THE FIRST!" for an empty board. Opening the panel from the menu calls `TG.Board.refresh()`, or `TG.Board.refresh(true)` when the last load failed. It opens on the WORLD page of the `lastDifficulty` setting, or on THIS COMPUTER when the last load failed.
+- **After the initials screen.** When a score was sent, the title opens on the WORLD page of the run's difficulty, and keys are not read for the first 0.5 s (`ARRIVE_LOCK`), so that an Enter meant for the initials screen does not close it. Under the rows (y 172) a status line says what became of the score:
+  - `state.send` `sending`: "SENDING...";
+  - `sent`: "YOUR PLACE: 12 OF 87" in GOLD, with the player's row on a SHADOW bar (x 32 to 352) in GOLD with a blinking arrow at x 36 when `state.place` is among the ten rows. When `state.kept` is false (the run is below the 200 rows the service keeps, which it answers with place 201 of 201) the line is "NOT IN THE BEST 200 YET. KEEP GOING!" instead;
+  - `failed`: by `state.sendError`, "COULD NOT REACH WORLD SCORES." (`unreachable`), "WORLD SCORES DID NOT TAKE THIS SCORE." (`refused`) or "TOO MANY SCORES SENT FROM HERE THIS HOUR." (`busy`), in CORAL, followed by "SAVED ON THIS COMPUTER." on a second line when the score reached the local table. (Two lines, because together they are wider than the screen.)
+
+  When the send failed and the board could not be loaded either, the page has no rows and says it once: "WORLD SCORES CANNOT BE REACHED", then "YOUR SCORE IS SAVED ON THIS COMPUTER." and "PRESS RIGHT TO SEE IT" when the score reached the local table, or "YOUR SCORE WAS NOT SENT." when it did not; there is no second failure line. After a successful send the page shows the list of the service's reply, also when the other boards are not loaded. When nothing was sent and the score reached the local table, the panel opens on THIS COMPUTER with the new entry blinking, as before, and reads keys at once. The status line and the highlighted row stay on that WORLD page each time the panel is opened from the menu, until the next run starts (READY typed); the idle rotation shows the boards without them.
+- **Idle rotation.** When the rotation starts it calls `TG.Board.refresh()` once. Each time it reaches the high scores it shows a WORLD page (easy, medium and hard in turn, starting with `lastDifficulty`) if that board is known, without the arrows and with "PRESS ANY KEY"; otherwise it shows the unpaged panel.
+
 ### 4.21 `TG.Main` (main.js, WP-G)
 
 ```js
 TG.Main.init() -> void
-   // In this order: TG.Save.init(window), TG.Save.load(), TG.Gfx.init(document), TG.Audio.init(),
+   // In this order: TG.Save.init(window), TG.Save.load(), TG.Board.init({ fetch, now }), TG.Gfx.init(document), TG.Audio.init(),
    // TG.Input.init(window), TG.Input.onFirstInput = function () { TG.Audio.unlock(); },
    // TG.Input.bindButton for #btn-jump and #btn-duck, TG.Effects.init(), TG.Hud.init(),
-   // TG.Render.init(canvas), TG.UI.init(), TG.Game.init(), resize handling, focus, blur and visibility handling, first requestAnimationFrame.
+   // TG.Render.init(canvas), TG.UI.init(), TG.Events.on('ui:exit', ...), TG.Game.init(), resize handling, focus, blur and visibility handling,
+   // first requestAnimationFrame.
    // Each call is guarded so that a missing module does not stop the others.
    // TG.Main never reads window.localStorage itself; TG.Save.init does that inside try/catch.
 TG.Main.frame(timestampMs) -> void       // the requestAnimationFrame callback
@@ -964,7 +1004,9 @@ TG.Main.tick = function (dt) {
 
 The calls in `tick` are guarded as rule 6 of section 2.2 requires; the guards are left out above for brevity.
 
-`TG.Main.frame` accumulates real time, runs `tick(DT)` at most `MAX_STEPS` times, calls `TG.Audio.update`, then `TG.Render.draw(TG.Game.state)`. If a frame is longer than `MAX_FRAME` it discards the accumulated time and calls `TG.Game.pause()`.
+`TG.Main.frame` accumulates real time, runs `tick(DT)` at most `MAX_STEPS` times, calls `TG.Audio.update` and `TG.Board.update` (both with the frame's real time, at most `MAX_FRAME`), then `TG.Render.draw(TG.Game.state)`. If a frame is longer than `MAX_FRAME` it discards the accumulated time and calls `TG.Game.pause()`.
+
+World scores (section 4.22): `TG.Main.init` calls `TG.Board.init({ fetch: f, now: function () { return Date.now(); } })`, where `f` is `window.fetch.bind(window)`, or `null` when the window has no `fetch` function or reading it throws. This is the only place where the game takes a network function from the browser; `TG.Main` never calls it.
 
 Focus handling:
 
@@ -974,6 +1016,8 @@ Focus handling:
 | `focus` on window; `visibilitychange` with `document.hidden` false | `TG.UI.onFocusGained()`, `TG.Audio.resume()` |
 
 Audio unlock and touch (DESIGN 2, 15.1): a browser starts an AudioContext only inside a user gesture, and Esc or a touch `pointerdown` is not one. So until `TG.Audio.isUnlocked()` is true, `TG.Main` calls `TG.Audio.unlock()` on every `keydown` except Esc, and on `pointerdown`, `pointerup`, `touchend` and `click` on the window. A `pointerdown` with `pointerType` `'touch'` before any `keydown` calls `TG.UI.setKeyboardHint(true)`; the first `keydown` calls `TG.UI.setKeyboardHint(false)`.
+
+EXIT (`ui:exit`, sections 4.20 and 8.6): `TG.Main` calls `window.close()` inside try/catch, and skips the call when the window has no `close` function. This is the only place where the game asks the browser to close anything. A browser closes only a window that a script opened (some also close a tab that has no earlier page in its history), so for a tab the player opened the call does nothing and the goodbye panel of `TG.UI` stays on screen. While `TG.UI.panel` is `'bye'`, "any key" works as on the boot screen: a key that `TG.Input` does not queue (Shift, a digit and so on), the semicolon key (`;`, `:` or whatever a layout has on that key; `TG.Input` queues it as `semicolon` for the game, and `TG.UI` has no menu action for it) and a click or tap outside the buttons are passed to `TG.UI` as an Enter press, through `TG.Input.keyDown('enter')` and `keyUp('enter')`. Not passed on: a repeated key, a combination with Ctrl, Cmd or Alt, the keys Control, Meta, Alt, AltGraph, OS and Fn on their own, the function keys (F1, F2 and so on), and the `Unidentified`, `Dead` and `Process` keys. On every other screen `TG.Main` passes nothing on, so the semicolon key does nothing in the menus and only ducks in play.
 
 `TG.Game.pause()` does nothing on screens that are not being played, so on `title`, `results` and the other menu screens losing focus only silences the sound, and getting focus back restores it. On `paused` during the resume countdown and on `gameOver`, `TG.UI.onFocusLost` stops the countdown instead, so that play does not restart, or the run end, while the player is in another window. On `paused` the AudioContext runs again after `focus`, while the sequencer stays stopped until the player resumes (section 7.3). A pause request that arrives during `lifeLost` is deferred, not lost (section 9.2).
 
@@ -987,6 +1031,53 @@ Page element ids (WP-G creates them; nobody else looks them up):
 | `controls` | Wrapper for the two buttons, outside the canvas area |
 | `btn-jump` | `<button tabindex="-1">JUMP</button>` |
 | `btn-duck` | `<button tabindex="-1">DUCK</button>` |
+
+### 4.22 `TG.Board` (board.js, Lead)
+
+World scores, the game side. `docs/LEADERBOARD.md` is the agreement with the service under `server/`; its section 9 is this module. Rule 10 of section 2.2 applies.
+
+```js
+TG.Board.URL                             // the base address of the service, no slash at the end. '' (as delivered) switches world
+                                         // scores off completely: no request is ever made. The lead sets it after the service is deployed
+TG.Board.init({ fetch, now }) -> void    // called by TG.Main (4.21). fetch: the network function, or null. now: a function returning ms.
+                                         // Drops the token, the lists and every request in flight
+TG.Board.update(dt) -> void              // called by TG.Main once per frame: gives up requests that have waited TIMEOUT_MS
+TG.Board.available() -> boolean          // URL set and a fetch function given
+TG.Board.enabled() -> boolean            // available() and the worldScores setting is not false
+TG.Board.startRun(difficulty) -> void    // asks for a run token: POST <URL>/v1/runs
+TG.Board.hasToken(difficulty) -> boolean // a token for a run of this difficulty is held (any difficulty when none is given)
+TG.Board.submit(entry, result) -> void   // sends a finished run: POST <URL>/v1/scores. entry: section 5.12; result: state.result
+TG.Board.refresh(force) -> void          // loads the three boards: GET <URL>/v1/scores
+TG.Board.blocked(name) -> boolean        // the initials are on the block list (any letter case); works whether world scores are on or off
+TG.Board.BLOCKLIST                       // frozen array: a copy of the array in server/src/blocklist.js
+TG.Board.TIMEOUT_MS                      // 6000
+TG.Board.REFRESH_MS                      // 30000
+TG.Board.MIN_TIME                        // 10: s. The service refuses a shorter run (LEADERBOARD 5, check 7), so it is not sent
+TG.Board.SEND_MAX_WPM                    // 220: the highest WPM the service accepts (check 6). A higher figure is sent as this one
+TG.Board.KEPT_ROWS                       // 200: rows the service keeps per board (LEADERBOARD 4)
+TG.Board.state = {
+  boards: 'off',                         // 'off' | 'idle' | 'loading' | 'ready' | 'failed'
+  lists: { easy: [], medium: [], hard: [] },   // entries as in 5.12, highest first, at most 50 each
+  send: 'none',                          // 'none' | 'sending' | 'sent' | 'failed': the last submission
+  sendError: null,                       // while send is 'failed': 'unreachable' | 'refused' | 'busy'. Otherwise null
+  place: 0, total: 0,                    // set when send is 'sent'
+  kept: true,                            // while send is 'sent': false when place is above KEPT_ROWS (the run was not kept)
+  sentDifficulty: null,                  // the difficulty of the last submission
+  sentEntry: null                        // the entry that was sent
+};
+```
+
+`sendError` and `kept`, and the three limits, are not in LEADERBOARD 9; they were added after the review of the game side (14.2). The limits are copies of `RULES.minTime`, `RULES.maxWpm` and `RULES.keep` in `server/src/worker.js`; `test/test-board.js` checks that they are equal.
+
+- **Off.** While `enabled()` is false the state is `boards: 'off'` with empty lists and `send: 'none'`, no function makes a request, the token is dropped and replies still in flight are ignored. `enabled()` is read on every call, so the module follows the `worldScores` setting without being told.
+- **Nothing throws, nothing returns a promise.** Every function returns `undefined` or a boolean, whatever its arguments and whatever the network function does (also when it throws or returns something that is not a promise). Results arrive in `TG.Board.state`, which stays the same object.
+- **Requests.** Only to `TG.Board.URL` followed by `/v1/runs` or `/v1/scores`, with `mode: 'cors'`, `credentials: 'omit'` and `referrerPolicy: 'no-referrer'`; a POST carries a JSON body and the header `content-type: application/json`. A reply counts only when its status is 2xx and its body is a JSON object with `ok === true`; anything else (an error status, a body that is not JSON, a wrong shape, a network failure) is a failure. A request is given up after 6 s, measured on the clock of `init` in `update(dt)` (without a clock, `update` counts `dt`); that is a failure too, and a reply that arrives later is ignored. One request of each kind (token, send, boards) is in flight at a time: a newer one replaces the older, whose reply is then ignored.
+- **Where scores are taken from.** The service gives a run token only to the game's own web address and to a local web server (LEADERBOARD 3: a `POST` from another origin, or from a file on disk, is answered with `403`). For `TG.Board` that is a failed token request like any other: no token is held, so `TG.UI` shows no initials screen for the world scores and nothing is sent, while `refresh` still loads the boards.
+- **Token.** Kept in memory only, with its difficulty. `startRun` for another difficulty drops the token at once; for the same difficulty the old token stays in use until the new one arrives, and stays if the request fails. `submit` uses the token up. A token is no longer held from 60 s before the end of its life (`expires` of the reply, 3 hours).
+- **submit.** Does nothing without a token for `result.difficulty`, for initials on the block list, for an entry that is not one, or for a run with `floor(result.time)` under `MIN_TIME`. Otherwise `send` becomes `sending` and the body is `{ token, name, score, wpm, accuracy, rank, cleared, time }` with `time = floor(result.time)` and `wpm = min(entry.wpm, SEND_MAX_WPM)`. (The game's WPM is the speed inside words, `TG.Typing`, 4.7; a fast typist can be above 220 there, and the service would refuse the whole run. The table of this computer keeps the game's own figure; `sentEntry` holds what was sent.) An accepted reply needs whole numbers `place` and `total` from 1 to 999,999 with `place <= total`, the token's `difficulty` and an array `scores`; then `lists[difficulty]` becomes the cleaned `scores`, `kept` becomes `place <= KEPT_ROWS` and `send` becomes `sent`. Any failure gives `send: 'failed'` and leaves the lists as they were.
+- **Why a send failed.** `sendError` is read from the status of the reply: `refused` for 400, 409 and 413 (the service read the score and did not take it: LEADERBOARD 6 `bad_request`, `bad_token`, `expired`, `name`, `implausible`, `too_soon`, `used`, `too_large`), `busy` for 429 (`rate`, the hourly limit of the address), and `unreachable` for everything else: a network failure, the 6 s timeout, any other status, a 2xx reply that is not JSON or has the wrong shape. The body of an error reply is not read.
+- **refresh.** Asks the service at most once every 30 s unless `force` is `true`, and never while a load is in flight. `boards` goes from `idle` or `failed` to `loading`, then to `ready` or `failed`; while lists that are already known are loaded again it stays `ready`. For 20 s after an accepted `submit`, a load does not replace the list of that difficulty, because the service lets `GET /v1/scores` be cached for 15 s and an older copy would not hold the new score.
+- **Cleaning.** Every list from the service is cleaned before it is kept, because the game draws it: an entry needs a string `name` with at least three letters in it (capitals are made, other characters dropped, the first three letters kept) and a number `score`, or it is left out; `score` is a whole number from 0 to 9,999,999, `wpm` from 0 to 999, `accuracy` from 0 to 100; `rank` is S, A, B or C (otherwise C); `cleared` is a boolean; `date` is `YYYY-MM-DD` or `''`; no other field is kept; at most 50 entries are kept, from the first 500 looked at.
 
 ---
 
@@ -1693,7 +1784,8 @@ data = {
     adaptive: true,
     tutorialDone: false,    // set true the first time checkpoint 1 is reached
     lastDifficulty: 'medium',
-    initials: 'PIP'
+    initials: 'PIP',
+    worldScores: true       // world scores (section 4.22): send finished runs and show the world boards. false: no request is made
   },
   scores: { easy: [ /* SCORE_SLOTS entries */ ], medium: [ /* ... */ ], hard: [ /* ... */ ] },
   best:   { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } },
@@ -2084,7 +2176,7 @@ Recipes are in DESIGN 15.2 and 15.3. `TG.Audio` plays everything in response to 
 
 | Name | Kind | Plays on |
 |---|---|---|
-| `title` | Loop | Screens `title`, `difficultySelect`, `howToPlay` |
+| `title` | Loop | Screens `title`, `difficultySelect`, `howToPlay`. Silent while the title's `bye` panel shows: `TG.UI` stops it with `TG.Audio.music(null)` and starts it again with `TG.Audio.music('title')` (section 4.20) |
 | `level1` | Loop | The level track of Level 1. On screen `playing`, `TG.Audio` plays the track named by `music.level` in the latest `level:start` payload. `transpose` and `tempo` come from the latest `section:enter` |
 | `boss1` | Loop | The boss track of Level 1. On screen `boss`, `TG.Audio` plays the track named by `music.boss` in the latest `level:start` payload, with `transpose` and `tempo` from `section:enter` with index 3 (168 for Level 1). From `boss:phase` with phase 3 the tempo is 184 and pulse 2 is up an octave |
 | `victory` | Once | Screen `levelComplete`, started by `boss:defeat` after `boss_defeat` finishes |
@@ -2121,7 +2213,7 @@ For Level 1 the level data gives C major pentatonic in sections 0 and 1, D major
 
 Every event has a payload object. `target` and `entity` are references to live simulation objects: listeners may read them during the call and must copy anything they keep. Positions are world px unless stated.
 
-Listeners: A = `TG.Audio`, E = `TG.Effects`, H = `TG.Hud`, U = `TG.UI`. Any module may listen to any event; the table lists the listeners that are required.
+Listeners: A = `TG.Audio`, E = `TG.Effects`, H = `TG.Hud`, U = `TG.UI`, M = `TG.Main`. Any module may listen to any event; the table lists the listeners that are required.
 
 ### 8.1 Typing (emitted by `TG.Typing`)
 
@@ -2214,8 +2306,9 @@ Listeners: A = `TG.Audio`, E = `TG.Effects`, H = `TG.Hud`, U = `TG.UI`. Any modu
 | `ui:tally` | `{}` | A |
 | `ui:stamp` | `{ rank }` | A E |
 | `ui:letter` | `{ index }`. A title logo letter was stamped, or an initial was typed | A |
+| `ui:exit` | `{}`. EXIT was confirmed on the title menu, after its `ui:select`. `TG.Main` tries `window.close()` (section 4.21) | M |
 
-`ui:letter` plays `key_ok` with `step = index`.
+`ui:letter` plays `key_ok` with `step = index`. `ui:exit` plays nothing of its own; the title music stops through `TG.Audio.music(null)` (section 4.20).
 
 ---
 
@@ -2226,7 +2319,7 @@ Listeners: A = `TG.Audio`, E = `TG.Effects`, H = `TG.Hud`, U = `TG.UI`. Any modu
 | Screen | Kind | Owner of the logic | What it is |
 |---|---|---|---|
 | `boot` | UI | WP-G | "PRESS ANY KEY" |
-| `title` | UI | WP-G | Title, menu, and the options, high score and story panels |
+| `title` | UI | WP-G | Title, menu, and the options, high score, story and goodbye panels |
 | `difficultySelect` | UI | WP-G | Three panels |
 | `howToPlay` | UI | WP-G | Instructions; from difficulty select, the READY prompt |
 | `playing` | Sim | WP-E | Sections 1 to 3 |
@@ -2296,7 +2389,7 @@ All tests are plain Node scripts with no npm packages. They run from the project
 ```js
 const stubs = require('./stubs');
 
-stubs.FILES            // the 19 file paths of section 1, in load order, relative to the project root
+stubs.FILES            // the 20 file paths of section 1, in load order, relative to the project root
 stubs.ROOT             // absolute path of the project root
 
 stubs.plain(value) -> value   // a JSON copy of `value` made in the test's own realm (see "Comparing values" below)
@@ -2845,7 +2938,7 @@ Acceptance (`node test/test-ui.js`). The test uses fakes for the modules that ar
 
 - for `TG.Game`, a fake that implements `state`, `init` (which emits `screen:change` to `boot`), `setScreen`, `canGo`, `newRun`, `pause`, `resume`, `continueRun`, `endRun` and `isSimScreen`;
 - for `TG.Input`, a fake that implements `init`, `typeChar`, `keyDown`, `keyUp`, `isDown`, `drain`, `clear`, `bindButton` and `onFirstInput`. The test puts keys into it with `typeChar` and `keyDown`, and `TG.UI.update` drains it;
-- for `TG.Audio`, a fake that records calls to `unlock`, `suspend`, `resume` and `update`.
+- for `TG.Audio`, a fake that records calls to `unlock`, `suspend`, `resume`, `update` and `music`.
 
 Checks:
 
@@ -2872,7 +2965,7 @@ Deliverables: `test/run-all.js`, `test/test-integration.js`, `README.md`, fixes 
 - [ ] `node test/test-integration.js` drives the whole game with key events and the bots, with rendering and sound on, and covers the paths a bot run does not take (section 14.1).
 - [ ] Every test passes against the real files. `test/standins/` is deleted.
 - [ ] If WP-E was delivered at a milestone below 6: the bot runs of the delivered milestones pass with the matching `--until`, and the part that is missing is listed for the lead, who decides how it is completed.
-- [ ] With all 19 files loaded under the stubs, 600 frames driven through `env.runFrame` from `boot` to `playing` (keys injected with `env.dispatch`) complete without a captured `console.error`.
+- [ ] With all 20 files loaded under the stubs, 600 frames driven through `env.runFrame` from `boot` to `playing` (keys injected with `env.dispatch`) complete without a captured `console.error`.
 - [ ] `TG.Sprites.missing()` is empty; no placeholder warning appears during a full bot run with rendering on.
 - [ ] Every name passed to `TG.Audio.sfx` and `TG.Audio.music` anywhere in the code is in the registries.
 - [ ] Tuning changes are written back as section 12.1 describes: into sections 3 and 5.10 of this file, DESIGN 9.1 and 11, and `js/core.js`; the `tune` block of Level 1 and `CONSTANT_OVERRIDES` are empty; `node test/sim.js` passes afterwards.
@@ -2964,10 +3057,10 @@ WP-H integrated the delivered packages of Level 1. This section records what was
 
 ### 14.1 What was checked
 
-`node test/run-all.js` runs the ten `test/test-*.js` files and `test/sim.js` and passes (about 90 s with several files at a time; `--quick` shortens the two slowest files). `test/test-integration.js` (WP-H) loads all 19 files under the stubs with the software canvas, which throws on any canvas call outside the subset of 13.2, and checks:
+`node test/run-all.js` runs the `test/test-*.js` files (thirteen since world scores: the ten of Level 1, `test-server.js`, `test-board.js` and `test-board-server.js`) and `test/sim.js` and passes (about 90 s with several files at a time; `--quick` shortens the two slowest files). `test/test-integration.js` (WP-H) loads all 20 files under the stubs with the software canvas, which throws on any canvas call outside the subset of 13.2, and checks:
 
 - every file present, no sprite of 6.4 missing, nothing drawn or played at load time;
-- no network API, remote address or external file in `index.html`, `css/style.css` or any script;
+- no network API, remote address or external file in `index.html`, `css/style.css` or any script, except in `js/board.js`, which may call the network function it is handed and holds the one remote address, `TG.Board.URL` (rule 10 of 2.2);
 - every sound and track name played by `audio.js` is in `TG.Audio.SFX` or `TG.Audio.TRACKS`;
 - boot, title, difficulty select, how to play and play reached with key events through `env.dispatch` and 600 frames through `env.runFrame`, on each difficulty;
 - a whole run by the `test/sim.js` bot on each difficulty with `TG.Main.tick`, `TG.Audio.update` and `TG.Render.draw` on every step, with every assertion of 10.3 and no console output (so no placeholder sprite, no unknown sound, track or event);
@@ -2997,7 +3090,7 @@ Extra test-only views, used by tests and tools and never by the game: `TG.Audio.
 
 **4.9, 4.10 `TG.Gfx`, `TG.Font`.** The placeholder has an INK fill with the two letters in WHITE. `TG.Gfx.color` gives INK for an index outside 0 to 31; fractional scales are floored; text also accepts scale 3. `TG.Font.SYM.DOWN` is `_`, so game text never contains an underscore (empty initials are shown as `-`).
 
-**4.12 `TG.Input`.** A repeated named key is dropped but still has `preventDefault`, so holding Space does not scroll. `keyup` ignores modifier keys. `bindButton` also blurs the element on focus, blocks the long-press menu and sets `tabindex="-1"`. `TG.Main` also prevents Tab, `'`, `/`, PageUp, PageDown, Home and End, and passes any other key and a click outside the buttons to the boot screen as Enter.
+**4.12 `TG.Input`.** A repeated named key is dropped but still has `preventDefault`, so holding Space does not scroll. `keyup` ignores modifier keys. `bindButton` also blurs the element on focus, blocks the long-press menu and sets `tabindex="-1"`. `TG.Main` also prevents Tab, `'`, `/`, PageUp, PageDown, Home and End, and passes any other key that `TG.UI` would not act on (the keys that are not queued, and the semicolon key) and a click outside the buttons to the boot screen and the goodbye panel as Enter.
 
 **4.13 to 4.16, 5 (simulation).**
 - During a jump `x = jumpX + RUN_SPEED * jumpT` (closed form; added field `player.jumpX`), so a jump from `winStart` lands exactly on the far edge without rounding loss.
@@ -3066,6 +3159,31 @@ Extra test-only views, used by tests and tools and never by the game: `TG.Audio.
 - key_bad (7.1). A second `type:miss` within 20 ms plays nothing: the key that triggers auto-release emitted two, and the two identical sounds added up to twice the level. `test/test-audio.js`.
 - Quit (7.3). QUIT from the pause menu during `jingle_ready` or `jingle_checkpoint` stops the jingle and the duck, which had finished over the results music. `test/test-audio.js`.
 - Original figures (DESIGN 15.2). one_up, ink_drop and start had matched the Super Mario Bros. 1-up and coin figures note for note. one_up is C6 C6 G6 G6 C7 then a held E7; ink_drop a rising fifth (120 ms) that steps up the pentatonic in a chain of drops; start G5 then a held G6. `test/test-audio.js`.
+
+**Copyright line and EXIT.** Two additions to the title screen that the owner asked for after release. Each is written into the sections named, with checks in the test file given.
+
+- Copyright (4.10, 4.20, DESIGN 12, 14.7). "© 2026 DAVID SLEE" is shown on the boot screen and at the bottom of the title's menu, story and goodbye panels. The font has a copyright glyph, `TG.Font.SYM.COPY`, which is the character `©` itself. The text is one constant in `js/ui.js`. On the title it sits in the bottom INK strip, which grew from 13 px with one line to 22 px with two (the help line, then the copyright line), so the ground shows 10 px instead of 19. The high score and options panels fill the screen and do not show the line. `README.md` ends with the same line. `test/test-gfx.js`, `test/test-ui.js`.
+- EXIT (4.20, 4.21, 7.2, 8.6, DESIGN 12). EXIT is the fifth item of the title menu. A page cannot close a tab that the player opened, so EXIT emits the new event `ui:exit`, `TG.Main` tries `window.close()` inside try/catch, and `TG.UI` shows a goodbye panel (`TG.UI.panel` is `'bye'`) with the title music stopped; any key, tap or click after 0.5 s goes back to the menu with START selected and the music playing. "Any key" includes the semicolon key, on the goodbye panel and on boot: `TG.Input` queues it for ducking and the menus have no action for it, so before this `TG.Main` did not pass it on and it was the one key that did nothing on those two screens. Esc on the menu does not exit. The menu box has a 13 px row pitch (it was 14) and is 144 x 76 at y 91 (it was 144 x 66 at y 96), so that five rows fit between the logo and the ground. `TG.Events.NAMES` has 63 names. `tools/shot-ui.js` takes `--panel bye`. `test/test-ui.js`, `test/test-core.js`.
+
+**World scores.** A shared leaderboard that the owner asked for after release. The service is a Cloudflare Worker of our own (`server/`); `docs/LEADERBOARD.md` is the agreement between it and the game. The game side is written into the sections named, with checks in the test files given.
+
+- One network module (1, 2.2 rule 10, 4.22). `js/board.js` is the 20th script, loaded after `js/render.js` and before `js/ui.js`. It defines `TG.Board`, the only code in the game that makes network requests, and only to `TG.Board.URL`. The address is the empty string as delivered: world scores are then off, no request is made and every screen is as it was. The lead fills the address in after the service is deployed. The statement of section 1 that the game makes no network requests of any kind now reads: the page loads nothing from the network, and `TG.Board` is the one exception. `test/test-integration.js` (the static rule), `test/test-board.js`.
+- The game never depends on the service (4.22). No function of `TG.Board` throws or returns a promise; results arrive in `TG.Board.state`. A request is given up after 6 s. A reply that is late, is not JSON, has the wrong shape or an error status is a failure, and after a failure the game carries on with the scores of this computer. Lists from the service are cleaned before they are kept. `test/test-board.js`.
+- `TG.Main` (4.21) hands `TG.Board` the window's `fetch` and a clock in `init`, and calls `TG.Board.update` once per frame. `test/test-board.js`.
+- Setting `worldScores`, default `true` (4.4, 5.12), with a WORLD SCORES line on the Options panel and the note "SENDS YOUR INITIALS AND SCORE". The line is shown only when an address is set. With the setting off no request is made. `test/test-core.js`, `test/test-ui.js`.
+- `TG.UI` (4.20, DESIGN 8.9 and 12): the run token is asked for when a difficulty is confirmed; the initials screen also appears for a run that goes to the world scores (heading "WORLD SCORES"); blocked initials are refused there; the High Scores panel has four pages; after a send the title opens on the WORLD page of the run's difficulty with a status line; the idle rotation shows a WORLD page when one is known. New read-only `TG.UI.page`. `test/test-ui.js`.
+- The block list of `js/board.js` is a copy of `server/src/blocklist.js`; `test/test-board.js` reads the server file and checks that the two are equal. While world scores are on, the list also applies to the table of this computer, because the same initials go to both. With world scores off it is not used.
+- The two halves together: `test/test-board-server.js` passes every request of `TG.Board` to the Worker's own fetch handler (no network) while the real game is played from the menus to the initials screen, and checks the Worker's database and the WORLD page against the game's result.
+- Tools (13.2): `tools/shot-ui.js` has the options `--world`, `--board`, `--entry` and `--send`, which draw the new screens and states with a stand-in service that holds sample scores (`createWorld`, also used by the tests). The stand-in makes no network request.
+- Differences from the text of the brief, decided while building: (1) "COULD NOT REACH WORLD SCORES. SAVED ON THIS COMPUTER." is two lines, because one line would be 424 px wide. (2) `TG.Board.refresh()` counts its 30 s from the last request, whatever became of it; `TG.UI` forces a new request when the panel is opened after a failed load. (3) An entry from the service whose name has fewer than three letters is left out rather than padded.
+- Changes after the review of the game side (4.20, 4.22, DESIGN 8.9 and 12). Each is in `test/test-ui.js`, and where the service is involved in `test/test-board.js` and `test/test-board-server.js`.
+  - The initials screen can be declined. Esc goes to the title without sending (WORLD SCORES) or keeps the score on this computer only (NEW HIGH SCORE!), and the bottom strip says so. Enter and Esc are not read for the first 0.5 s, and Enter alone no longer sends a score under the placeholder PIP: with no initials used before, they have to be typed. This departs from the brief, which had Enter alone accept the pre-filled initials in every case; initials the player has used before are still taken by Enter alone.
+  - A run the service is certain to refuse is not sent: a run under 10 s is not offered to the world scores, and a WPM above 220 is sent as 220.
+  - A failed send has a reason, `TG.Board.state.sendError`, and the status line follows it: could not be reached, did not take this score, or too many scores from here this hour. `TG.Board.state.kept` is false for a run below the 200 rows a board keeps, which is shown as "NOT IN THE BEST 200 YET. KEEP GOING!" and not as place 201 of 201.
+  - When neither the send nor the boards got through, the WORLD page says so once, with what became of the score.
+  - The status line and the highlighted row stay until the next run starts, and the page that opens after a send reads no keys for 0.5 s. The bar and arrow of the highlighted row start 8 px further left, clear of a two-digit place.
+  - `test/test-integration.js` also checks that `js/main.js` names its helper `networkFunction` only where it is defined and where it is handed to `TG.Board.init`, reads `win.fetch` only inside it, and that no file has an address written without a scheme.
+  - Left as the brief has it: a reply that arrives after the 6 s timeout is ignored, so a score the service did store can be reported as not reached; and the player lands on the WORLD page after every send, also when the send then fails (the page says how to reach the local entry).
 
 ### 14.3 Left for the lead
 

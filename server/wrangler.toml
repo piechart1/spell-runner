@@ -1,0 +1,37 @@
+# server/wrangler.toml
+# Wrangler's settings for the world scores service of SPELL RUNNER (docs/LEADERBOARD.md).
+# Run Wrangler from this folder. server/README.md has the steps.
+#
+# No secret belongs in this file. The Worker's one secret, TOKEN_SECRET, is set with
+#   npx wrangler secret put TOKEN_SECRET
+# and, for `wrangler dev` only, in a file named .dev.vars that is not committed.
+
+name = "spell-runner-scores"
+main = "src/worker.js"
+compatibility_date = "2026-09-01"
+
+# The address of the Worker is https://spell-runner-scores.<your subdomain>.workers.dev
+workers_dev = true
+
+# The database. Replace the id with the one that `npx wrangler d1 create spell-runner-scores` prints.
+[[d1_databases]]
+binding = "DB"
+database_name = "spell-runner-scores"
+database_id = "ece8c188-34c3-4d7e-816b-7a07d9ecc7bc"
+
+# Once an hour (at 17 minutes past, UTC) Cloudflare runs the Worker's scheduled handler, which deletes
+# the rows of `hits` and `used` that are no longer needed. See LEADERBOARD.md, section 4.
+[triggers]
+crons = ["17 * * * *"]
+
+# Keep the Worker's logs so that they can be read in the Cloudflare dashboard (Workers, then
+# spell-runner-scores, then Logs). The Worker itself writes a line only when a request fails with 500
+# or the hourly clean-up fails.
+[observability]
+enabled = true
+
+# invocation_logs = false leaves out the line that Cloudflare would otherwise record for every
+# request by itself, so that only the Worker's own lines are kept.
+[observability.logs]
+enabled = true
+invocation_logs = false

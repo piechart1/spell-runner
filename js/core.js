@@ -376,7 +376,8 @@
     'ui:count': 'n high',
     'ui:tally': '',
     'ui:stamp': 'rank',
-    'ui:letter': 'index'
+    'ui:letter': 'index',
+    'ui:exit': ''
   };
 
   var EVENT_NAMES = Object.keys(EVENT_FIELDS);
@@ -1209,7 +1210,8 @@
       adaptive: true,
       tutorialDone: false,
       lastDifficulty: 'medium',
-      initials: 'PIP'
+      initials: 'PIP',
+      worldScores: true       // send scores to, and show, the world boards (js/board.js)
     };
   }
 

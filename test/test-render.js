@@ -875,7 +875,7 @@ function payloads(TG, s) {
     'boss:finisher': { id: 1000, word: 'tremendous' },
     'boss:defeat': { x: s.player.x + 200, y: 184 },
     'ui:move': {}, 'ui:select': {}, 'ui:back': {}, 'ui:count': { n: 3, high: true }, 'ui:tally': {}, 'ui:stamp': { rank: 'A' },
-    'ui:letter': { index: 2 },
+    'ui:letter': { index: 2 }, 'ui:exit': {},
     // A completed boss word (CONTRACT 4.16): type:hit with complete true and kind core.
     '_core': { target: bossWord, id: 999, kind: 'core', ch: 'e', index: 6, length: 7, complete: true, x: bossWord.x, y: bossWord.y }
   };

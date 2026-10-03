@@ -1,15 +1,28 @@
 // js/ui.js
 // SPELL RUNNER interface screens (WP-G). Defines TG.UI.
 //
-// Contract: docs/CONTRACT.md sections 4.20, 8.6, 9 and 13. Design: docs/DESIGN.md sections 2, 8.8,
-// 8.9, 10.5 and 12.
+// Contract: docs/CONTRACT.md sections 4.20, 4.22, 8.6, 9 and 13. Design: docs/DESIGN.md sections 2, 8.8,
+// 8.9, 10.5 and 12. World scores: docs/LEADERBOARD.md section 9.
 //
-// TG.UI owns the screens that are not simulated: boot, title (with its menu, options, high score and
-// story panels), difficultySelect, howToPlay, paused (menu and resume countdown), gameOver (continue
-// countdown), results (tally and rank) and highScoreEntry. It reads keys from the TG.Input queue in
-// update(), changes screens only through TG.Game (setScreen, newRun, resume, continueRun, endRun)
-// and emits the ui:* events that TG.Audio plays. It also does the saving that follows from play
-// (CONTRACT 4.20), because the simulation never writes to TG.Save.
+// TG.UI owns the screens that are not simulated: boot, title (with its menu, options, high score,
+// story and goodbye panels), difficultySelect, howToPlay, paused (menu and resume countdown), gameOver
+// (continue countdown), results (tally and rank) and highScoreEntry. It reads keys from the TG.Input
+// queue in update(), changes screens only through TG.Game (setScreen, newRun, resume, continueRun,
+// endRun) and emits the ui:* events that TG.Audio plays. It also does the saving that follows from
+// play (CONTRACT 4.20), because the simulation never writes to TG.Save.
+//
+// EXIT on the title menu emits ui:exit, which TG.Main answers by trying to close the window (this
+// file never touches the window), and opens the goodbye panel, which is what stays on screen when
+// the browser keeps the tab open.
+//
+// World scores (TG.Board, js/board.js). This file makes no network request; it calls TG.Board and reads
+// TG.Board.state. It asks for a run token when a difficulty is confirmed, shows the initials screen
+// after a run that goes to the world scores, sends the score on confirm, and gives the High Scores
+// panel its WORLD pages. Every call is guarded, and with TG.Board absent, its URL empty or the
+// worldScores setting off, every screen looks and behaves as it did before world scores existed.
+// A score leaves the computer only on Enter on the initials screen, which says so and has a key for
+// not sending (Esc); Enter and Esc are not read for the first half second of that screen, and Enter
+// alone never sends a score under the placeholder initials PIP.
 //
 // File layout:
 //   1. constants, texts and small helpers
@@ -49,6 +62,7 @@
   var GROUND = (TG.C && TG.C.GROUND_Y) || 184;
 
   var NAMES = ['easy', 'medium', 'hard'];
+  var DIFF_COLOR = { easy: GRASS, medium: GOLD, hard: CORAL };
 
   // Used when TG.Difficulty or TG.Words is not loaded (CONTRACT 5.10, DESIGN 10.5).
   var FALLBACK_DIFF = {
@@ -82,6 +96,10 @@
   // Shown on a touch screen until the first key arrives (TG.Main, DESIGN 2).
   var KEYBOARD_NOTE = 'SPELL RUNNER NEEDS A KEYBOARD.';
 
+  // The copyright line of the boot, title and goodbye screens. This is the one place that holds the
+  // year and the name. \u00a9 is the copyright sign, TG.Font.SYM.COPY.
+  var COPYRIGHT = '\u00a9 2026 DAVID SLEE';
+
   var LOGO = ['SPELL', 'RUNNER'];
   var LOGO_LETTERS = 11;
   var LOGO_STEP = 0.1;            // one letter every 6 frames (DESIGN 12)
@@ -89,12 +107,14 @@
   var TITLE_SPEED = 48;           // px/s the title backdrop scrolls
   var IDLE_TIME = 12;             // s on the title menu before the idle rotation starts (Tier 2)
   var ROTATE_TIME = 8;            // s per panel of the idle rotation
+  var BYE_LOCK = 0.5;             // s at the start of the goodbye panel in which keys are ignored
 
   var MENU = [
     { id: 'start', label: 'START' },
     { id: 'how', label: 'HOW TO PLAY' },
     { id: 'scores', label: 'HIGH SCORES' },
-    { id: 'options', label: 'OPTIONS' }
+    { id: 'options', label: 'OPTIONS' },
+    { id: 'exit', label: 'EXIT' }
   ];
 
   // Settings shown on the Options panel. type: 'bool' or 'tri' ('auto' | 'on' | 'off').
@@ -105,6 +125,8 @@
     { key: 'reduceFlash', label: 'REDUCE FLASH', type: 'bool', help: ['NO FLASHES AND NO SCREEN SHAKE.'] },
     { key: 'keyGuide', label: 'KEY GUIDE', type: 'tri', help: ['A SMALL KEYBOARD THAT LIGHTS THE NEXT KEY.', 'AUTO: ON FOR EASY ONLY.'] },
     { key: 'adaptive', label: 'ADAPTIVE PACE', type: 'bool', help: ['THE GAME SLOWS DOWN A LITTLE', 'IF WORDS KEEP REACHING PIP.'] },
+    // Shown only when this copy of the game has a world scores service (TG.Board.available()).
+    { key: 'worldScores', label: 'WORLD SCORES', type: 'bool', world: true, help: ['SENDS YOUR INITIALS AND SCORE', 'TO A BOARD SHARED BY ALL PLAYERS.'] },
     { id: 'reset', label: 'RESET SCORES', help: ['CLEARS THE HIGH SCORES AND BESTS.'] },
     { id: 'back', label: 'BACK', help: ['BACK TO THE MENU.'] }
   ];
@@ -143,6 +165,27 @@
 
   var RANK_COLOR = { S: GOLD, A: LIME, B: AQUA, C: SILVER };
 
+  var DEFAULT_INITIALS = 'PIP';
+  var ENTRY_LOCK = 0.5;           // s at the start of the initials screen in which Enter and Esc are ignored,
+                                  // while world scores are on: a second Enter meant for the results screen
+                                  // must not send a score
+  var ARRIVE_LOCK = 0.5;          // s in which keys are ignored on the WORLD page that opens after a send
+
+  // The High Scores panel while world scores are on: one page per world board, then the tables kept
+  // on this computer.
+  var PAGES = ['easy', 'medium', 'hard', 'local'];
+  var LOCAL_PAGE = 3;
+  var WORLD_ROWS = 10;            // rows of a WORLD page
+  var WORLD_COL = { place: 68, name: 84, score: 188, wpm: 236, accuracy: 284, rank: 316 };   // x of each column
+  // The line under the rows when a score was not taken, by TG.Board.state.sendError.
+  var SEND_FAILED = {
+    unreachable: 'COULD NOT REACH WORLD SCORES.',
+    refused: 'WORLD SCORES DID NOT TAKE THIS SCORE.',
+    busy: 'TOO MANY SCORES SENT FROM HERE THIS HOUR.'
+  };
+  var WORLD_BAR = 32;             // x of the bar behind the player's row; its arrow is 4 px in, which leaves
+                                  // 8 px before a two-digit place
+
   // Per-screen data, rebuilt on every screen change.
   var started = false;            // the first screen:change has arrived
   var current = null;             // the screen S belongs to
@@ -156,6 +199,10 @@
   var titleCursor = 0;
   var chosenDifficulty = null;    // the difficulty last confirmed on the difficulty screen
   var pendingHighlight = null;    // { difficulty, pos }: the entry just added, shown on the title
+  var pendingWorld = null;        // { difficulty, local }: a score was just sent to the world scores; local:
+                                  // it also reached the table on this computer
+  var lastSent = null;            // the same, kept until the next run starts: the WORLD page of that difficulty
+                                  // shows what became of the score each time the panel is opened
   var recordedResult = null;      // the result passed to TG.Save.recordRun
   var focusLost = false;          // the window has no focus: the continue countdown waits (TG.Main)
   var keyboardHint = false;       // a touch screen with no keyboard seen yet (TG.Main)
@@ -203,6 +250,61 @@
 
   function setSetting(key, value) {
     if (TG.Save && typeof TG.Save.setSetting === 'function') TG.Save.setSetting(key, value);
+  }
+
+  // World scores (TG.Board). Calls TG.Board[fn]; without the module, or if the call fails, the answer
+  // is undefined, which every caller treats as "off".
+  function boardCall(fn, a, b) {
+    var board = TG.Board;
+    if (!board || typeof board[fn] !== 'function') return undefined;
+    try {
+      return board[fn](a, b);
+    } catch (e) {
+      report('TG.Board.' + fn, e);
+      return undefined;
+    }
+  }
+
+  // World scores are on: a service address is set, the browser can make requests and the setting is on.
+  function worldOn() {
+    return boardCall('enabled') === true;
+  }
+
+  function worldState() {
+    var board = TG.Board;
+    return board && board.state && typeof board.state === 'object' ? board.state : null;
+  }
+
+  // A finished run goes to the world scores when they are on, a run token for its difficulty is held,
+  // the score is above zero and the run is not shorter than the service accepts (TG.Board.MIN_TIME: a
+  // run ended in its first seconds would be refused, so it is not offered).
+  function worldWanted(res) {
+    if (!res || !(num(res.score, 0) > 0) || !worldOn()) return false;
+    var least = num(TG.Board && TG.Board.MIN_TIME, 0);
+    return Math.floor(num(res.time, 0)) >= least && boardCall('hasToken', res.difficulty) === true;
+  }
+
+  // What the WORLD page of a difficulty has to show: { view: 'ready' | 'empty' | 'loading' | 'failed',
+  // list }. After a score was sent, the board of its difficulty is known from the reply, whatever
+  // became of the other boards.
+  function worldPage(difficulty) {
+    var st = worldState();
+    if (!st) return { view: 'failed', list: [] };
+    var list = st.lists && Array.isArray(st.lists[difficulty]) ? st.lists[difficulty] : [];
+    if (st.boards === 'ready' || (st.send === 'sent' && st.sentDifficulty === difficulty)) {
+      return { view: list.length > 0 ? 'ready' : 'empty', list: list };
+    }
+    return { view: st.boards === 'idle' || st.boards === 'loading' ? 'loading' : 'failed', list: [] };
+  }
+
+  // The score reaches the top five kept on this computer.
+  function qualifiesLocal(res) {
+    try {
+      return !!(res && TG.Save && typeof TG.Save.qualifies === 'function' &&
+        TG.Save.qualifies(res.difficulty, num(res.score, 0)));
+    } catch (e) {
+      return false;
+    }
   }
 
   function diffInfo(name) {
@@ -412,6 +514,23 @@
     centerText(ctx, s, SH - 10, color === undefined ? SILVER : color);
   }
 
+  // The bottom strip of the title screen: a line of help (s, may be empty) over the copyright line.
+  function titleFooter(ctx, s, color) {
+    fill(ctx, 0, SH - 22, SW, 22, INK);
+    if (s) centerText(ctx, s, SH - 19, color === undefined ? SILVER : color);
+    centerText(ctx, COPYRIGHT, SH - 9, SILVER);
+  }
+
+  // Starts a music loop, or stops the music with null (the goodbye panel is silent).
+  function music(name) {
+    if (!TG.Audio || typeof TG.Audio.music !== 'function') return;
+    try {
+      TG.Audio.music(name);
+    } catch (e) {
+      report('TG.Audio.music', e);
+    }
+  }
+
   // The Level 1 backdrop behind the title. TG.Render.drawBackdrop draws it when WP-F is present; the
   // private fallback below follows CONTRACT 6.5 for the day palette.
   function backdrop(ctx, camX, time) {
@@ -560,6 +679,7 @@
   function startRun(difficulty) {
     var name = NAMES.indexOf(difficulty) !== -1 ? difficulty : getSetting('lastDifficulty', 'medium');
     setSetting('lastDifficulty', name);
+    lastSent = null;                             // the status line of the run before goes with it
     emit('ui:select');
     callGame('newRun', { difficulty: name, seed: (Date.now() >>> 0) });
   }
@@ -578,10 +698,11 @@
     if (blink(1.0, 0.65)) centerText(ctx, 'PRESS ANY KEY', 112, WHITE, 2);
     if (keyboardHint) centerText(ctx, KEYBOARD_NOTE, 146, GOLD);
     centerText(ctx, 'A TYPING ADVENTURE', 176, STONE);
+    centerText(ctx, COPYRIGHT, SH - 9, SILVER);
   }
 
   // ---------------------------------------------------------------------------------------------
-  // 4b. Title, with its menu, options, high score and story panels
+  // 4b. Title, with its menu, options, high score, story and goodbye panels
   // ---------------------------------------------------------------------------------------------
 
   function setupTitle(from) {
@@ -589,17 +710,94 @@
     var t = {
       panel: 'menu', auto: false, rotT: 0, idleT: 0,
       stamped: animate ? 0 : LOGO_LETTERS, stampT: 0,
-      opt: 0, confirmReset: false, resetT: 0, highlight: null
+      opt: 0, confirmReset: false, resetT: 0, highlight: null, byeT: 0,
+      // The High Scores panel while world scores are on: paged, the page shown, the next WORLD page of
+      // the idle rotation, sent ({ difficulty, local }) while the page of that difficulty shows what
+      // became of the score that was sent, and lockT, the time left in which keys are ignored.
+      paged: false, page: LOCAL_PAGE, autoPage: Math.max(0, NAMES.indexOf(getSetting('lastDifficulty', 'medium'))), sent: null,
+      lockT: 0
     };
     if (from === 'howToPlay') titleCursor = 1;
     else if (from !== 'difficultySelect' && from !== 'howToPlay') titleCursor = 0;
-    if (pendingHighlight) {
+    if (pendingHighlight || pendingWorld) {
+      // After the initials screen: the panel opens on the page that has the new score.
       t.panel = 'scores';
       t.highlight = pendingHighlight;
-      pendingHighlight = null;
       t.stamped = LOGO_LETTERS;
+      t.paged = worldOn();
+      if (t.paged) {
+        t.sent = pendingWorld;
+        t.page = pendingWorld ? Math.max(0, NAMES.indexOf(pendingWorld.difficulty)) : LOCAL_PAGE;
+        // A key pressed for the initials screen must not close the page that shows the place.
+        if (pendingWorld) t.lockT = ARRIVE_LOCK;
+        boardCall('refresh');
+      }
+      pendingHighlight = null;
+      pendingWorld = null;
     }
     return t;
+  }
+
+  // Opens the High Scores panel from the menu. With world scores on it has four pages and opens on
+  // the WORLD page of the difficulty last played, or on THIS COMPUTER when the boards could not be
+  // loaded the last time; the boards are asked for again either way. Until the next run starts, the
+  // page of the run that was sent still says what became of it.
+  function openScores(t) {
+    t.panel = 'scores';
+    t.highlight = null;
+    t.sent = null;
+    t.paged = worldOn();
+    if (!t.paged) return;
+    t.sent = lastSent;
+    var st = worldState();
+    var failed = !!st && st.boards === 'failed';
+    t.page = failed ? LOCAL_PAGE : Math.max(0, NAMES.indexOf(getSetting('lastDifficulty', 'medium')));
+    boardCall('refresh', failed);
+  }
+
+  // The High Scores panel of the idle rotation: a WORLD page (easy, medium and hard in turn) when its
+  // board is known, otherwise the tables of this computer.
+  function autoScores(t) {
+    t.panel = 'scores';
+    t.highlight = null;
+    t.sent = null;
+    t.paged = false;
+    if (!worldOn()) return;
+    var page = t.autoPage % NAMES.length;
+    var view = worldPage(NAMES[page]).view;
+    if (view !== 'ready' && view !== 'empty') return;
+    t.paged = true;
+    t.page = page;
+    t.autoPage = page + 1;
+  }
+
+  // The page of the High Scores panel that is on screen: 'easy' | 'medium' | 'hard' (WORLD pages) or
+  // 'local' (THIS COMPUTER); null when the panel is not paged. In the idle rotation a WORLD page whose
+  // board is no longer known gives way to the unpaged panel.
+  function scoresPage(t) {
+    if (!t.paged) return null;
+    var page = PAGES[t.page] || 'local';
+    if (t.auto && page !== 'local') {
+      var view = worldPage(page).view;
+      if (view !== 'ready' && view !== 'empty') return null;
+    }
+    return page;
+  }
+
+  function scoresKey(t, a) {
+    if (a.act === 'confirm' || a.act === 'back') {
+      t.panel = 'menu';
+      t.highlight = null;
+      t.sent = null;
+      emit('ui:back');
+      return;
+    }
+    if (!t.paged || (a.act !== 'left' && a.act !== 'right')) return;
+    // On a WORLD page that says the world scores cannot be reached, Right goes straight to THIS
+    // COMPUTER, as that page says. Otherwise the pages go round.
+    if (a.act === 'right' && t.page !== LOCAL_PAGE && worldPage(PAGES[t.page]).view === 'failed') t.page = LOCAL_PAGE;
+    else t.page = (t.page + (a.act === 'left' ? PAGES.length - 1 : 1)) % PAGES.length;
+    emit('ui:move');
   }
 
   function updateTitle(dt, acts) {
@@ -612,6 +810,15 @@
       }
     }
     if (t.resetT > 0) t.resetT = Math.max(0, t.resetT - dt);
+    if (t.panel === 'bye') {                   // no idle rotation here; any key goes back to the menu
+      t.byeT += dt;
+      if (acts.length > 0 && t.byeT >= BYE_LOCK) closeBye(t);
+      return;
+    }
+    if (t.lockT > 0) {                         // the page after a send: keys are not read at first
+      t.lockT = Math.max(0, t.lockT - dt);
+      return;
+    }
     if (acts.length === 0) {
       if (t.panel === 'menu') {
         t.idleT += dt;
@@ -619,12 +826,14 @@
           t.panel = 'story';
           t.auto = true;
           t.rotT = 0;
+          boardCall('refresh');                // once per rotation: the boards are known when it reaches them
         }
       } else if (t.auto) {
         t.rotT += dt;
         if (t.rotT >= ROTATE_TIME) {
           t.rotT = 0;
-          t.panel = t.panel === 'story' ? 'scores' : 'story';
+          if (t.panel === 'story') autoScores(t);
+          else t.panel = 'story';
         }
       }
       return;
@@ -644,11 +853,7 @@
       if (t.panel === 'menu') {
         if (titleMenuKey(t, a)) return;
       } else if (t.panel === 'scores') {
-        if (a.act === 'confirm' || a.act === 'back') {
-          t.panel = 'menu';
-          t.highlight = null;
-          emit('ui:back');
-        }
+        scoresKey(t, a);
       } else if (t.panel === 'options') {
         optionsKey(t, a);
       } else {
@@ -676,18 +881,49 @@
       return true;
     }
     if (id === 'scores') {
-      t.panel = 'scores';
-      t.highlight = null;
+      openScores(t);
     } else if (id === 'options') {
       t.panel = 'options';
       t.opt = 0;
       t.confirmReset = false;
+    } else if (id === 'exit') {
+      openBye(t);
+      return true;                             // the rest of this step's keys are dropped
     }
     return false;
   }
 
+  // EXIT. A page cannot close a tab that the player opened, so the goodbye panel is shown in any
+  // case; TG.Main hears ui:exit and asks the browser to close the window.
+  function openBye(t) {
+    t.panel = 'bye';
+    t.byeT = 0;
+    music(null);
+    emit('ui:exit');
+  }
+
+  function closeBye(t) {
+    t.panel = 'menu';
+    titleCursor = 0;
+    emit('ui:select');
+    music('title');
+  }
+
+  // The lines of the Options panel. WORLD SCORES is one of them only when this copy of the game has a
+  // world scores service.
+  function optionItems() {
+    var world = boardCall('available') === true;
+    var out = [];
+    for (var i = 0; i < OPTIONS.length; i++) {
+      if (!OPTIONS[i].world || world) out.push(OPTIONS[i]);
+    }
+    return out;
+  }
+
   function optionsKey(t, a) {
-    var item = OPTIONS[t.opt];
+    var items = optionItems();
+    if (t.opt >= items.length) t.opt = items.length - 1;
+    var item = items[t.opt];
     if (a.act === 'back') {
       t.panel = 'menu';
       t.confirmReset = false;
@@ -695,7 +931,7 @@
       return;
     }
     if (a.act === 'up' || a.act === 'down') {
-      t.opt = (t.opt + (a.act === 'up' ? OPTIONS.length - 1 : 1)) % OPTIONS.length;
+      t.opt = (t.opt + (a.act === 'up' ? items.length - 1 : 1)) % items.length;
       t.confirmReset = false;
       emit('ui:move');
       return;
@@ -728,6 +964,7 @@
     if (t.panel === 'scores') drawScores(ctx, t);
     else if (t.panel === 'options') drawOptions(ctx, t);
     else if (t.panel === 'story') drawStory(ctx);
+    else if (t.panel === 'bye') drawBye(ctx);
     else drawMenu(ctx, t);
   }
 
@@ -751,30 +988,51 @@
 
   function drawMenu(ctx, t) {
     drawLogo(ctx, t);
-    if (t.stamped < LOGO_LETTERS) return;
-    var x = 120, y = 96, w = 144, h = 66;
+    if (t.stamped < LOGO_LETTERS) {
+      titleFooter(ctx, '');
+      return;
+    }
+    var x = 120, y = 91, w = 144, h = 11 + MENU.length * 13;
     panelBox(ctx, x, y, w, h, SILVER);
     for (var i = 0; i < MENU.length; i++) {
-      menuRow(ctx, x + 4, y + 9 + i * 14, w - 8, MENU[i].label, i === titleCursor);
+      menuRow(ctx, x + 4, y + 9 + i * 13, w - 8, MENU[i].label, i === titleCursor);
     }
-    if (keyboardHint) footer(ctx, KEYBOARD_NOTE, GOLD);
-    else footer(ctx, 'UP AND DOWN TO CHOOSE, ENTER TO SELECT');
+    if (keyboardHint) titleFooter(ctx, KEYBOARD_NOTE, GOLD);
+    else titleFooter(ctx, 'UP AND DOWN TO CHOOSE, ENTER TO SELECT');
   }
 
+  // The High Scores panel. With world scores off it is three tables of five, kept on this computer.
+  // With them on it has four pages, changed with Left and Right: WORLD EASY, WORLD MEDIUM, WORLD HARD
+  // and THIS COMPUTER.
   function drawScores(ctx, t) {
     panelBox(ctx, 8, 6, SW - 16, SH - 12, SILVER);
-    centerText(ctx, 'HIGH SCORES', 14, GOLD, 2);
+    var page = scoresPage(t);
+    if (!page) {
+      centerText(ctx, 'HIGH SCORES', 14, GOLD, 2);
+      drawLocalTables(ctx, t, 38);
+      centerText(ctx, t.auto ? 'PRESS ANY KEY' : 'ENTER OR ESC: BACK', SH - 20, STONE);
+      return;
+    }
+    centerText(ctx, 'HIGH SCORES', 12, GOLD, 2);
+    drawPageHeader(ctx, t, page);
+    if (page === 'local') drawLocalTables(ctx, t, 44);
+    else drawWorldPage(ctx, t, page);
+    centerText(ctx, t.auto ? 'PRESS ANY KEY' : 'LEFT AND RIGHT: PAGE   ENTER OR ESC: BACK', SH - 20, STONE);
+  }
+
+  // The three tables of this computer side by side. top: y of the difficulty labels.
+  function drawLocalTables(ctx, t, top) {
     for (var d = 0; d < NAMES.length; d++) {
       var name = NAMES[d];
       var cx = 8 + 4 + d * 120 + 60;
-      txt(ctx, diffInfo(name).label, cx, 38, d === 0 ? GRASS : (d === 1 ? GOLD : CORAL), { align: 'center' });
+      txt(ctx, diffInfo(name).label, cx, top, DIFF_COLOR[name], { align: 'center' });
       var list = [];
       try {
         if (TG.Save && typeof TG.Save.scores === 'function') list = TG.Save.scores(name) || [];
       } catch (e) { list = []; }
       for (var i = 0; i < list.length && i < 5; i++) {
         var e = list[i];
-        var y = 54 + i * 26;
+        var y = top + 16 + i * 26;
         var lit = t.highlight && t.highlight.difficulty === name && t.highlight.pos === i;
         var line1 = (i + 1) + ' ' + String(e.name || '???') + ' ' + pad(num(e.score, 0), 7);
         var line2 = num(e.wpm, 0) + ' WPM ' + num(e.accuracy, 0) + '% ' + String(e.rank || 'C');
@@ -782,22 +1040,107 @@
         txt(ctx, line2, cx, y + 10, lit ? GOLD : STONE, { align: 'center' });
       }
     }
-    centerText(ctx, t.auto ? 'PRESS ANY KEY' : 'ENTER OR ESC: BACK', SH - 20, STONE);
+  }
+
+  // Which page this is, between the arrows that change it, and its number. The idle rotation shows
+  // the name only, because there any key goes back to the menu.
+  function drawPageHeader(ctx, t, page) {
+    var label = page === 'local' ? 'THIS COMPUTER' : 'WORLD ' + diffInfo(page).label;
+    var half = textWidth(label) / 2;
+    centerText(ctx, label, 31, page === 'local' ? WHITE : DIFF_COLOR[page]);
+    if (t.auto) return;
+    txt(ctx, sym('LEFT', '<'), CX - half - 16, 31, WHITE);
+    txt(ctx, sym('RIGHT', '>'), CX + half + 8, 31, WHITE);
+    txt(ctx, (t.page + 1) + '/' + PAGES.length, SW - 16, 31, STONE, { align: 'right' });
+  }
+
+  // A WORLD page: ten rows of place, initials, score, WPM, accuracy and rank, or a line that says why
+  // there are none. After a score was sent, the page of its difficulty says what became of it, under
+  // the rows; when there are no rows because the service cannot be reached, one block says both.
+  function drawWorldPage(ctx, t, difficulty) {
+    var st = worldState() || {};
+    var page = worldPage(difficulty);
+    var sent = !!t.sent && t.sent.difficulty === difficulty && st.sentDifficulty === difficulty;
+    if (page.view === 'loading') {
+      centerText(ctx, 'LOADING...', 96, SILVER);
+    } else if (page.view === 'failed') {
+      centerText(ctx, 'WORLD SCORES CANNOT BE REACHED', 88, CORAL);
+      if (sent && st.send === 'failed') {
+        // Neither the board nor the score got through: what became of the score, and nothing twice.
+        if (t.sent.local) {
+          centerText(ctx, 'YOUR SCORE IS SAVED ON THIS COMPUTER.', 104, WHITE);
+          centerText(ctx, 'PRESS RIGHT TO SEE IT', 116, SILVER);
+        } else {
+          centerText(ctx, 'YOUR SCORE WAS NOT SENT.', 104, SILVER);
+        }
+        return;
+      }
+      if (!t.auto) centerText(ctx, 'PRESS RIGHT FOR THIS COMPUTER\'S SCORES', 104, SILVER);
+    } else if (page.view === 'empty') {
+      centerText(ctx, 'NO SCORES YET. BE THE FIRST!', 96, WHITE);
+    } else {
+      // The player's row is the one at the place the service gave, when it is among the rows shown.
+      var mine = -1;
+      var own = st.sentEntry;
+      if (sent && st.send === 'sent' && own && st.place >= 1 && st.place <= WORLD_ROWS) {
+        var at = page.list[st.place - 1];
+        if (at && at.name === own.name && at.score === own.score) mine = st.place - 1;
+      }
+      txt(ctx, 'NAME', WORLD_COL.name, 44, STONE);
+      txt(ctx, 'SCORE', WORLD_COL.score, 44, STONE, { align: 'right' });
+      txt(ctx, 'WPM', WORLD_COL.wpm, 44, STONE, { align: 'right' });
+      txt(ctx, 'ACC', WORLD_COL.accuracy, 44, STONE, { align: 'right' });
+      txt(ctx, 'RANK', WORLD_COL.rank, 44, STONE, { align: 'center' });
+      for (var i = 0; i < page.list.length && i < WORLD_ROWS; i++) {
+        var e = page.list[i];
+        var y = 56 + i * 11;
+        var lit = i === mine;
+        if (lit) {
+          fill(ctx, WORLD_BAR, y - 2, SW - 2 * WORLD_BAR, 11, SHADOW);
+          if (blink(0.6, 0.4)) txt(ctx, sym('RIGHT', '>'), WORLD_BAR + 4, y, GOLD);
+        }
+        var rank = String(e.rank || 'C');
+        txt(ctx, String(i + 1), WORLD_COL.place, y, lit ? GOLD : SILVER, { align: 'right' });
+        txt(ctx, String(e.name || '???'), WORLD_COL.name, y, lit ? GOLD : WHITE);
+        txt(ctx, pad(num(e.score, 0), 7), WORLD_COL.score, y, lit ? GOLD : WHITE, { align: 'right' });
+        txt(ctx, String(num(e.wpm, 0)), WORLD_COL.wpm, y, lit ? GOLD : SILVER, { align: 'right' });
+        txt(ctx, num(e.accuracy, 0) + '%', WORLD_COL.accuracy, y, lit ? GOLD : SILVER, { align: 'right' });
+        txt(ctx, rank, WORLD_COL.rank, y, RANK_COLOR[rank] || SILVER, { align: 'center' });
+      }
+    }
+    if (!sent) return;
+    if (st.send === 'sending') {
+      centerText(ctx, 'SENDING...', 172, SILVER);
+    } else if (st.send === 'sent') {
+      // A run below the rows the service keeps was not ranked: a place there would read as last of all.
+      if (st.kept === false) centerText(ctx, 'NOT IN THE BEST ' + num(TG.Board && TG.Board.KEPT_ROWS, 200) + ' YET. KEEP GOING!', 172, WHITE);
+      else centerText(ctx, 'YOUR PLACE: ' + num(st.place, 0) + ' OF ' + num(st.total, 0), 172, GOLD);
+    } else if (st.send === 'failed') {
+      centerText(ctx, SEND_FAILED[st.sendError] || SEND_FAILED.unreachable, t.sent.local ? 169 : 172, CORAL);
+      if (t.sent.local) centerText(ctx, 'SAVED ON THIS COMPUTER.', 180, SILVER);
+    }
   }
 
   function drawOptions(ctx, t) {
+    var items = optionItems();
+    var opt = Math.min(t.opt, items.length - 1);
     var x = 32, y = 8, w = SW - 64, h = SH - 16;
     panelBox(ctx, x, y, w, h, SILVER);
     centerText(ctx, 'OPTIONS', y + 8, GOLD, 2);
-    for (var i = 0; i < OPTIONS.length; i++) {
-      var item = OPTIONS[i];
+    // Eight lines have a pitch of 13 px from y + 36. With the WORLD SCORES line there are nine, at a
+    // pitch of 12 px from y + 34, so that the last one stays clear of the help lines.
+    var nine = items.length > 8;
+    var top = y + (nine ? 34 : 36);
+    var pitch = nine ? 12 : 13;
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
       var value = item.key ? settingText(item) : null;
       var valueColor;
       if (item.id === 'reset' && t.resetT > 0) { value = 'DONE'; valueColor = GRASS; }
-      menuRow(ctx, x + 8, y + 36 + i * 13, w - 16, item.label, i === t.opt, value, valueColor);
+      menuRow(ctx, x + 8, top + i * pitch, w - 16, item.label, i === opt, value, valueColor);
     }
-    var help = OPTIONS[t.opt].help || [];
-    if (OPTIONS[t.opt].id === 'reset' && t.confirmReset) help = ['PRESS ENTER AGAIN TO CLEAR THE SCORES.', 'ESC OR UP/DOWN TO KEEP THEM.'];
+    var help = items[opt].help || [];
+    if (items[opt].id === 'reset' && t.confirmReset) help = ['PRESS ENTER AGAIN TO CLEAR THE SCORES.', 'ESC OR UP/DOWN TO KEEP THEM.'];
     for (var k = 0; k < help.length; k++) centerText(ctx, help[k], y + 148 + k * 10, t.confirmReset ? CORAL : SILVER);
     centerText(ctx, 'EASY WORDS ASSUME A QWERTY KEYBOARD', y + 172, STONE);
     centerText(ctx, 'ENTER OR ARROWS: CHANGE   ESC: BACK', y + 186, STONE);
@@ -810,8 +1153,18 @@
     for (var i = 0; i < lines.length; i++) centerText(ctx, lines[i], y + 14 + i * 12, WHITE);
     spr(ctx, 'hero_idle', Math.floor(clock * 2) % 2, 120, y + h - 8, { scale: 2 });
     baron(ctx, 272, y + h - 8, clock);
-    if (keyboardHint) footer(ctx, KEYBOARD_NOTE, GOLD);
-    else footer(ctx, 'PRESS ANY KEY', blink(1, 0.65) ? WHITE : STONE);
+    if (keyboardHint) titleFooter(ctx, KEYBOARD_NOTE, GOLD);
+    else titleFooter(ctx, 'PRESS ANY KEY', blink(1, 0.65) ? WHITE : STONE);
+  }
+
+  // The goodbye panel, shown after EXIT for as long as the browser keeps the tab open.
+  function drawBye(ctx) {
+    var x = 24, y = 26, w = SW - 48, h = 150;
+    panelBox(ctx, x, y, w, h, SILVER);
+    centerText(ctx, 'THANKS FOR PLAYING!', y + 14, GOLD, 2);
+    spr(ctx, 'hero_win', Math.floor(clock * 5) % 2, CX, y + 104, { scale: 2 });
+    centerText(ctx, 'YOU CAN CLOSE THIS TAB NOW.', y + 124, WHITE);
+    titleFooter(ctx, 'PRESS ANY KEY TO PLAY AGAIN', blink(1, 0.65) ? WHITE : STONE);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -824,9 +1177,12 @@
     return { cursor: i < 0 ? 1 : i, typed: '' };
   }
 
+  // Confirming a difficulty also asks the world scores for a run token (TG.Board.startRun), so that it
+  // has normally arrived by the time READY is typed. A later confirm replaces it.
   function chooseDifficulty(i) {
     chosenDifficulty = NAMES[i];
     emit('ui:select');
+    boardCall('startRun', NAMES[i]);
     callGame('setScreen', 'howToPlay', { origin: 'start', difficulty: NAMES[i] });
   }
 
@@ -1381,15 +1737,13 @@
     if (r.page === 0) stamp(r);
   }
 
+  // The initials screen follows when the score reaches the top five of this computer, or when the run
+  // goes to the world scores.
   function leaveResults(r) {
     var res = r.result || {};
-    var qualifies = false;
-    try {
-      qualifies = !!(TG.Save && typeof TG.Save.qualifies === 'function' &&
-        TG.Save.qualifies(res.difficulty, num(res.score, 0)));
-    } catch (e) { qualifies = false; }
+    var entry = qualifiesLocal(res) || worldWanted(res);
     emit('ui:select');
-    r.leaving = callGame('setScreen', qualifies ? 'highScoreEntry' : 'title') !== false;
+    r.leaving = callGame('setScreen', entry ? 'highScoreEntry' : 'title') !== false;
   }
 
   function updateResults(dt, acts) {
@@ -1503,12 +1857,34 @@
   // 4h. High score entry
   // ---------------------------------------------------------------------------------------------
 
+  // local: the score reaches the top five of this computer. world: the screen is shown for the world
+  // scores. The heading is NEW HIGH SCORE! when local, and WORLD SCORES when only world.
+  // declined: the player pressed Esc on the NEW HIGH SCORE! screen, so the score stays on this computer.
+  // needType: Enter was pressed with nothing typed and no initials to take.
   function setupEntry() {
     var st = gameState();
     var res = st && st.result && typeof st.result === 'object' ? st.result : {};
-    var saved = String(getSetting('initials', 'PIP')).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
-    if (saved.length !== 3) saved = 'PIP';
-    return { result: res, initials: '', saved: saved, shakeT: 0, added: false, done: false };
+    var saved = String(getSetting('initials', DEFAULT_INITIALS)).toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+    if (saved.length !== 3) saved = DEFAULT_INITIALS;
+    // While world scores are on, initials on the block list are refused, so they are not offered.
+    if (worldOn() && boardCall('blocked', saved) === true) saved = DEFAULT_INITIALS;
+    return {
+      result: res, initials: '', saved: saved, shakeT: 0, added: false, done: false,
+      local: qualifiesLocal(res), world: worldWanted(res), refused: false, declined: false, needType: false
+    };
+  }
+
+  // Enter on this screen will send the run to the world scores. Read each time: a run token may still
+  // arrive while the screen is shown.
+  function entrySends(e) {
+    return !e.declined && worldWanted(e.result);
+  }
+
+  // The initials that Enter alone takes: the ones used last. PIP is the game's own placeholder and not
+  // initials that somebody chose, so a score is not sent to the world scores under it unless the
+  // player types it; then there is nothing to take ('').
+  function offeredInitials(e) {
+    return e.saved === DEFAULT_INITIALS && entrySends(e) ? '' : e.saved;
   }
 
   function entryFor(e, name) {
@@ -1525,45 +1901,104 @@
     };
   }
 
-  function saveEntry(e) {
+  // Enter on the initials screen, with the initials it takes. While world scores are on, initials on
+  // the block list are refused on the spot: the boxes shake and nothing is saved or sent. Otherwise the
+  // table of this computer is updated when the score reaches it, and the run is sent to the world
+  // scores when they are on, a run token is held and the player has not declined (Esc).
+  function saveEntry(e, name) {
     if (!e.added) {
-      var name = e.initials.length === 3 ? e.initials : e.saved;
-      var difficulty = e.result && e.result.difficulty;
+      if (worldOn() && boardCall('blocked', name) === true) {
+        e.refused = true;
+        e.shakeT = 0.3;
+        emit('ui:back');
+        return;
+      }
+      var res = e.result || {};
+      var difficulty = res.difficulty;
+      var entry = entryFor(e, name);
       var pos = -1;
       try {
-        if (TG.Save && typeof TG.Save.addScore === 'function') pos = TG.Save.addScore(difficulty, entryFor(e, name));
+        if (TG.Save && typeof TG.Save.addScore === 'function') pos = TG.Save.addScore(difficulty, entry);
       } catch (err) {
         report('TG.Save.addScore', err);
       }
       setSetting('initials', name);
       e.added = true;
+      var sent = entrySends(e);
+      if (sent) boardCall('submit', entry, res);
       pendingHighlight = pos >= 0 ? { difficulty: difficulty, pos: pos } : null;
+      pendingWorld = sent ? { difficulty: difficulty, local: pos >= 0 } : null;
+      lastSent = pendingWorld;
       emit('ui:select');
     }
     e.done = callGame('setScreen', 'title') !== false;
+  }
+
+  // Esc on the initials screen: the run is not sent. On the WORLD SCORES screen there is nothing else
+  // to save, so the game goes back to the title with nothing saved or sent. On the NEW HIGH SCORE!
+  // screen the score still belongs in the table of this computer: Esc switches the sending off, or on
+  // again, and the screen says which. When nothing would be sent, Esc does nothing, as before.
+  function declineEntry(e) {
+    if (!e.local) {
+      emit('ui:back');
+      pendingHighlight = null;
+      pendingWorld = null;
+      e.done = callGame('setScreen', 'title') !== false;
+      return;
+    }
+    if (!worldWanted(e.result)) return;
+    e.declined = !e.declined;
+    e.needType = false;
+    emit('ui:move');
   }
 
   function updateEntry(dt, acts) {
     var e = S;
     if (e.done) return;
     if (e.shakeT > 0) e.shakeT = Math.max(0, e.shakeT - dt);
+    // While world scores are on, Enter and Esc wait for half a second: a key meant for the results
+    // screen must not send a score, or leave, before the screen has been seen. Letters are taken at once.
+    var locked = screenT < ENTRY_LOCK && worldOn();
     for (var i = 0; i < acts.length; i++) {
       var a = acts[i];
       if (a.act === 'letter') {
+        if (e.added) continue;
+        if (e.refused) {                         // after a refusal the next letter starts again
+          e.initials = '';
+          e.refused = false;
+        }
+        e.needType = false;
         if (e.initials.length < 3) {
           e.initials += a.ch.toUpperCase();
           emit('ui:letter', { index: e.initials.length - 1 });
         }
       } else if (a.act === 'backspace') {
+        if (e.added) continue;
+        e.refused = false;
         if (e.initials.length > 0) {
           e.initials = e.initials.slice(0, -1);
           emit('ui:back');
         }
+      } else if (a.act === 'back') {
+        // Esc has a meaning only on a screen that can send: the one shown for the world scores, or
+        // the local one while world scores are on. Otherwise it does nothing, as before.
+        if (locked || e.added || !(e.world || (e.local && worldOn()))) continue;
+        declineEntry(e);
+        if (e.done) return;
       } else if (a.act === 'confirm' && a.key !== 'space' && a.key !== 'jump') {
-        if (e.initials.length === 3 || e.initials.length === 0) {
-          saveEntry(e);
-          return;
+        if (locked) continue;
+        if (e.added) {                           // saved already: only the screen change is tried again
+          saveEntry(e, null);
+          if (e.done) return;
+          continue;
         }
+        var name = e.initials.length === 3 ? e.initials : (e.initials.length === 0 ? offeredInitials(e) : '');
+        if (name) {
+          saveEntry(e, name);
+          if (e.added) return;
+          continue;
+        }
+        if (e.initials.length === 0) e.needType = true;
         e.shakeT = 0.3;
       }
     }
@@ -1585,11 +2020,41 @@
     return rows.slice(0, 5);
   }
 
+  // The line under the boxes: what Enter does now.
+  function entryHint(e, sends) {
+    if (e.refused) return 'TRY OTHER INITIALS';
+    // What Enter does with the entry: SEND on the WORLD SCORES screen, SAVE AND SEND when the score
+    // also goes into the table of this computer, SAVE when nothing is sent.
+    var verb = sends ? (e.local ? 'SAVE AND SEND' : 'SEND') : 'SAVE';
+    if (e.initials.length === 3) return 'ENTER: ' + verb;
+    if (e.initials.length > 0) return 'BACKSPACE: DELETE';
+    var offer = offeredInitials(e);
+    if (!offer) return e.needType ? 'TYPE 3 LETTERS FIRST' : '';
+    return sends ? 'ENTER: ' + verb + ' AS ' + offer : 'ENTER: USE ' + offer;
+  }
+
+  // The bottom strip of the initials screen: the help line and, to its right, what Esc does.
+  function entryFooter(ctx, esc) {
+    var help = 'TYPE 3 LETTERS, THEN ENTER';
+    if (!esc) {
+      footer(ctx, help, STONE);
+      return;
+    }
+    fill(ctx, 0, SH - 13, SW, 13, INK);
+    var x = Math.floor(CX - textWidth(help + '   ' + esc) / 2);
+    txt(ctx, help, x, SH - 10, STONE);
+    txt(ctx, esc, x + textWidth(help + '   '), SH - 10, SILVER);
+  }
+
   function drawEntry(ctx) {
     var e = S;
     var res = e.result || {};
+    var worldOnly = e.world && !e.local;
+    var canSend = worldWanted(res);              // read each frame: a run token may still arrive
+    var sends = canSend && !e.declined;
+    var offer = offeredInitials(e);
     fill(ctx, 0, 0, SW, SH, INK);
-    centerText(ctx, 'NEW HIGH SCORE!', 8, GOLD, 2, true);
+    centerText(ctx, worldOnly ? 'WORLD SCORES' : 'NEW HIGH SCORE!', 8, GOLD, 2, true);
     centerText(ctx, diffInfo(res.difficulty || 'medium').label + '   ' + Math.floor(num(res.score, 0)), 30, WHITE);
     centerText(ctx, 'TYPE YOUR INITIALS', 46, SILVER);
     var shake = e.shakeT > 0 ? (Math.floor(clock * 40) % 2 ? 2 : -2) : 0;
@@ -1597,28 +2062,46 @@
     for (var i = 0; i < 3; i++) {
       var x = bx + i * 48;
       var y = 60;
-      var active = i === e.initials.length;
-      panelBox(ctx, x, y, 40, 44, active ? GOLD : SILVER);
+      var active = !e.refused && i === e.initials.length;
+      panelBox(ctx, x, y, 40, 44, e.refused ? CORAL : (active ? GOLD : SILVER));
       var ch = e.initials.charAt(i);
       if (ch) {
-        txt(ctx, ch, x + 6, y + 8, WHITE, { scale: 4 });
-      } else if (e.initials.length === 0) {
-        txt(ctx, e.saved.charAt(i), x + 6, y + 8, SHADOW, { scale: 4 });
+        txt(ctx, ch, x + 6, y + 8, e.refused ? CORAL : WHITE, { scale: 4 });
+      } else if (e.initials.length === 0 && offer) {
+        txt(ctx, offer.charAt(i), x + 6, y + 8, SHADOW, { scale: 4 });
       }
       if (active && blink(0.6, 0.35)) fill(ctx, x + 6, y + 38, 28, 2, GOLD);
     }
-    var hint = e.initials.length === 0 ? 'ENTER: USE ' + e.saved : (e.initials.length === 3 ? 'ENTER: SAVE' : 'BACKSPACE: DELETE');
-    centerText(ctx, hint, 112, e.shakeT > 0 ? CORAL : STONE);
+    var hint = entryHint(e, sends);
+    if (hint) centerText(ctx, hint, 112, e.shakeT > 0 || e.refused ? CORAL : STONE);
+    if (worldOnly) {
+      // The score is not in the top five of this computer: there is no table to show, so the screen
+      // says where the score goes instead.
+      centerText(ctx, 'YOUR INITIALS AND SCORE GO ON THE', 136, WHITE);
+      centerText(ctx, 'WORLD SCORES FOR ' + diffInfo(res.difficulty || 'medium').label + '.', 148, WHITE);
+      centerText(ctx, 'WORLD SCORES CAN BE SWITCHED OFF', 170, STONE);
+      centerText(ctx, 'IN OPTIONS ON THE TITLE SCREEN.', 181, STONE);
+      entryFooter(ctx, 'ESC: DO NOT SEND');
+      return;
+    }
+    // The table of this computer with the new entry in its place. When the score can also be sent, the
+    // rows sit a little closer, to leave a line under them that says whether it will be.
     var rows = previewTable(e);
     for (var k = 0; k < rows.length; k++) {
       var r = rows[k];
-      var y2 = 132 + k * 12;
+      var y2 = canSend ? 129 + k * 11 : 132 + k * 12;
       var name = r.mine ? (e.initials + '---').slice(0, 3) : String(r.name || '???');
-      if (r.mine && e.initials.length === 0) name = e.saved;
+      if (r.mine && e.initials.length === 0) name = offer || '---';
+      if (r.mine && e.refused) name = '---';
       var line = (k + 1) + '  ' + name + '  ' + pad(num(r.score, 0), 7);
       centerText(ctx, line, y2, r.mine ? GOLD : SILVER);
     }
-    footer(ctx, 'TYPE 3 LETTERS, THEN ENTER', STONE);
+    if (!canSend) {
+      footer(ctx, 'TYPE 3 LETTERS, THEN ENTER', STONE);
+      return;
+    }
+    centerText(ctx, sends ? 'INITIALS AND SCORE ALSO GO TO WORLD SCORES' : 'THIS SCORE STAYS ON THIS COMPUTER', 190, sends ? SILVER : WHITE);
+    entryFooter(ctx, sends ? 'ESC: DO NOT SEND' : 'ESC: SEND IT TOO');
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1707,11 +2190,20 @@
     }
   };
 
-  // Read-only: 'menu' | 'scores' | 'options' | 'story' on the title screen, otherwise null.
+  // Read-only: 'menu' | 'scores' | 'options' | 'story' | 'bye' on the title screen, otherwise null.
   Object.defineProperty(TG.UI, 'panel', {
     enumerable: true,
     get: function () {
       return started && current === 'title' && S && S.panel ? S.panel : null;
+    }
+  });
+
+  // Read-only: the page of the High Scores panel while world scores are on: 'easy' | 'medium' | 'hard'
+  // (the WORLD pages) or 'local' (THIS COMPUTER). Otherwise null.
+  Object.defineProperty(TG.UI, 'page', {
+    enumerable: true,
+    get: function () {
+      return started && current === 'title' && S && S.panel === 'scores' ? scoresPage(S) : null;
     }
   });
 })(typeof window !== 'undefined' ? window : globalThis);

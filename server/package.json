@@ -1,0 +1,6 @@
+{
+  "name": "spell-runner-scores",
+  "private": true,
+  "description": "World scores for SPELL RUNNER: a Cloudflare Worker with a D1 database. No dependencies.",
+  "type": "module"
+}

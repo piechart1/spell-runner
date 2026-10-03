@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "test/test-board.js"
+        ],
+        "createdAt": "2026-10-03T13:08:50.262Z",
+        "reason": "Agent: '<img>' is hostile sample data in a sanitising test for server replies, not markup that ships"
+      }
+    ]
+  }
+}

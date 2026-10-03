@@ -6,7 +6,7 @@
 //
 // Prints one line per check (ok / FAIL / skip) and exits with 0 when every check passed.
 //
-// Every check loads all 19 game files under test/stubs.js with the software canvas
+// Every check loads all 20 game files under test/stubs.js with the software canvas
 // (tools/softcanvas.js), which throws on any canvas call outside the subset of CONTRACT 13.2. The
 // game is driven the way a player drives it: keydown and keyup events through env.dispatch, frames
 // through env.runFrame and the real TG.Main loop. Long stretches of play use TG.Main.tick with the
@@ -15,8 +15,10 @@
 // unknown event and a refused screen change all warn).
 //
 // What is checked:
-//   1. static: every file present; no network API or remote address in the page, the style sheet or
-//      any script; every sound and track name used by audio.js is in its registries
+//   1. static: every file present; no network API, remote address or external file in the page, the
+//      style sheet or any script, except that js/board.js (world scores) may call the network function
+//      it is handed and holds the one remote address, TG.Board.URL; every sound and track name used by
+//      audio.js is in its registries
 //   2. boot -> title -> difficulty select -> how to play -> playing by key events, 600 frames, on each
 //      difficulty
 //   3. a whole run by the test/sim.js bot on each difficulty with TG.Main.tick, TG.Audio.update and
@@ -166,7 +168,7 @@ function leaveResults(s, initials) {
 // 1. Static checks
 // ---------------------------------------------------------------------------------------------
 
-check('all 19 files load under the stubs with the software canvas; no sprite of CONTRACT 6.4 is missing', function () {
+check('all 20 files load under the stubs with the software canvas; no sprite of CONTRACT 6.4 is missing', function () {
   const env = stubs.load({ canvas: 'soft' });
   assert(env.missing.length === 0, 'missing: ' + env.missing.join(', '));
   assert(env.loaded.length === stubs.FILES.length, 'loaded ' + env.loaded.length);
@@ -176,31 +178,157 @@ check('all 19 files load under the stubs with the software canvas; no sprite of 
   assert(env.canvasCalls.count === 0 && env.audio.contexts.length === 0, 'canvas or audio used at load time');
 });
 
-check('no network requests: no remote address, network API or external file in the page, the style sheet or any script', function () {
+// The game loads nothing from the network, and one module may talk to it: js/board.js, the world
+// scores (CONTRACT 2.2 rule 10 and 4.22). Every other file is held to the rule the game had before
+// world scores: no remote address and no network API at all. js/board.js may call the network function
+// that TG.Main hands it, in one place; it may use no other network API; and the only remote address
+// under js/ is the value of TG.Board.URL, which is empty until a service is deployed. js/main.js takes
+// the network function from the window in one helper and hands it to TG.Board in one place; it does
+// not call it or keep it (mainHandsOver below).
+const NETWORK_ADDRESS = /https?:\/\/[^\s'"`)<>]*/g;
+// An address written without its scheme: a quote, two slashes, then the start of a host name.
+const BARE_ADDRESS = /['"`]\/\/[A-Za-z0-9[]/;
+
+// What is wrong with the way js/main.js (its code, without comment lines) deals with the network
+// function: a list of messages, empty when all is well. The helper networkFunction is named twice,
+// where it is defined and in the TG.Board.init line, so its result is neither called nor stored; and
+// win.fetch is read only inside that helper.
+function mainHandsOver(code) {
+  const out = [];
+  const named = (code.match(/\bnetworkFunction\b/g) || []).length;
+  if (named !== 2) out.push('networkFunction is named ' + named + ' times, not twice (its definition and the TG.Board.init line)');
+  if (!/\bfunction networkFunction\(\) \{/.test(code)) out.push('function networkFunction() is not defined');
+  if (!/TG\.Board\.init\(\{ fetch: networkFunction\(\), now: wallClock \}\)/.test(code)) out.push('networkFunction() is not handed to TG.Board.init');
+  const body = /\bfunction networkFunction\(\) \{\n([\s\S]*?)\n  \}\n/.exec(code);
+  const all = (code.match(/\bfetch\b/g) || []).length;
+  // In the helper: typeof win.fetch, win.fetch.bind(win). In the init line: the key of the object.
+  const inside = body ? (body[1].match(/\bwin\.fetch\b/g) || []).length : 0;
+  if (inside !== 2) out.push('networkFunction reads win.fetch ' + inside + ' times, not twice');
+  if (all !== inside + 1) out.push('the word fetch is used ' + all + ' times, not ' + (inside + 1) + ': somewhere outside networkFunction and the TG.Board.init line');
+  if (body && /\bfetch\b[^\n]*\(\s*['"`]/.test(body[1].replace(/win\.fetch\.bind\(win\)/g, ''))) out.push('networkFunction calls the function');
+  return out;
+}
+
+check('network: only js/board.js may make requests, and only to TG.Board.URL; no other file has a remote address, a network API or an external file', function () {
+  const BOARD = 'js/board.js';
   const files = ['index.html', 'css/style.css'].concat(stubs.FILES);
+  assert(stubs.FILES.indexOf(BOARD) !== -1, BOARD + ' is not one of the game files');
+  const address = NETWORK_ADDRESS;
+  const fetchCall = /\bfetch\s*\(/;
   const bad = [
-    [/https?:\/\//, 'a remote address'], [/\bfetch\s*\(/, 'fetch'], [/XMLHttpRequest/, 'XMLHttpRequest'],
+    [/XMLHttpRequest/, 'XMLHttpRequest'],
     [/WebSocket/, 'WebSocket'], [/EventSource/, 'EventSource'], [/sendBeacon/, 'sendBeacon'],
     [/\bimport\s*\(/, 'import()'], [/new\s+Image\s*\(/, 'Image'], [/\.src\s*=/, 'a src assignment'],
     [/serviceWorker/, 'serviceWorker'], [/new\s+Audio\s*\(/, 'Audio element'], [/@import/, '@import'],
     [/url\(\s*['"]?(?!data:)[^)'"\s]/, 'url() of a file']
   ];
+  const codeOf = function (f) {
+    return read(f).split('\n').map(function (line) {
+      return line.replace(/^\s*\/\/.*$/, '').replace(/^\s*\*.*$/, '').replace(/\/\*.*?\*\//g, '');
+    });
+  };
   const found = [];
+  const addresses = [];          // { file, line, text }: every remote address in the code
+  const fetchCalls = [];         // 'file:line' of every call of a function named fetch
   for (const f of files) {
-    const lines = read(f).split('\n');
-    lines.forEach(function (line, i) {
-      const code = line.replace(/^\s*\/\/.*$/, '').replace(/^\s*\*.*$/, '').replace(/\/\*.*?\*\//g, '');
+    codeOf(f).forEach(function (code, i) {
       for (const [re, what] of bad) if (re.test(code)) found.push(f + ':' + (i + 1) + ' ' + what);
+      if (BARE_ADDRESS.test(code)) found.push(f + ':' + (i + 1) + ' an address without a scheme');
+      (code.match(address) || []).forEach(function (text) { addresses.push({ file: f, line: i + 1, text: text }); });
+      if (fetchCall.test(code)) fetchCalls.push(f + ':' + (i + 1));
     });
   }
   assert(found.length === 0, found.slice(0, 6).join('; '));
+
+  // fetch: called in js/board.js only, once, and there it is the function that init was given.
+  const elsewhere = fetchCalls.filter((c) => c.indexOf(BOARD + ':') !== 0);
+  assert(elsewhere.length === 0, 'fetch is called outside ' + BOARD + ': ' + elsewhere.join(', '));
+  assert(fetchCalls.length === 1, BOARD + ' calls fetch in ' + fetchCalls.length + ' places: ' + fetchCalls.join(', '));
+  const boardCode = codeOf(BOARD).join('\n');
+  assert(/\bnet\.fetch\(baseUrl\(\) \+ path, options\)/.test(boardCode), 'the request is not made to baseUrl() + path');
+  assert(!/\b(window|root|globalThis|self)\.fetch\b/.test(boardCode), BOARD + ' reaches for a global fetch');
+  // Outside js/board.js nothing refers to a fetch function (as a property, a key or by name in
+  // brackets), except js/main.js where the window's function is handed over. The word itself is
+  // allowed: it is in the word lists.
+  const fetchUse = /\.fetch\b|\bfetch\s*[:(]|\[\s*['"]fetch['"]\s*\]/;
+  for (const f of stubs.FILES) {
+    if (f === BOARD) continue;
+    codeOf(f).forEach(function (code, i) {
+      if (!fetchUse.test(code)) return;
+      const handOver = f === 'js/main.js' && (/win\.fetch\.bind\(win\)/.test(code) || /TG\.Board\.init\(\{ fetch: networkFunction\(\), now: wallClock \}\)/.test(code));
+      assert(handOver, f + ':' + (i + 1) + ' refers to fetch: ' + code.trim());
+    });
+  }
+  // js/main.js hands the function over and does nothing else with it (CONTRACT 4.21).
+  const handOverFaults = mainHandsOver(codeOf('js/main.js').join('\n'));
+  assert(handOverFaults.length === 0, 'js/main.js: ' + handOverFaults.join('; '));
+
+  // Remote addresses: none in the page or the style sheet; under js/ only the value of TG.Board.URL.
+  const env = stubs.load({ files: ['js/core.js', BOARD] });
+  const url = env.TG.Board.URL;
+  assert(typeof url === 'string', 'TG.Board.URL is not a string');
+  assert(url === '' || /^https:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.workers\.dev$/.test(url),
+    'TG.Board.URL must be empty or an https address ending in .workers.dev, without a path: ' + url);
+  const other = addresses.filter((a) => !(a.file === BOARD && url !== '' && a.text === url));
+  assert(other.length === 0, 'remote addresses: ' + other.slice(0, 6).map((a) => a.file + ':' + a.line + ' ' + a.text).join('; '));
+  assert(addresses.length === (url === '' ? 0 : 1), 'the address of TG.Board.URL is written ' + addresses.length + ' times');
+
   // The page itself refers only to the scripts, the style sheet and an empty data: icon.
   const html = read('index.html');
   const refs = [];
   html.replace(/(?:src|href)\s*=\s*"([^"]*)"/g, function (m, v) { refs.push(v); return m; });
   const allowed = new Set(stubs.FILES.concat(['css/style.css', 'data:,']));
-  const other = refs.filter((r) => !allowed.has(r));
-  assert(other.length === 0, 'other references: ' + other.join(', '));
+  const others = refs.filter((r) => !allowed.has(r));
+  assert(others.length === 0, 'other references: ' + others.join(', '));
+});
+
+// The check above is only worth something if it fails when it should. Each of these changes to a
+// copy of the rules is one it has to catch.
+check('network: the rules of the check above catch a fetch call, a remote address and a second address in the wrong place', function () {
+  const fetchCall = /\bfetch\s*\(/;
+  const address = /https?:\/\/[^\s'"`)<>]*/g;
+  assert(fetchCall.test("fetch('data.json')") && fetchCall.test('window.fetch (u)') && fetchCall.test('net.fetch(a, b)'));
+  assert(!fetchCall.test('win.fetch.bind(win)') && !fetchCall.test('typeof win.fetch === \'function\'') && !fetchCall.test('{ fetch: networkFunction() }'));
+  assert(!fetchCall.test('prefetch(1)') && !fetchCall.test('// fetch (see above)'.replace(/^\s*\/\/.*$/, '')));
+  const two = "URL: 'https://x.workers.dev', other: \"http://a.example/b\"".match(address);
+  assert(two.length === 2 && two[0] === 'https://x.workers.dev' && two[1] === 'http://a.example/b', two.join(' '));
+  const ok = /^https:\/\/[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\.workers\.dev$/;
+  ['https://spell-runner-scores.someone.workers.dev', 'https://a.workers.dev'].forEach(function (u) { assert(ok.test(u), u); });
+  ['http://spell-runner-scores.someone.workers.dev', 'https://spell-runner-scores.someone.workers.dev/', 'https://workers.dev.example.com',
+    'https://example.com', 'https://x.workers.dev/v1', 'https://x.workers.dev?a=1', '//x.workers.dev', 'https://x.workers.dev.evil.net',
+    'https://evilworkers.dev', 'https://user@x.workers.dev', 'https://x.workers.dev:8443'].forEach(function (u) { assert(!ok.test(u), u + ' is accepted'); });
+  // An address without a scheme, in any kind of quotes; a comment marker or a regular expression is not one.
+  ["fetch('//example.com/x')", 'var u = "//cdn.example/a.js";', 'x(`//[::1]/y`)', "kept('//10.0.0.1/x')"].forEach(function (line) {
+    assert(BARE_ADDRESS.test(line), line + ' is not seen as an address');
+  });
+  ["var a = b; // 'quoted' words", "s.replace(/\\/+$/, '')", "var slash = '/';", "x = '// not an address';", "'' //empty"].forEach(function (line) {
+    assert(!BARE_ADDRESS.test(line), line + ' is taken for an address');
+  });
+});
+
+// js/main.js takes window.fetch for TG.Board and must not use it itself. Each change below to a copy
+// of its code is one that the rule has to catch; the file as it is has to pass.
+check('network: js/main.js hands the network function to TG.Board and neither calls nor keeps it; a call through the helper is caught', function () {
+  const code = read('js/main.js').split('\n').map(function (line) { return line.replace(/^\s*\/\/.*$/, ''); }).join('\n');
+  assert(mainHandsOver(code).length === 0, mainHandsOver(code).join('; '));
+  const marker = '  function wallClock() {';
+  assert(code.indexOf(marker) !== -1, 'wallClock was not found in js/main.js');
+  const withLine = function (text) { return code.replace(marker, text + '\n\n' + marker); };
+  const leaks = [
+    ['a call through the helper', withLine("  function leak() { networkFunction()('//example.com/x'); }")],
+    ['the function kept in a variable', withLine("  var kept = null;\n  function leak() { kept = networkFunction(); kept('//example.com/x'); }")],
+    ['the function handed to something else', withLine('  function leak() { TG.Other.use(networkFunction()); }')],
+    ['win.fetch read outside the helper', withLine('  function leak() { return win.fetch.bind(win); }')],
+    ['win.fetch called', withLine("  function leak() { win.fetch('data.json'); }")],
+    ['fetch by another name of the window', withLine("  function leak() { return window.fetch; }")],
+    ['a call inside the helper', code.replace('return win && typeof win.fetch', "win.fetch('data.json');\n      return win && typeof win.fetch")],
+    ['the helper renamed away', code.replace(/networkFunction/g, 'net')],
+    ['no hand-over', code.replace('TG.Board.init({ fetch: networkFunction(), now: wallClock })', 'TG.Board.init({ fetch: null, now: wallClock })')]
+  ];
+  leaks.forEach(function (c) {
+    assert(c[1] !== code, c[0] + ': the change was not made');
+    assert(mainHandsOver(c[1]).length > 0, c[0] + ' is not caught');
+  });
 });
 
 check('every sound and track name that audio.js plays is in TG.Audio.SFX or TG.Audio.TRACKS (CONTRACT 7)', function () {

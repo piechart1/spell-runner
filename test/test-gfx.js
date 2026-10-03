@@ -388,7 +388,7 @@ check('gfx.js and font.js use only the canvas subset of CONTRACT 13.2', function
   const TG = env.TG;
   const SET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,!?:;\'"-+/%()=*#';
   const SYM = { UP: '^', DOWN: '_', LEFT: '<', RIGHT: '>', CHEV_UP: '{', CHEV_DOWN: '}',
-    HEART: '@', STAR: '&', DROP: '$', BLOCK: '|', RETURN: '~' };
+    HEART: '@', STAR: '&', DROP: '$', BLOCK: '|', RETURN: '~', COPY: '\u00a9' };
 
   check('Font.CELL is 8 and Font.SYM is the table of CONTRACT 4.10', function () {
     if (TG.Font.CELL !== 8) return 'CELL ' + TG.Font.CELL;
@@ -469,6 +469,28 @@ check('gfx.js and font.js use only the canvas subset of CONTRACT 13.2', function
         if (bad.length) return bad.join(', ');
       });
     });
+
+  // The copyright sign of the title screens: a ring with a C inside it.
+  check('the copyright glyph: TG.Font.SYM.COPY names it, it is a closed ring with a C inside, and it differs from every other glyph', function () {
+    const ch = TG.Font.SYM.COPY;
+    if (ch !== '\u00a9') return 'SYM.COPY is ' + JSON.stringify(ch);
+    if (!TG.Font.has(ch)) return 'Font.has is false';
+    const b = bitmaps[ch];
+    if (!b) return 'not among the glyphs drawn';
+    if (b.join('') === bitmaps['?'].join('')) return 'drawn as the unknown character';
+    const near = chars.filter(function (o) { return o !== ch && diff(b, bitmaps[o]) < 3; });
+    if (near.length) return 'within 3 pixels of ' + near.join(' ');
+    // The ring is everything outside the middle 3 x 3: the same left to right and top to bottom, and
+    // closed at the ends of the middle row and column. The C is in the middle 3 x 3, open to the right.
+    for (let y = 0; y < 7; y++) for (let x = 0; x < 7; x++) {
+      const middle = x >= 2 && x <= 4 && y >= 2 && y <= 4;
+      if (!middle && (b[y][x] !== b[y][6 - x] || b[y][x] !== b[6 - y][x])) return 'the ring is not symmetric at ' + x + ',' + y;
+    }
+    if (b[3][0] !== '#' || b[3][6] !== '#' || b[0][3] !== '#' || b[6][3] !== '#') return 'the ring is open';
+    if (b[3][2] !== '#' || b[3][3] !== '.' || b[3][4] !== '.') return 'no C opening to the right inside the ring';
+    if (b[2][3] !== '#' || b[4][3] !== '#') return 'the C has no top or bottom stroke';
+    if (TG.Font.measure(ch + ' 2026 DAVID SLEE') !== 17 * 8) return 'the copyright line is not 17 cells wide';
+  });
 
   check('small letters are drawn as capitals and unknown characters as ?', function () {
     if (glyph('q').join('') !== bitmaps.Q.join('')) return 'q';

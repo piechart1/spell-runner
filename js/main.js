@@ -12,7 +12,7 @@
 //                        fixed steps of TG.C.DT are taken from it, at most MAX_STEPS per frame. A frame
 //                        longer than MAX_FRAME (a sleeping laptop, a background tab) throws the time
 //                        away and pauses the game instead of running hundreds of steps. Then
-//                        TG.Audio.update and one draw.
+//                        TG.Audio.update, TG.Board.update and one draw.
 //   tick(dt)             one fixed step: TG.Game.step on sim screens, TG.UI.update on the others,
 //                        then TG.Effects.update (not while paused) and TG.Hud.update.
 //
@@ -32,8 +32,14 @@
 // focus (TG.Input.bindButton, plus mousedown here), so typing keeps working after a click.
 //
 // Boot screen. "PRESS ANY KEY" means any key or a click: a key that TG.Input does not queue (Shift,
-// Tab, a digit ...) and a click outside the buttons are passed on as an Enter press through the
-// public TG.Input API, so TG.UI still makes the change to the title screen.
+// Tab, a digit ...), the semicolon key (queued for the game, where it ducks, but with no action in
+// the menus of TG.UI) and a click outside the buttons are passed on as an Enter press through the
+// public TG.Input API, so TG.UI still makes the change to the title screen. The goodbye panel of the
+// title screen ("PRESS ANY KEY TO PLAY AGAIN") gets the same.
+//
+// EXIT. TG.UI emits ui:exit when EXIT is chosen on the title menu, and TG.Main then calls
+// window.close(). A browser closes only a window that a script opened, so in a tab the player opened
+// the call does nothing (or throws, which is caught) and the goodbye panel of TG.UI stays on screen.
 //
 // Audio starts only after the first key or click: TG.Input.onFirstInput calls TG.Audio.unlock, and
 // a click anywhere on the page does the same. Until the AudioContext is running, every later key
@@ -43,6 +49,12 @@
 // Touch. A touch pointerdown before any keydown asks TG.UI to show that a keyboard is needed; the
 // first keydown clears it. TG.UI also hears about focus changes (onFocusLost, onFocusGained), so that
 // its countdowns stop while the window has no focus.
+//
+// World scores (docs/LEADERBOARD.md). js/board.js is the only file that makes network requests, and it
+// never touches the window, so TG.Main hands it the browser's network function and a clock:
+// TG.Board.init({ fetch, now }), with the fetch of the window bound to the window, or null in a
+// browser that has none. TG.Main makes no request itself. TG.Board.update(dt) is called once per frame
+// with real time; it is where a request that has waited too long is given up.
 (function (root) {
   'use strict';
   var TG = root.TG = root.TG || {};
@@ -53,9 +65,12 @@
 
   // Keys the game does not use that the browser would act on (see the header).
   var BLOCKED_KEYS = { 'Tab': true, '\'': true, '/': true, 'PageUp': true, 'PageDown': true, 'Home': true, 'End': true };
-  // Keys that do not count as "any key" on the boot screen.
+  // Keys that do not count as "any key" on the boot screen and the goodbye panel.
   var NOT_ANY_KEY = { 'Control': true, 'Meta': true, 'Alt': true, 'AltGraph': true, 'OS': true, 'Fn': true,
     'Unidentified': true, 'Dead': true, 'Process': true };
+  // Keys that TG.Input queues but TG.UI has no menu action for (CONTRACT 4.12). On the "any key"
+  // screens they are passed on like a key that is not queued.
+  var QUEUED_WITHOUT_MENU_ACTION = { 'semicolon': true };
 
   var win = null, doc = null;
   var canvas = null, ctx = null, stage = null, crtEl = null, btnJump = null, btnDuck = null;
@@ -265,11 +280,38 @@
     if (has('UI', 'setKeyboardHint')) guard('TG.UI.setKeyboardHint', function () { TG.UI.setKeyboardHint(flag); });
   }
 
-  // "Any key" on the boot screen, passed to TG.UI as an Enter press.
+  // The screens that say "PRESS ANY KEY": boot, and the goodbye panel of the title screen.
+  function anyKeyScreen() {
+    return screenName() === 'boot' || !!(TG.UI && TG.UI.panel === 'bye');
+  }
+
+  // "Any key" on those screens, passed to TG.UI as an Enter press.
   function bootAnyInput() {
-    if (screenName() !== 'boot' || !has('Input', 'keyDown') || !has('Input', 'keyUp')) return;
+    if (!anyKeyScreen() || !has('Input', 'keyDown') || !has('Input', 'keyUp')) return;
     TG.Input.keyDown('enter');
     TG.Input.keyUp('enter');
+  }
+
+  // What TG.Board gets from the window (see the header): the network function, bound to the window so
+  // that it can be called on its own, or null; and the clock in ms.
+  function networkFunction() {
+    try {
+      return win && typeof win.fetch === 'function' ? win.fetch.bind(win) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function wallClock() {
+    return Date.now();
+  }
+
+  // EXIT on the title menu (ui:exit). Only a window that a script opened can be closed, so this
+  // usually does nothing; TG.UI shows its goodbye panel either way.
+  function onExit() {
+    try {
+      if (win && typeof win.close === 'function') win.close();
+    } catch (e) { /* the browser refused: the goodbye panel stays */ }
   }
 
   function onKeyDown(e) {
@@ -281,10 +323,10 @@
       setKeyboardHint(false);
     }
     if (k !== 'Escape') unlockAudio();           // Esc is not a user gesture for the audio policy
-    if (e.repeat || screenName() !== 'boot') return;
+    if (e.repeat || !anyKeyScreen()) return;
     if (typeof k !== 'string' || NOT_ANY_KEY[k] || /^F\d+$/.test(k)) return;
     var queued = has('Input', 'translate') ? TG.Input.translate(e) : null;
-    if (!queued) bootAnyInput();
+    if (!queued || (queued.kind === 'key' && QUEUED_WITHOUT_MENU_ACTION[queued.key] === true)) bootAnyInput();
   }
 
   function isButton(target) {
@@ -379,6 +421,7 @@
       if (acc > DT) acc = DT;                    // a slow machine runs slower, it does not fall behind
     }
     if (has('Audio', 'update')) guard('TG.Audio.update', function () { TG.Audio.update(Math.min(dt, maxFrame)); });
+    if (has('Board', 'update')) guard('TG.Board.update', function () { TG.Board.update(Math.min(dt, maxFrame)); });
     applyCrt(false);
     draw();
   }
@@ -398,6 +441,7 @@
     // CONTRACT 4.21, in this order.
     if (has('Save', 'init')) guard('TG.Save.init', function () { TG.Save.init(win); });
     if (has('Save', 'load')) guard('TG.Save.load', function () { TG.Save.load(); });
+    if (has('Board', 'init')) guard('TG.Board.init', function () { TG.Board.init({ fetch: networkFunction(), now: wallClock }); });
     if (has('Gfx', 'init')) guard('TG.Gfx.init', function () { TG.Gfx.init(doc); });
     if (has('Audio', 'init')) guard('TG.Audio.init', function () { TG.Audio.init(); });
     if (has('Input', 'init')) guard('TG.Input.init', function () { TG.Input.init(win); });
@@ -429,6 +473,7 @@
       });
     }
     if (has('UI', 'init')) guard('TG.UI.init', function () { TG.UI.init(); });
+    if (has('Events', 'on')) guard('TG.Events.on', function () { TG.Events.on('ui:exit', onExit); });
     if (has('Game', 'init')) guard('TG.Game.init', function () { TG.Game.init(); });
 
     // Resize handling.

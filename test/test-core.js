@@ -69,9 +69,9 @@ const CORE = ['js/core.js'];
 // Loading
 // =================================================================================================
 
-check('stubs.FILES lists the 19 files of CONTRACT section 1 in load order', function () {
-  return stubs.FILES.length === 19 && stubs.FILES[0] === 'js/core.js' && stubs.FILES[12] === 'js/levels/level1.js' &&
-    stubs.FILES[18] === 'js/main.js' && fs.existsSync(path.join(stubs.ROOT, 'js', 'core.js'));
+check('stubs.FILES lists the 20 files of CONTRACT section 1 in load order', function () {
+  return stubs.FILES.length === 20 && stubs.FILES[0] === 'js/core.js' && stubs.FILES[12] === 'js/levels/level1.js' &&
+    stubs.FILES[17] === 'js/board.js' && stubs.FILES[19] === 'js/main.js' && fs.existsSync(path.join(stubs.ROOT, 'js', 'core.js'));
 });
 
 check('stubs.load() with the default file list succeeds and reports the files that do not exist as missing', function () {
@@ -79,13 +79,13 @@ check('stubs.load() with the default file list succeeds and reports the files th
   const existing = stubs.FILES.filter(function (f) { return fs.existsSync(path.join(stubs.ROOT, f)); });
   const absent = stubs.FILES.filter(function (f) { return !fs.existsSync(path.join(stubs.ROOT, f)); });
   return same(env.loaded, existing) && same(env.missing, absent) && env.loaded.indexOf('js/core.js') === 0 &&
-    env.loaded.length + env.missing.length === 19;
+    env.loaded.length + env.missing.length === 20;
 });
 
-check('stubs.load with core.js and 18 names that do not exist loads core.js and reports the rest as missing', function () {
+check('stubs.load with core.js and 19 names that do not exist loads core.js and reports the rest as missing', function () {
   const files = stubs.FILES.map(function (f, i) { return i === 0 ? f : 'js/absent/' + path.basename(f); });
   const env = stubs.load({ files: files });
-  return same(env.loaded, ['js/core.js']) && env.missing.length === 18 && typeof env.TG === 'object';
+  return same(env.loaded, ['js/core.js']) && env.missing.length === 19 && typeof env.TG === 'object';
 });
 
 check('stubs.load with allowMissing false throws and names the missing file', function () {
@@ -329,11 +329,11 @@ check('Events: clear() removes every listener', function () {
   return TG.Events.count('hero:jump') === 0 && TG.Events.count('*') === 0;
 });
 
-check('Events.NAMES has 62 distinct names, including checkpoint, type:hit and ui:letter', function () {
+check('Events.NAMES has 63 distinct names, including checkpoint, type:hit, ui:letter and ui:exit', function () {
   const N = TG.Events.NAMES;
   const distinct = N.filter(function (n, i) { return N.indexOf(n) === i; });
-  return Array.isArray(N) && N.length === 62 && distinct.length === 62 && N.indexOf('checkpoint') !== -1 &&
-    N.indexOf('type:hit') !== -1 && N.indexOf('ui:letter') !== -1 && N.indexOf('*') === -1;
+  return Array.isArray(N) && N.length === 63 && distinct.length === 63 && N.indexOf('checkpoint') !== -1 &&
+    N.indexOf('type:hit') !== -1 && N.indexOf('ui:letter') !== -1 && N.indexOf('ui:exit') !== -1 && N.indexOf('*') === -1;
 });
 
 // =================================================================================================
@@ -412,7 +412,7 @@ check('Save: before init and load, TG.Save.data equals TG.Save.defaults() by val
 check('Save: defaults have the shape and the seeded scores of CONTRACT 5.12', function () {
   const d = stubs.plain(TG.Save.defaults());
   assert.deepStrictEqual(d.settings, { music: true, sfx: true, crt: 'auto', reduceFlash: false, keyGuide: 'auto',
-    adaptive: true, tutorialDone: false, lastDifficulty: 'medium', initials: 'PIP' });
+    adaptive: true, tutorialDone: false, lastDifficulty: 'medium', initials: 'PIP', worldScores: true });
   assert.deepStrictEqual(Object.keys(d), ['version', 'settings', 'scores', 'best', 'assist']);
   assert.strictEqual(d.version, 1);
   assert.deepStrictEqual(d.best, { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } });
@@ -1529,7 +1529,7 @@ if (contract === null || design === null) {
     const re = /<script src="([^"]+)"><\/script>/g;
     let m;
     while ((m = re.exec(sec)) !== null) tags.push(m[1]);
-    return numbered.length === 19 && same(numbered, stubs.FILES) && same(tags, stubs.FILES);
+    return numbered.length === 20 && same(numbered, stubs.FILES) && same(tags, stubs.FILES);
   });
 
   check('doc: TG.Difficulty.TUNABLE equals the list in CONTRACT 4.5', function () {

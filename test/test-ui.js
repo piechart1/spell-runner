@@ -178,18 +178,31 @@ function makeFakeAudio(log) {
     suspend() { log.push(['suspend']); },
     resume() { log.push(['resume-audio']); },
     update() { log.push(['Audio.update']); },
-    setEnabled(kind, flag) { log.push(['setEnabled', kind, flag]); }
+    setEnabled(kind, flag) { log.push(['setEnabled', kind, flag]); },
+    music(name) { log.push(['music', name === undefined ? null : name]); }
   };
 }
 
 const FAKE_FILES = ['js/core.js', 'js/words.js', 'js/gfx.js', 'js/font.js', 'js/sprites-chars.js', 'js/sprites-world.js',
   'js/ui.js', 'js/main.js'];
 
-// Loads the interface with fakes and starts it like the page does. opts: { storage, canvas, init }.
+// The same with js/board.js, loaded before js/ui.js as in the page (world scores).
+const BOARD_FILES = FAKE_FILES.slice(0, FAKE_FILES.indexOf('js/ui.js')).concat(['js/board.js', 'js/ui.js', 'js/main.js']);
+
+// Loads the interface with fakes and starts it like the page does. opts: { storage, canvas, init, world, board }.
+//   world: a stand-in for the world scores service (shot.createWorld()). js/board.js is loaded, the
+//          service's address is TG.Board.URL and its fetch is window.fetch before TG.Main.init();
+//          TG.Board's clock is t.now (ms), which t.steps moves on with TG.Board.update, as a frame does.
+//   board: true loads js/board.js and leaves TG.Board.URL empty, as the game is delivered.
 function fakeEnv(opts) {
   const o = opts || {};
-  const env = stubs.load({ files: FAKE_FILES, storage: o.storage || 'memory', canvas: o.canvas || 'stub' });
+  const env = stubs.load({ files: o.world || o.board ? BOARD_FILES : FAKE_FILES, storage: o.storage || 'memory', canvas: o.canvas || 'stub' });
   const TG = env.TG;
+  if (o.board) TG.Board.URL = '';
+  if (o.world) {
+    TG.Board.URL = o.world.url;
+    env.window.fetch = o.world.fetch;
+  }
   const log = [];
   const game = makeFakeGame(TG, log);
   const input = makeFakeInput(log);
@@ -209,8 +222,17 @@ function fakeEnv(opts) {
     };
   });
   if (o.init !== false) TG.Main.init();
-  const t = { env: env, TG: TG, log: log, game: game, input: input, audio: audio };
-  t.steps = function (n) { for (let i = 0; i < n; i++) TG.Main.tick(DT); };
+  const t = { env: env, TG: TG, log: log, game: game, input: input, audio: audio, world: o.world || null, now: 0 };
+  if (o.world) TG.Board.init({ fetch: o.world.fetch, now: function () { return t.now; } });
+  t.steps = function (n) {
+    for (let i = 0; i < n; i++) {
+      TG.Main.tick(DT);
+      if (o.world) {
+        t.now += 1000 * DT;
+        TG.Board.update(DT);
+      }
+    }
+  };
   t.seconds = function (s) { t.steps(Math.round(s * 60)); };
   t.press = function (k) { input.press(k); t.steps(1); };
   t.type = function (text) { for (const ch of text) { input.typeChar(ch); t.steps(1); } };
@@ -234,7 +256,7 @@ function eventLog(TG) {
 const html = exists('index.html') ? read('index.html') : '';
 const css = exists('css/style.css') ? read('css/style.css') : '';
 
-check('index.html: the script tags are the 19 files of CONTRACT 1 in order, then the inline TG.Main.init()', function () {
+check('index.html: the script tags are the 20 files of CONTRACT 1 in order, then the inline TG.Main.init()', function () {
   const tags = [];
   const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
   let m;
@@ -314,6 +336,8 @@ check('ui.js and main.js load with only core.js and make no canvas, audio, stora
   ['init', 'update', 'draw'].forEach(function (fn) { assert.strictEqual(typeof TG.UI[fn], 'function', 'TG.UI.' + fn); });
   assert.ok('panel' in TG.UI);
   assert.strictEqual(TG.UI.panel, null);
+  assert.ok('page' in TG.UI);
+  assert.strictEqual(TG.UI.page, null);
   ['init', 'frame', 'tick', 'layoutFor', 'resize'].forEach(function (fn) { assert.strictEqual(typeof TG.Main[fn], 'function', 'TG.Main.' + fn); });
 });
 
@@ -743,7 +767,7 @@ check('A screen change that is refused leaves the screen working: the next key t
   assert.strictEqual(t.screen(), 'playing');
 });
 
-check('TG.UI.panel: menu, options, scores and story (after 12 s idle) on the title, null elsewhere', function () {
+check('TG.UI.panel: menu, options, scores and story (after 12 s idle) on the title, null elsewhere (bye: see the EXIT checks)', function () {
   const t = fakeEnv();
   assert.strictEqual(t.TG.UI.panel, null);
   t.press('enter');
@@ -779,6 +803,230 @@ function textsDrawn(TG, fn) {
   try { fn(); } finally { TG.Font.draw = draw; }
   return seen;
 }
+
+// The same calls as boxes in canvas px: { text, x, y, w, h, color }, x and y the top-left corner.
+function textBoxes(TG, fn) {
+  const seen = [];
+  const draw = TG.Font.draw;
+  TG.Font.draw = function (ctx, text, x, y, opts) {
+    const o = opts || {};
+    const scale = o.scale || 1;
+    const w = String(text).length * 8 * scale;
+    const left = Math.floor(x) - (o.align === 'center' ? Math.floor(w / 2) : (o.align === 'right' ? w : 0));
+    seen.push({ text: String(text), x: left, y: Math.floor(y), w: w, h: 8 * scale, color: o.color });
+    return draw.apply(TG.Font, arguments);
+  };
+  try { fn(); } finally { TG.Font.draw = draw; }
+  return seen;
+}
+
+// From boot to the title menu with the logo stamped.
+function toMenu(t) {
+  t.press('enter');
+  t.seconds(1.3);
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+}
+
+// From the title menu with START selected: Up wraps round to EXIT, the last item, and Enter chooses it.
+function chooseExit(t) {
+  t.press('up');
+  t.press('enter');
+}
+
+// The copyright line as the screens show it. js/ui.js holds it in one constant and README.md ends
+// with it (see the check below), so a new year is changed in those two files and here.
+const COPYRIGHT = '\u00a9 2026 DAVID SLEE';
+
+check('Title menu: START, HOW TO PLAY, HIGH SCORES, OPTIONS and EXIT, in that order; the box clears the logo, the ground and the bottom strip', function () {
+  const t = fakeEnv({ canvas: 'soft' });
+  toMenu(t);
+  const ctx = t.env.canvas.getContext('2d');
+  const boxes = textBoxes(t.TG, function () { t.TG.UI.draw(ctx, t.game.state); });
+  const labels = ['START', 'HOW TO PLAY', 'HIGH SCORES', 'OPTIONS', 'EXIT'];
+  const rows = boxes.filter(function (b) { return labels.indexOf(b.text) !== -1; });
+  assert.deepStrictEqual(rows.map(function (b) { return b.text; }), labels);
+  for (let i = 1; i < rows.length; i++) assert.ok(rows[i].y >= rows[i - 1].y + 10, labels[i] + ' is too close to the row above');
+  // The box is the longest run of its SILVER border in the column of its left edge.
+  const rgba = t.env.canvas.toRGBA();
+  const silver = t.TG.PAL[3].toLowerCase(), ink = t.TG.PAL[0].toLowerCase();
+  const px = function (x, y) {
+    const o = (y * 384 + x) * 4;
+    return '#' + [rgba[o], rgba[o + 1], rgba[o + 2]].map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
+  };
+  const left = rows[0].x - 20;                   // menuRow: the label is 16 px into the row, the row 4 px into the box
+  let top = 0, bottom = -1, start = -1;
+  for (let y = 0; y <= 216; y++) {
+    const on = y < 216 && px(left, y) === silver;
+    if (on && start < 0) start = y;
+    if (!on && start >= 0) {
+      if (y - start > bottom - top + 1) { top = start; bottom = y - 1; }
+      start = -1;
+    }
+  }
+  assert.ok(bottom - top + 1 >= 5 * 12, 'no menu box found at x ' + left + ' (' + top + ' to ' + bottom + ')');
+  assert.ok(top > 48 + 32 + 3, 'the box starts at y ' + top + ', on the logo and its shadow');
+  assert.ok(bottom < 184 - 8, 'the box ends at y ' + bottom + ', on the ground');
+  assert.ok(rows[0].y > top + 4 && rows[4].y + 8 < bottom - 2, 'a row is outside the box');
+  // The bottom strip is INK from its top to the bottom of the screen; the hint line is inside it.
+  const hint = boxes.filter(function (b) { return b.text === 'UP AND DOWN TO CHOOSE, ENTER TO SELECT'; });
+  assert.strictEqual(hint.length, 1);
+  assert.ok(hint[0].y > 184 + 8 && hint[0].x >= 0 && hint[0].x + hint[0].w <= 384, 'the hint line is on the ground or off the screen');
+  for (let y = hint[0].y - 2; y < 216; y++) assert.strictEqual(px(2, y), ink, 'the strip is not INK at y ' + y);
+  assert.notStrictEqual(px(2, 184 + 2), ink, 'the ground line is covered');
+  // Down from START reaches EXIT in four steps and START again in five.
+  for (let i = 0; i < 5; i++) t.press('down');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'difficultySelect', 'five times Down did not come back to START');
+});
+
+check('EXIT emits ui:exit once, shows the goodbye panel and stops the title music; Esc on the menu does not exit', function () {
+  const t = fakeEnv();
+  const ui = eventLog(t.TG);
+  const exits = function () { return ui.filter(function (e) { return e.name === 'ui:exit'; }).length; };
+  toMenu(t);
+  t.press('esc');                                // Esc on START
+  for (let i = 0; i < 4; i++) t.press('down');   // EXIT
+  t.press('esc');                                // Esc on EXIT
+  t.press('backspace');
+  t.type('x');
+  assert.strictEqual(exits(), 0, 'Esc, Backspace or a letter chose EXIT');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  assert.deepStrictEqual(t.calls('music'), []);
+  t.press('enter');
+  assert.strictEqual(exits(), 1);
+  assert.deepStrictEqual(ui.slice(-2).map(function (e) { return e.name; }), ['ui:select', 'ui:exit']);
+  assert.deepStrictEqual(ui[ui.length - 1].p, {});
+  assert.strictEqual(t.TG.UI.panel, 'bye');
+  assert.strictEqual(t.screen(), 'title', 'the goodbye screen is a panel of the title screen');
+  assert.strictEqual(t.calls('setScreen').length, 1, 'EXIT asked TG.Game for a screen change');
+  assert.deepStrictEqual(t.calls('music'), [['music', null]], 'the title music was not stopped');
+  const texts = textsDrawn(t.TG, function () { t.TG.UI.draw(t.env.canvas.getContext('2d'), t.game.state); });
+  ['THANKS FOR PLAYING!', 'YOU CAN CLOSE THIS TAB NOW.', 'PRESS ANY KEY TO PLAY AGAIN', COPYRIGHT].forEach(function (line) {
+    assert.ok(texts.indexOf(line) !== -1, 'the goodbye screen does not say "' + line + '": ' + texts.join('|'));
+  });
+  assert.ok(texts.indexOf('START') === -1, 'the menu is still drawn');
+  t.seconds(2);
+  assert.strictEqual(exits(), 1, 'ui:exit was emitted again');
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('Goodbye screen: keys are ignored for 0.5 s, then any key returns to the menu with START selected and the title music back', function () {
+  ['enter', 'space', 'esc', 'down', 'backspace', 'q'].forEach(function (key) {
+    const t = fakeEnv();
+    const ui = eventLog(t.TG);
+    toMenu(t);
+    t.input.press('up');
+    t.input.press('enter');                      // EXIT ...
+    t.input.press('enter');                      // ... and a second key in the same step, which is dropped
+    t.steps(1);
+    assert.strictEqual(t.TG.UI.panel, 'bye', 'a key of the same step closed the goodbye screen');
+    t.seconds(0.2);
+    t.press('enter');
+    assert.strictEqual(t.TG.UI.panel, 'bye', 'a key in the first 0.5 s closed the goodbye screen');
+    t.seconds(0.4);
+    if (key.length === 1) t.type(key);
+    else t.press(key);
+    assert.strictEqual(t.TG.UI.panel, 'menu', key);
+    assert.strictEqual(t.screen(), 'title');
+    assert.deepStrictEqual(t.calls('music'), [['music', null], ['music', 'title']], key);
+    assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:exit'; }).length, 1);
+    t.press('enter');                            // START is selected again, not EXIT
+    assert.strictEqual(t.screen(), 'difficultySelect', key);
+    assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:exit'; }).length, 1);
+  });
+});
+
+check('Goodbye screen: the idle rotation does not replace it, and the 12 s start again after the return to the menu', function () {
+  const t = fakeEnv();
+  toMenu(t);
+  t.seconds(10);                                 // nearly idle on the menu
+  chooseExit(t);
+  t.seconds(60);
+  assert.strictEqual(t.TG.UI.panel, 'bye', 'the idle rotation started on the goodbye screen');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  t.seconds(11.5);
+  assert.strictEqual(t.TG.UI.panel, 'menu', 'the idle time of before EXIT was kept');
+  t.seconds(1);
+  assert.strictEqual(t.TG.UI.panel, 'story');
+});
+
+check('The copyright line is on the boot screen, the title menu, the story panel and the goodbye screen, clear of every other line, on plain INK', function () {
+  const t = fakeEnv({ canvas: 'soft' });
+  const ctx = t.env.canvas.getContext('2d');
+  const ink = t.TG.PAL[0].toLowerCase(), silver = t.TG.PAL[3].toLowerCase();
+  function look(where, expected) {
+    const boxes = textBoxes(t.TG, function () { t.TG.UI.draw(ctx, t.game.state); });
+    const lines = boxes.filter(function (b) { return b.text === COPYRIGHT; });
+    assert.strictEqual(lines.length, expected, where + ': the copyright line is drawn ' + lines.length + ' times');
+    if (expected === 0) return boxes;
+    const c = lines[0];
+    assert.strictEqual(c.w, 17 * 8);
+    assert.ok(c.x === (384 - c.w) / 2 && c.y >= 200 && c.y + 8 <= 216, where + ': at ' + c.x + ',' + c.y);
+    boxes.forEach(function (b) {
+      if (b === c) return;
+      const apart = b.x + b.w <= c.x || c.x + c.w <= b.x || b.y + b.h + 1 <= c.y || c.y + c.h <= b.y;
+      assert.ok(apart, where + ': "' + b.text + '" is on the copyright line');
+    });
+    // Only the letters and INK in the line's box and 2 px round it: no scenery, panel or sprite under it.
+    const rgba = t.env.canvas.toRGBA();
+    let lit = 0;
+    for (let y = c.y - 2; y < Math.min(216, c.y + 9); y++) for (let x = c.x - 2; x < c.x + c.w + 2; x++) {
+      const o = (y * 384 + x) * 4;
+      const hex = '#' + [rgba[o], rgba[o + 1], rgba[o + 2]].map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
+      assert.ok(hex === ink || hex === silver, where + ': ' + hex + ' at ' + x + ',' + y);
+      if (hex === silver) lit++;
+    }
+    assert.ok(lit > 150, where + ': the line has only ' + lit + ' pixels');
+    return boxes;
+  }
+  const NOTE = 'SPELL RUNNER NEEDS A KEYBOARD.';
+  const has = function (boxes, text) { return boxes.some(function (b) { return b.text === text; }); };
+  t.steps(10);                                   // 'PRESS ANY KEY' is in the lit part of its blink
+  assert.ok(has(look('boot', 1), 'PRESS ANY KEY'));
+  t.env.dispatch('pointerdown', { pointerType: 'touch', target: t.env.document.getElementById('btn-jump') });
+  assert.ok(has(look('boot with the keyboard note', 1), NOTE));
+  t.press('enter');
+  t.steps(20);
+  assert.strictEqual(t.screen(), 'title');
+  assert.ok(!has(look('title while the logo is stamped', 1), 'START'));
+  t.seconds(1.3);
+  let boxes = look('title menu with the keyboard note', 1);
+  assert.ok(has(boxes, NOTE) && has(boxes, 'EXIT'));
+  t.env.dispatch('keydown', { key: 'Shift', code: 'ShiftLeft', shiftKey: true });   // the first key takes the note away
+  boxes = look('title menu', 1);
+  assert.ok(has(boxes, 'UP AND DOWN TO CHOOSE, ENTER TO SELECT') && !has(boxes, NOTE));
+  chooseExit(t);
+  t.seconds(0.6);
+  assert.ok(has(look('goodbye', 1), 'THANKS FOR PLAYING!'));
+  t.press('enter');
+  t.seconds(12.5);
+  assert.strictEqual(t.TG.UI.panel, 'story');
+  look('story', 1);
+  t.press('enter');
+  t.press('down');
+  t.press('down');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  look('high scores (a panel that fills the screen)', 0);
+  t.press('esc');
+  t.press('down');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'options');
+  look('options (a panel that fills the screen)', 0);
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('The copyright text is in one place in the code, and README.md ends with it', function () {
+  const hits = stubs.FILES.filter(function (f) { return /DAVID SLEE|David Slee/.test(read(f)); });
+  assert.deepStrictEqual(hits, ['js/ui.js']);
+  const ui = read('js/ui.js');
+  assert.strictEqual(ui.match(/DAVID SLEE/g).length, 1, 'the name is written more than once in js/ui.js');
+  assert.ok(ui.indexOf('var COPYRIGHT = \'\\u00a9' + COPYRIGHT.slice(1) + '\';') !== -1, 'js/ui.js has no constant COPYRIGHT with the text ' + COPYRIGHT.slice(2));
+  const last = read('README.md').replace(/\n+$/, '').split('\n').pop();
+  assert.strictEqual(last.charAt(0), '\u00a9', 'README.md does not end with the copyright line: ' + last);
+  assert.strictEqual(last.toUpperCase(), COPYRIGHT);
+});
 
 check('Focus lost during the RESUME countdown returns to the pause menu; on game over the continue countdown waits for the focus', function () {
   const t = fakeEnv();
@@ -915,6 +1163,63 @@ check('TG.UI.draw draws nothing on playing, lifeLost, bossIntro, boss and levelC
     assert.ok(drawn[name] > 0, name + ' was not drawn');
   });
   assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('ui:exit: TG.Main calls window.close() once; a close that throws, and a window without close, leave the goodbye screen and no error', function () {
+  // The browser accepts the call (in a real tab it then does nothing, or closes a window a script opened).
+  let t = fakeEnv();
+  let closes = 0;
+  t.env.window.close = function () { closes++; };
+  toMenu(t);
+  t.press('down');
+  t.press('up');
+  assert.strictEqual(closes, 0, 'window.close was called before EXIT was chosen');
+  chooseExit(t);
+  assert.strictEqual(closes, 1);
+  assert.strictEqual(t.TG.UI.panel, 'bye');
+  t.seconds(0.6);
+  t.press('enter');
+  assert.strictEqual(closes, 1, 'window.close was called again on the way back to the menu');
+  chooseExit(t);
+  assert.strictEqual(closes, 2, 'a second EXIT did not try again');
+  assert.deepStrictEqual(t.env.errors, []);
+  // The call throws.
+  t = fakeEnv();
+  t.env.window.close = function () { closes += 10; throw new Error('SecurityError: this window was not opened by a script'); };
+  toMenu(t);
+  chooseExit(t);
+  assert.strictEqual(closes, 12);
+  assert.strictEqual(t.TG.UI.panel, 'bye');
+  assert.deepStrictEqual(t.env.errors, [], 'the exception of window.close was not caught');
+  t.seconds(0.6);
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'menu', 'the game does not go on after a close that throws');
+  // The window has no close function at all (the stubs' default).
+  t = fakeEnv();
+  assert.strictEqual(typeof t.env.window.close, 'undefined');
+  toMenu(t);
+  chooseExit(t);
+  assert.strictEqual(t.TG.UI.panel, 'bye');
+  t.seconds(1);
+  assert.deepStrictEqual(t.env.errors, []);
+  // TG.UI on its own never touches the window: without TG.Main listening, nothing is closed.
+  t = fakeEnv({ init: false });
+  let alone = 0;
+  t.env.window.close = function () { alone++; };
+  t.TG.UI.init();
+  t.game.init();
+  const step = function (n) { for (let i = 0; i < n; i++) t.TG.UI.update(DT); };
+  t.input.press('enter');
+  step(80);
+  t.input.press('up');
+  step(1);
+  t.input.press('enter');
+  step(1);
+  assert.strictEqual(t.TG.UI.panel, 'bye');
+  assert.strictEqual(alone, 0, 'TG.UI closed the window itself');
+  const code = function (f) { return read(f).replace(/\/\/.*$/gm, ''); };
+  assert.ok(!/\.close\s*\(/.test(code('js/ui.js')), 'js/ui.js calls close()');
+  assert.strictEqual(code('js/main.js').match(/\.close\s*\(/g).length, 1, 'js/main.js calls close() in one place');
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -1152,8 +1457,12 @@ check('Buttons never take the focus: mousedown on them is prevented; a press que
   assert.deepStrictEqual(stubs.plain(env.TG.Input.drain()), [{ type: 'down', key: 'jump' }]);
 });
 
-check('Boot: Shift, a digit or a click also counts as "any key"; the first input unlocks audio', function () {
-  [{ key: 'Shift', code: 'ShiftLeft', shiftKey: true }, { key: '7', code: 'Digit7' }, 'click'].forEach(function (what) {
+// The semicolon key as a browser reports it: plain, with Shift, and on a layout that has another
+// character there (German). TG.Input queues all three as 'semicolon' (CONTRACT 4.12).
+const SEMICOLON_KEYS = [{ key: ';', code: 'Semicolon' }, { key: ':', code: 'Semicolon', shiftKey: true }, { key: '\u00f6', code: 'Semicolon' }];
+
+check('Boot: Shift, a digit, the semicolon key or a click also counts as "any key"; the first input unlocks audio', function () {
+  [{ key: 'Shift', code: 'ShiftLeft', shiftKey: true }, { key: '7', code: 'Digit7' }, 'click'].concat(SEMICOLON_KEYS).forEach(function (what) {
     const env = stubs.load();
     env.TG.Main.init();
     env.runFrame(0);
@@ -1259,6 +1568,139 @@ check('Real modules: a whole run on Easy to results, the tally, the high score e
   assert.deepStrictEqual(s.env.errors, []);
 });
 
+check('Real modules: EXIT stops the title loop and shows the goodbye screen; a key, Shift, a digit, the semicolon key or a click brings the menu and the loop back', function () {
+  ['enter', { key: 'Shift', code: 'ShiftLeft', shiftKey: true }, { key: '7', code: 'Digit7' }, 'click'].concat(SEMICOLON_KEYS).forEach(function (what) {
+    const s = shot.createSession({ canvas: 'stub' });
+    const TG = s.TG;
+    const name = JSON.stringify(what);
+    const loop = function () { return TG.Audio._internals.sequencer('loop'); };
+    let closes = 0;
+    s.env.window.close = function () { closes++; };
+    const exits = [];
+    TG.Events.on('ui:exit', function (p) { exits.push(p); });
+    s.frames(2);
+    s.press('enter');
+    s.seconds(1.3);
+    assert.ok(loop().playing && loop().name === 'title', 'the title loop is not playing on the menu');
+    s.press('esc');
+    assert.strictEqual(TG.UI.panel, 'menu');
+    s.press('up');
+    s.press('enter');
+    assert.strictEqual(TG.UI.panel, 'bye');
+    assert.strictEqual(s.screen(), 'title');
+    assert.strictEqual(exits.length, 1);
+    assert.strictEqual(closes, 1, 'TG.Main did not call window.close()');
+    assert.strictEqual(loop().playing, false, 'the title loop goes on under the goodbye screen');
+    s.seconds(20);                                // well past the idle time of the menu
+    assert.strictEqual(TG.UI.panel, 'bye');
+    assert.strictEqual(loop().playing, false);
+    if (what === 'click') s.env.dispatch('pointerdown', { target: s.env.document.body });
+    else if (typeof what === 'string') s.key(what);
+    else {
+      s.env.dispatch('keydown', what);
+      s.env.dispatch('keyup', what);
+    }
+    s.frame();
+    assert.strictEqual(TG.UI.panel, 'menu', name + ' did not close the goodbye screen');
+    assert.ok(loop().playing && loop().name === 'title', 'the title loop did not start again after ' + name);
+    s.press('enter');
+    assert.strictEqual(s.screen(), 'difficultySelect', 'START is not selected after ' + name);
+    assert.strictEqual(exits.length, 1);
+    assert.strictEqual(closes, 1);
+    assert.deepStrictEqual(s.env.errors, []);
+    assert.deepStrictEqual(s.env.warnings, []);
+  });
+});
+
+check('Real modules: every kind of key leaves the boot screen and the goodbye screen; bare modifiers, function keys and Ctrl combinations do not', function () {
+  // One event for each key name TG.Input can queue (CONTRACT 4.12), then keys it does not queue.
+  const ANY = [
+    { key: 'Enter', code: 'Enter' }, { key: ' ', code: 'Space' }, { key: 'Escape', code: 'Escape' },
+    { key: 'ArrowUp', code: 'ArrowUp' }, { key: 'ArrowDown', code: 'ArrowDown' },
+    { key: 'ArrowLeft', code: 'ArrowLeft' }, { key: 'ArrowRight', code: 'ArrowRight' },
+    { key: 'Backspace', code: 'Backspace' }, { key: 'q', code: 'KeyQ' }, { key: '\u0444', code: 'KeyA' }
+  ].concat(SEMICOLON_KEYS, [
+    { key: 'Tab', code: 'Tab' }, { key: 'CapsLock', code: 'CapsLock' }, { key: 'Shift', code: 'ShiftRight', shiftKey: true },
+    { key: '0', code: 'Digit0' }, { key: ',', code: 'Comma' }, { key: '\'', code: 'Quote' }, { key: 'Delete', code: 'Delete' }
+  ]);
+  const NOT = [
+    { key: 'Control', code: 'ControlLeft', ctrlKey: true }, { key: 'Alt', code: 'AltLeft', altKey: true },
+    { key: 'Meta', code: 'MetaLeft', metaKey: true }, { key: 'F5', code: 'F5' }, { key: 'F11', code: 'F11' },
+    { key: ';', code: 'Semicolon', ctrlKey: true }, { key: ';', code: 'Semicolon', repeat: true },
+    { key: 'Dead', code: 'BracketLeft' }
+  ];
+  ANY.concat(NOT).forEach(function (init) {
+    const want = ANY.indexOf(init) !== -1;
+    const name = JSON.stringify(init);
+    const tap = function (s) {
+      s.env.dispatch('keydown', init);
+      s.env.dispatch('keyup', init);
+      s.frame();
+    };
+    const b = shot.createSession({ canvas: 'stub' });
+    b.frames(2);
+    tap(b);
+    assert.strictEqual(b.screen(), want ? 'title' : 'boot', 'boot: ' + name);
+    assert.deepStrictEqual(b.env.errors, []);
+    const s = shot.createSession({ canvas: 'stub' });
+    s.frames(2);
+    s.press('enter');
+    s.seconds(1.3);
+    s.press('up');
+    s.press('enter');
+    s.seconds(0.6);
+    assert.strictEqual(s.TG.UI.panel, 'bye');
+    tap(s);
+    assert.strictEqual(s.TG.UI.panel, want ? 'menu' : 'bye', 'goodbye: ' + name);
+    assert.strictEqual(s.screen(), 'title', name);
+    assert.deepStrictEqual(s.env.errors, []);
+  });
+});
+
+check('Real modules: the semicolon key is "any key" only on the boot and goodbye screens; on the menu and in play it presses nothing else', function () {
+  SEMICOLON_KEYS.forEach(function (init) {
+    const s = shot.createSession({ canvas: 'stub' });
+    const TG = s.TG;
+    const name = JSON.stringify(init);
+    const tap = function () {
+      s.env.dispatch('keydown', init);
+      s.env.dispatch('keyup', init);
+      s.frame();
+    };
+    const exits = [];
+    TG.Events.on('ui:exit', function (p) { exits.push(p); });
+    s.frames(2);
+    s.press('enter');
+    s.seconds(1.3);
+    // Title menu: START is selected, and an Enter passed on by TG.Main would open the difficulty screen.
+    tap();
+    assert.strictEqual(s.screen(), 'title', name + ' acted on the title menu');
+    assert.strictEqual(TG.UI.panel, 'menu', name);
+    // Goodbye screen, inside the first 0.5 s: ignored like every other key.
+    s.press('up');
+    s.press('enter');
+    assert.strictEqual(TG.UI.panel, 'bye');
+    s.seconds(0.2);
+    tap();
+    assert.strictEqual(TG.UI.panel, 'bye', name + ' closed the goodbye screen inside the first 0.5 s');
+    s.seconds(0.4);
+    tap();
+    assert.strictEqual(TG.UI.panel, 'menu', name + ' did not close the goodbye screen');
+    assert.strictEqual(exits.length, 1);
+    // In play the key only ducks: TG.Main queues no Enter of its own.
+    s.press('enter');
+    s.type('easy');
+    s.type('ready');
+    assert.strictEqual(s.screen(), 'playing');
+    TG.Input.drain();
+    s.env.dispatch('keydown', init);
+    assert.deepStrictEqual(stubs.plain(TG.Input.drain()), [{ type: 'down', key: 'semicolon' }], name);
+    s.env.dispatch('keyup', init);
+    assert.deepStrictEqual(s.env.errors, []);
+    assert.deepStrictEqual(s.env.warnings, []);
+  });
+});
+
 // Every screen drawn on the software canvas, which throws for anything outside the canvas subset.
 shot.SCREENS.forEach(function (name) {
   check('Software canvas: the ' + name + ' screen draws without errors and fills the picture', function () {
@@ -1274,7 +1716,7 @@ shot.SCREENS.forEach(function (name) {
   });
 });
 
-['options', 'scores', 'story'].forEach(function (panel) {
+['options', 'scores', 'story', 'bye'].forEach(function (panel) {
   check('Software canvas: the title ' + panel + ' panel draws without errors', function () {
     const s = shot.createSession({ canvas: 'soft' });
     shot.reach(s, 'title', { panel: panel });
@@ -1305,6 +1747,1318 @@ check('tools/shot-ui.js writes a PNG of the requested size', function () {
   } finally {
     console.error = error;
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// H. World scores (docs/LEADERBOARD.md section 9, CONTRACT 4.20 and 4.22)
+// ---------------------------------------------------------------------------------------------
+//
+// The interface with js/board.js and the stand-in service of tools/shot-ui.js, which answers at once
+// and makes no network request. The game is the fake of section D, so each check sets the result it
+// needs.
+
+const GOLD = 18, CORAL = 26, WHITE = 4, SILVER = 3, STONE = 2;
+
+function worldEnv(opts) {
+  const o = opts || {};
+  return fakeEnv(Object.assign({ world: shot.createWorld(o.lists ? { lists: o.lists } : {}) }, o));
+}
+
+// What one frame draws: { text, x, y, w, h, color } per piece of text.
+function drawnBoxes(t) {
+  const ctx = t.env.canvas.getContext('2d');
+  return textBoxes(t.TG, function () { t.TG.UI.draw(ctx, t.game.state); });
+}
+
+function drawnTexts(t) {
+  return drawnBoxes(t).map(function (b) { return b.text; });
+}
+
+// Every piece of text is on the screen; scale 1 text keeps 8 px from the sides of a panel that is as
+// wide as the screen.
+function assertFits(boxes, what) {
+  boxes.forEach(function (b) {
+    assert.ok(b.x >= 0 && b.x + b.w <= 384 && b.y >= 0 && b.y + b.h <= 216, what + ': "' + b.text + '" at ' + b.x + ', ' + b.y + ' is ' + b.w + ' px wide');
+  });
+}
+
+// No two pieces of text share pixels.
+function assertApart(boxes, what) {
+  for (let i = 0; i < boxes.length; i++) {
+    for (let k = i + 1; k < boxes.length; k++) {
+      const a = boxes[i], b = boxes[k];
+      const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+      assert.ok(!overlap, what + ': "' + a.text + '" and "' + b.text + '" overlap');
+    }
+  }
+}
+
+// From the title menu with START selected (also while the logo is still being stamped): START, the
+// difficulty typed, READY typed. The fake game is then on `playing`. Confirming the difficulty is
+// where the run token is asked for.
+function startFakeRun(t, difficulty) {
+  t.seconds(1.3);                                // after a run the logo is stamped again
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'difficultySelect');
+  t.type(difficulty);
+  assert.strictEqual(t.screen(), 'howToPlay');
+  t.type('ready');
+  assert.strictEqual(t.screen(), 'playing');
+}
+
+// The run ends with this result; Enter through the two results pages. Returns the screen that follows.
+// On the initials screen it waits until Enter and Esc are read (0.5 s while world scores are on), unless
+// wait is false.
+function endFakeRun(t, result, wait) {
+  t.game.state.result = result;
+  t.game.force('results');
+  t.seconds(6);
+  t.press('enter');
+  t.seconds(3);
+  t.press('enter');
+  if (wait !== false && t.screen() === 'highScoreEntry') t.seconds(0.6);
+  return t.screen();
+}
+
+function sends(t) {
+  return t.world.calls.filter(function (c) { return c.method === 'POST' && c.path === '/v1/scores'; });
+}
+
+function tokens(t) {
+  return t.world.calls.filter(function (c) { return c.path === '/v1/runs'; });
+}
+
+function gets(t) {
+  return t.world.calls.filter(function (c) { return c.method === 'GET'; });
+}
+
+const LOW = { score: 900, baseScore: 900, bonuses: [], cleared: false, rank: 'C' };   // under every seeded score
+
+// ----- unchanged without world scores ----------------------------------------------------------
+
+const TODAY_SCORES = [
+  ['HIGH SCORES', 14], ['EASY', 38], ['MEDIUM', 38], ['HARD', 38],
+  ['1 PIP 0016000', 54], ['18 WPM 96% A', 64], ['5 CAP 0003000', 158], ['9 WPM 88% B', 168],
+  ['1 PIP 0040000', 54], ['5 CAP 0014000', 158], ['ENTER OR ESC: BACK', 196]
+];
+const TODAY_OPTIONS = ['OPTIONS', 'MUSIC', 'ON', 'SOUND EFFECTS', 'ON', 'CRT EFFECT', 'AUTO', 'REDUCE FLASH', 'OFF', 'KEY GUIDE', 'AUTO',
+  'ADAPTIVE PACE', 'ON', 'RESET SCORES', 'BACK', 'THE CHIPTUNE MUSIC.', 'EASY WORDS ASSUME A QWERTY KEYBOARD', 'ENTER OR ARROWS: CHANGE   ESC: BACK'];
+
+[['without js/board.js', {}], ['with js/board.js and an empty TG.Board.URL', { board: true }]].forEach(function (kind) {
+  check('World scores off (' + kind[0] + '): the High Scores and Options panels are the ones from before, line for line', function () {
+    let fetched = 0;
+    const t = fakeEnv(Object.assign({ canvas: 'soft', init: false }, kind[1]));
+    t.env.window.fetch = function () { fetched++; };   // a browser has fetch; the game must not use it
+    t.TG.Main.init();
+    toMenu(t);
+    t.press('down'); t.press('down'); t.press('enter');
+    assert.strictEqual(t.TG.UI.panel, 'scores');
+    assert.strictEqual(t.TG.UI.page, null);
+    const scores = drawnBoxes(t);
+    assert.strictEqual(scores.length, 1 + 3 + 3 * 5 * 2 + 1, 'the title, three labels, fifteen entries of two lines and the footer');
+    TODAY_SCORES.forEach(function (want) {
+      assert.ok(scores.some(function (b) { return b.text === want[0] && b.y === want[1]; }), '"' + want[0] + '" at y ' + want[1]);
+    });
+    t.press('left'); t.press('right'); t.press('right');
+    assert.strictEqual(t.TG.UI.panel, 'scores', 'Left and Right do nothing on the panel');
+    assert.deepStrictEqual(drawnBoxes(t).map(function (b) { return b.text + '@' + b.x + ',' + b.y; }),
+      scores.map(function (b) { return b.text + '@' + b.x + ',' + b.y; }));
+    t.press('esc');
+    t.press('down'); t.press('enter');
+    assert.strictEqual(t.TG.UI.panel, 'options');
+    const options = drawnBoxes(t);
+    assert.deepStrictEqual(options.map(function (b) { return b.text; }).filter(function (x) { return x !== '>'; }), TODAY_OPTIONS);
+    const rows = options.filter(function (b) { return ['MUSIC', 'SOUND EFFECTS', 'CRT EFFECT', 'REDUCE FLASH', 'KEY GUIDE', 'ADAPTIVE PACE', 'RESET SCORES', 'BACK'].indexOf(b.text) !== -1; });
+    assert.deepStrictEqual(rows.map(function (b) { return b.y; }), [44, 57, 70, 83, 96, 109, 122, 135], 'eight lines from y 44, 13 px apart');
+    assert.strictEqual(fetched, 0);
+  });
+});
+
+check('World scores off: the results and initials screens follow the old rule, blocked initials are accepted, and nothing is asked of TG.Board', function () {
+  [{}, { board: true }].forEach(function (kind) {
+    const t = fakeEnv(kind);
+    toMenu(t);
+    startFakeRun(t, 'medium');
+    assert.strictEqual(endFakeRun(t, fakeResult(LOW)), 'title', 'a score under the top five goes back to the title');
+    assert.strictEqual(t.TG.UI.panel, 'menu');
+    startFakeRun(t, 'medium');
+    assert.strictEqual(endFakeRun(t, fakeResult({ score: 99999 })), 'highScoreEntry');
+    const texts = drawnTexts(t);
+    assert.ok(texts.indexOf('NEW HIGH SCORE!') !== -1);
+    assert.ok(texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') === -1);
+    assert.ok(drawnBoxes(t).some(function (b) { return b.text === '2  PIP  0040000' && b.y === 144; }), 'the table rows are 12 px apart from y 132');
+    t.type('ass');
+    t.press('enter');
+    assert.strictEqual(t.screen(), 'title');
+    assert.strictEqual(t.TG.Save.scores('medium')[0].name, 'ASS', 'the block list is for the world scores only');
+    assert.strictEqual(t.TG.UI.panel, 'scores');
+    assert.strictEqual(t.TG.UI.page, null);
+    if (t.TG.Board) {
+      assert.strictEqual(t.TG.Board.state.boards, 'off');
+      assert.strictEqual(t.TG.Board.state.send, 'none');
+    }
+    assert.deepStrictEqual(t.env.errors, []);
+  });
+});
+
+// ----- Options -------------------------------------------------------------------------------
+
+check('Options with world scores: a WORLD SCORES line (ON / OFF) with the note SENDS YOUR INITIALS AND SCORE; nine lines that fit', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'options');
+  let boxes = drawnBoxes(t);
+  const labels = ['MUSIC', 'SOUND EFFECTS', 'CRT EFFECT', 'REDUCE FLASH', 'KEY GUIDE', 'ADAPTIVE PACE', 'WORLD SCORES', 'RESET SCORES', 'BACK'];
+  const rows = boxes.filter(function (b) { return labels.indexOf(b.text) !== -1; });
+  assert.deepStrictEqual(rows.map(function (b) { return b.text; }), labels);
+  for (let i = 1; i < rows.length; i++) assert.ok(rows[i].y - rows[i - 1].y >= 11, labels[i] + ' is too close to the line above');
+  assert.ok(boxes.every(function (b) { return b.text !== 'SENDS YOUR INITIALS AND SCORE'; }), 'the note belongs to the WORLD SCORES line');
+  for (let i = 0; i < 6; i++) t.press('down');
+  boxes = drawnBoxes(t).filter(function (b) { return b.text !== '>'; });
+  const line = boxes.filter(function (b) { return b.text === 'WORLD SCORES'; })[0];
+  assert.strictEqual(line.color, GOLD, 'the line is selected');
+  const value = boxes.filter(function (b) { return b.y === line.y && b.text !== 'WORLD SCORES'; });
+  assert.deepStrictEqual(value.map(function (b) { return b.text; }), ['ON'], 'on by default');
+  const note = boxes.filter(function (b) { return b.text === 'SENDS YOUR INITIALS AND SCORE'; });
+  assert.strictEqual(note.length, 1);
+  const back = boxes.filter(function (b) { return b.text === 'BACK'; })[0];
+  assert.ok(note[0].y >= back.y + 8 + 8, 'the note is ' + (note[0].y - back.y - 8) + ' px under BACK');
+  assertFits(boxes, 'options');
+  assertApart(boxes, 'options');
+  boxes.forEach(function (b) { assert.ok(b.x >= 32 + 4 && b.x + b.w <= 352 - 4, '"' + b.text + '" is outside the panel'); });
+  // Enter, Left and Right change it, and it is saved.
+  t.press('enter');
+  assert.strictEqual(t.TG.Save.getSetting('worldScores'), false);
+  assert.deepStrictEqual(t.calls('setSetting').pop(), ['setSetting', 'worldScores', false]);
+  assert.strictEqual(t.TG.Board.enabled(), false);
+  assert.ok(drawnBoxes(t).some(function (b) { return b.text === 'OFF' && b.y === line.y; }));
+  t.press('right');
+  assert.strictEqual(t.TG.Save.getSetting('worldScores'), true);
+  t.press('left');
+  assert.strictEqual(t.TG.Save.getSetting('worldScores'), false);
+  // The line stays while the setting is off, so that it can be switched on again.
+  t.press('esc');
+  t.press('enter');
+  assert.ok(drawnTexts(t).indexOf('WORLD SCORES') !== -1);
+  // Down from MUSIC reaches BACK in eight steps.
+  for (let i = 0; i < 8; i++) t.press('down');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  assert.strictEqual(t.world.calls.length, 0, 'the Options panel made a request');
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('Options: RESET SCORES still asks twice and BACK still leaves, one line further down', function () {
+  const t = worldEnv();
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('down'); t.press('enter');
+  for (let i = 0; i < 7; i++) t.press('down');
+  t.press('enter');
+  assert.strictEqual(t.calls('resetScores').length, 0);
+  assert.ok(drawnTexts(t).indexOf('PRESS ENTER AGAIN TO CLEAR THE SCORES.') !== -1);
+  t.press('enter');
+  assert.strictEqual(t.calls('resetScores').length, 1);
+  t.press('down');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+});
+
+// ----- the High Scores panel -----------------------------------------------------------------
+
+check('High Scores with world scores: opens on the WORLD page of the difficulty last played and asks for the boards; Left and Right go round four pages', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  t.TG.Save.setSetting('lastDifficulty', 'hard');
+  toMenu(t);
+  assert.strictEqual(t.world.calls.length, 0, 'a request before the panel was opened');
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  assert.strictEqual(t.TG.UI.page, 'hard');
+  assert.deepStrictEqual(t.world.calls.map(function (c) { return c.method + ' ' + c.path; }), ['GET /v1/scores']);
+  const seen = [];
+  const ui = eventLog(t.TG);
+  for (let i = 0; i < 4; i++) { t.press('right'); seen.push(t.TG.UI.page); }
+  assert.deepStrictEqual(seen, ['local', 'easy', 'medium', 'hard']);
+  assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:move'; }).length, 4);
+  const back = [];
+  for (let i = 0; i < 4; i++) { t.press('left'); back.push(t.TG.UI.page); }
+  assert.deepStrictEqual(back, ['medium', 'easy', 'local', 'hard']);
+  t.press('up'); t.press('down'); t.type('x');
+  assert.strictEqual(t.TG.UI.page, 'hard', 'other keys do not change the page');
+  assert.strictEqual(t.world.calls.length, 1, 'changing the page asks for nothing');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  assert.strictEqual(t.TG.UI.page, null);
+  // Opened again within 30 s: the boards are not asked for again.
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'hard');
+  assert.strictEqual(t.world.calls.length, 1);
+  t.press('esc');
+  t.seconds(11);
+  t.press('up'); t.press('down');
+  t.seconds(11);
+  t.press('up'); t.press('down');
+  t.seconds(9);
+  t.press('enter');
+  assert.strictEqual(t.world.calls.length, 2, 'after 30 s the boards are asked for again');
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('A WORLD page: a header with the page and the arrows, ten rows of place, initials, score, WPM, accuracy and rank; nothing overlaps or leaves the panel', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('enter');
+  ['medium', 'hard', 'easy'].forEach(function (d) {
+    for (let i = 0; i < 3 && t.TG.UI.page !== d; i++) t.press('right');   // medium -> hard -> local -> easy
+    assert.strictEqual(t.TG.UI.page, d);
+    const boxes = drawnBoxes(t);
+    const texts = boxes.map(function (b) { return b.text; });
+    assert.ok(texts.indexOf('HIGH SCORES') !== -1);
+    const header = boxes.filter(function (b) { return b.text === 'WORLD ' + d.toUpperCase(); });
+    assert.strictEqual(header.length, 1, 'the page header');
+    const arrows = boxes.filter(function (b) { return b.y === header[0].y && (b.text === '<' || b.text === '>'); });
+    assert.deepStrictEqual(arrows.map(function (b) { return b.text; }), ['<', '>'], 'an arrow on each side of the page name');
+    assert.ok(arrows[0].x + arrows[0].w <= header[0].x && arrows[1].x >= header[0].x + header[0].w);
+    assert.ok(texts.indexOf((['easy', 'medium', 'hard'].indexOf(d) + 1) + '/4') !== -1, 'the page number');
+    assert.ok(texts.indexOf('LEFT AND RIGHT: PAGE   ENTER OR ESC: BACK') !== -1);
+    ['NAME', 'SCORE', 'WPM', 'ACC', 'RANK'].forEach(function (h) { assert.ok(texts.indexOf(h) !== -1, 'column ' + h); });
+    const list = t.world.lists[d].slice(0, 10);
+    list.forEach(function (e, i) {
+      const cells = boxes.filter(function (b) { return b.y === 56 + i * 11; }).map(function (b) { return b.text; });
+      const padded = ('0000000' + e.score).slice(-7);
+      assert.deepStrictEqual(cells, [String(i + 1), e.name, padded, String(e.wpm), e.accuracy + '%', e.rank], 'row ' + (i + 1));
+    });
+    assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10, 'ten rows');
+    assertFits(boxes, d);
+    assertApart(boxes, d);
+    boxes.forEach(function (b) { assert.ok(b.x >= 8 + 4 && b.x + b.w <= 376 - 4 && b.y >= 6 + 4 && b.y + b.h <= 210 - 4, '"' + b.text + '" is outside the panel'); });
+  });
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('The THIS COMPUTER page has the three tables of this computer under its header; the new entry of this computer blinks there', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('enter');
+  t.press('left'); t.press('left');               // medium -> easy -> local
+  assert.strictEqual(t.TG.UI.page, 'local');
+  const boxes = drawnBoxes(t);
+  const texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('THIS COMPUTER') !== -1 && texts.indexOf('4/4') !== -1);
+  assert.strictEqual(boxes.filter(function (b) { return /^\d [A-Z]{3} \d{7}$/.test(b.text); }).length, 15);
+  assert.strictEqual(boxes.filter(function (b) { return /WPM \d+% [SABC]$/.test(b.text); }).length, 15);
+  ['EASY', 'MEDIUM', 'HARD'].forEach(function (label) { assert.ok(texts.indexOf(label) !== -1, label); });
+  assertFits(boxes, 'local');
+  assertApart(boxes, 'local');
+  boxes.forEach(function (b) { assert.ok(b.x >= 12 && b.x + b.w <= 372 && b.y + b.h <= 206, '"' + b.text + '" is outside the panel'); });
+});
+
+check('WORLD page states: LOADING..., WORLD SCORES CANNOT BE REACHED with the way to this computer\'s scores, NO SCORES YET. BE THE FIRST!', function () {
+  // Loading: the reply has not come yet.
+  const t = worldEnv({ canvas: 'soft' });
+  t.world.hold = true;
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  assert.strictEqual(t.TG.Board.state.boards, 'loading');
+  let boxes = drawnBoxes(t);
+  let texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('LOADING...') !== -1);
+  assert.ok(texts.indexOf('NAME') === -1 && texts.indexOf('WORLD MEDIUM') !== -1);
+  assertFits(boxes, 'loading');
+  assertApart(boxes, 'loading');
+  // The reply arrives: the rows.
+  t.world.hold = false;
+  t.world.release();
+  assert.strictEqual(drawnBoxes(t).filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10);
+
+  // No reply at all: failed after 6 s.
+  const slow = worldEnv({ canvas: 'soft' });
+  slow.world.hold = true;
+  toMenu(slow);
+  slow.press('down'); slow.press('down'); slow.press('enter');
+  slow.seconds(5.8);
+  assert.ok(drawnTexts(slow).indexOf('LOADING...') !== -1);
+  slow.seconds(0.4);
+  boxes = drawnBoxes(slow);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('WORLD SCORES CANNOT BE REACHED') !== -1, texts.join(' | '));
+  assert.ok(texts.indexOf('PRESS RIGHT FOR THIS COMPUTER\'S SCORES') !== -1);
+  assert.ok(texts.indexOf('LOADING...') === -1);
+  assertFits(boxes, 'failed');
+  assertApart(boxes, 'failed');
+  // Right goes straight to THIS COMPUTER from a page in this state, as the line says.
+  slow.press('right');
+  assert.strictEqual(slow.TG.UI.page, 'local');
+  slow.press('left');
+  assert.strictEqual(slow.TG.UI.page, 'hard');
+  slow.press('left');
+  assert.strictEqual(slow.TG.UI.page, 'medium');
+  slow.press('right');
+  assert.strictEqual(slow.TG.UI.page, 'local');
+
+  // Empty boards.
+  const empty = worldEnv({ canvas: 'soft', lists: { easy: [], medium: [], hard: [] } });
+  toMenu(empty);
+  empty.press('down'); empty.press('down'); empty.press('enter');
+  boxes = drawnBoxes(empty);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('NO SCORES YET. BE THE FIRST!') !== -1);
+  assert.ok(texts.indexOf('NAME') === -1);
+  assertFits(boxes, 'empty');
+  [t, slow, empty].forEach(function (x) { assert.deepStrictEqual(x.env.errors, []); });
+});
+
+check('When the boards could not be loaded, the panel opens on THIS COMPUTER and asks for them again', function () {
+  const t = worldEnv();
+  t.world.down = true;
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium', 'the first time nothing is known yet');
+  assert.strictEqual(t.TG.Board.state.boards, 'failed');
+  t.press('esc');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'local', 'after a failed load the panel opens on THIS COMPUTER');
+  assert.strictEqual(gets(t).length, 2, 'the boards are asked for again, although 30 s have not passed');
+  // The service is back: the next opening shows the world page again.
+  t.world.down = false;
+  t.press('esc');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'local');
+  assert.strictEqual(t.TG.Board.state.boards, 'ready');
+  t.press('esc');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  assert.strictEqual(gets(t).length, 3, 'boards that are known are not asked for again within 30 s');
+});
+
+// ----- the run token -------------------------------------------------------------------------
+
+check('The run token is asked for when a difficulty is confirmed; a confirm for another difficulty replaces it; a continue and a restart keep it', function () {
+  const t = worldEnv();
+  toMenu(t);
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'difficultySelect');
+  t.press('left'); t.press('right'); t.press('right');
+  assert.strictEqual(tokens(t).length, 0, 'moving between the panels asks for nothing');
+  t.press('enter');                              // HARD
+  assert.strictEqual(t.screen(), 'howToPlay');
+  assert.deepStrictEqual(tokens(t).map(function (c) { return c.body.difficulty; }), ['hard']);
+  assert.strictEqual(t.TG.Board.hasToken('hard'), true);
+  t.press('esc');                                // back to the difficulty screen
+  t.type('easy');
+  assert.deepStrictEqual(tokens(t).map(function (c) { return c.body.difficulty; }), ['hard', 'easy']);
+  assert.strictEqual(t.TG.Board.hasToken('hard'), false);
+  assert.strictEqual(t.TG.Board.hasToken('easy'), true);
+  t.type('ready');
+  assert.strictEqual(t.screen(), 'playing');
+  assert.strictEqual(tokens(t).length, 2, 'starting the run asks for nothing more');
+  // Game over and continue.
+  t.game.force('gameOver');
+  t.seconds(1);
+  t.press('enter');
+  assert.strictEqual(t.calls('continueRun').length, 1);
+  // Pause and restart from the checkpoint.
+  t.game.pause();
+  t.steps(1);
+  t.press('down');
+  t.press('enter');
+  t.press('enter');
+  assert.strictEqual(t.calls('continueRun').length, 2);
+  assert.strictEqual(tokens(t).length, 2, 'a continue or a restart asked for a token');
+  assert.strictEqual(t.TG.Board.hasToken('easy'), true);
+  // How to Play from the title menu is not a confirm.
+  const other = worldEnv();
+  toMenu(other);
+  other.press('down'); other.press('enter');
+  assert.strictEqual(other.screen(), 'howToPlay');
+  other.press('enter');
+  assert.strictEqual(other.world.calls.length, 0);
+});
+
+// ----- when the initials screen appears -------------------------------------------------------
+
+check('The initials screen appears for the local top five (NEW HIGH SCORE!), or with world scores on, a token held and a score above zero (WORLD SCORES)', function () {
+  // Top five of this computer, world scores on: the old heading.
+  let t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult({ score: 99999 })), 'highScoreEntry');
+  let boxes = drawnBoxes(t);
+  let texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('NEW HIGH SCORE!') !== -1 && texts.indexOf('WORLD SCORES') === -1);
+  assert.ok(texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') !== -1, 'the screen says that the score is also sent');
+  assertFits(boxes, 'entry, local and world');
+  assertApart(boxes, 'entry, local and world');
+
+  // Under the top five, token held, score above zero: the screen appears for the world scores.
+  t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult(LOW)), 'highScoreEntry');
+  boxes = drawnBoxes(t);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('WORLD SCORES') !== -1 && texts.indexOf('NEW HIGH SCORE!') === -1, texts.join(' | '));
+  assert.ok(texts.indexOf('TYPE YOUR INITIALS') !== -1 && texts.indexOf('MEDIUM   900') !== -1);
+  assert.ok(texts.some(function (x) { return /YOUR INITIALS AND SCORE/.test(x); }), 'the screen says what is sent');
+  assert.ok(texts.every(function (x) { return !/^\d  [A-Z-]{3}  \d{7}$/.test(x); }), 'the table of this computer is not shown: the score is not in it');
+  assertFits(boxes, 'entry, world');
+  assertApart(boxes, 'entry, world');
+
+  // A score of zero is not sent.
+  t = worldEnv();
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult({ score: 0, baseScore: 0, bonuses: [], cleared: false, rank: 'C' })), 'title');
+  assert.strictEqual(sends(t).length, 0);
+
+  // A run shorter than the service accepts (10 s) is not offered: it would be refused. From 10 s it is.
+  assert.strictEqual(t.TG.Board.MIN_TIME, 10);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(t.TG.Board.hasToken('medium'), true);
+  assert.strictEqual(endFakeRun(t, fakeResult(Object.assign({}, LOW, { time: 9.99 }))), 'title', 'a run of 9.99 s went to the initials screen');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult(Object.assign({}, LOW, { time: 10 }))), 'highScoreEntry');
+  // Such a run still gets the old screen when it reaches the top five of this computer, and is not sent.
+  t = worldEnv();
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult({ score: 99999, time: 4 })), 'highScoreEntry');
+  texts = drawnTexts(t);
+  assert.ok(texts.indexOf('NEW HIGH SCORE!') !== -1 && texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') === -1, texts.join(' | '));
+  assert.ok(texts.indexOf('TYPE 3 LETTERS, THEN ENTER') !== -1 && texts.every(function (x) { return !/^ESC/.test(x); }), 'Esc is offered although nothing is sent');
+  t.type('abc');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.TG.UI.page, 'local');
+  assert.strictEqual(sends(t).length, 0);
+
+  // No token (the service was down when the difficulty was confirmed): the old rule.
+  t = worldEnv();
+  t.world.down = true;
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  t.world.down = false;
+  assert.strictEqual(endFakeRun(t, fakeResult(LOW)), 'title');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  startFakeRun(t, 'medium');                     // this time the token arrives
+  assert.strictEqual(endFakeRun(t, fakeResult(LOW)), 'highScoreEntry');
+
+  // A token for another difficulty does not count.
+  t = worldEnv();
+  toMenu(t);
+  startFakeRun(t, 'easy');
+  assert.strictEqual(endFakeRun(t, fakeResult(Object.assign({}, LOW, { difficulty: 'hard' }))), 'title');
+
+  // The setting off: the old rule, and no request.
+  t = worldEnv();
+  t.TG.Save.setSetting('worldScores', false);
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult(LOW)), 'title');
+  assert.strictEqual(t.world.calls.length, 0);
+});
+
+// ----- confirming the initials ----------------------------------------------------------------
+
+check('Initials: the last ones used are offered and Enter alone takes them; on confirm the table of this computer is updated when the score reaches it, and the score is sent', function () {
+  const t = worldEnv();
+  t.TG.Save.setSetting('initials', 'KEY');
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  assert.ok(drawnTexts(t).indexOf('ENTER: SAVE AND SEND AS KEY') !== -1, drawnTexts(t).join(' | '));
+  t.log.length = 0;
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.calls('addScore').length, 1);
+  assert.strictEqual(t.calls('addScore')[0][2].name, 'KEY');
+  assert.strictEqual(t.TG.Save.scores('medium')[0].name, 'KEY');
+  const sent = sends(t);
+  assert.strictEqual(sent.length, 1);
+  assert.deepStrictEqual(sent[0].body, { token: 'run-1.medium', name: 'KEY', score: 99999, wpm: 28, accuracy: 95, rank: 'A', cleared: true, time: 301 });
+  assert.strictEqual(t.TG.Board.state.send, 'sent');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+
+  // Under the top five: nothing is added to the table of this computer, the score is still sent, and
+  // the initials are kept for the next time.
+  const low = worldEnv();
+  toMenu(low);
+  startFakeRun(low, 'hard');
+  endFakeRun(low, fakeResult(Object.assign({}, LOW, { difficulty: 'hard' })));
+  const before = JSON.stringify(low.TG.Save.scores('hard'));
+  low.type('zoe');
+  low.press('enter');
+  assert.strictEqual(low.screen(), 'title');
+  assert.strictEqual(JSON.stringify(low.TG.Save.scores('hard')), before);
+  assert.strictEqual(sends(low).length, 1);
+  assert.strictEqual(sends(low)[0].body.name, 'ZOE');
+  assert.strictEqual(sends(low)[0].body.score, 900);
+  assert.strictEqual(low.TG.Save.getSetting('initials'), 'ZOE');
+  assert.strictEqual(low.TG.UI.page, 'hard');
+
+  // Top five but no token: saved on this computer as before, nothing sent, and the panel opens on
+  // THIS COMPUTER, where the new entry is.
+  const local = worldEnv();
+  local.world.down = true;
+  toMenu(local);
+  startFakeRun(local, 'medium');
+  endFakeRun(local, fakeResult({ score: 99999 }));
+  assert.ok(drawnTexts(local).indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') === -1, 'nothing will be sent, so the screen does not say so');
+  local.type('abc');
+  local.press('enter');
+  assert.strictEqual(local.TG.Save.scores('medium')[0].name, 'ABC');
+  assert.strictEqual(sends(local).length, 0);
+  assert.strictEqual(local.TG.UI.panel, 'scores');
+  assert.strictEqual(local.TG.UI.page, 'local');
+});
+
+check('Blocked initials are refused on the spot: the boxes shake, TRY OTHER INITIALS shows, and nothing is saved or sent', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  const requests = t.world.calls.length;
+  t.log.length = 0;
+  const ui = eventLog(t.TG);
+  t.type('ass');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'highScoreEntry');
+  assert.strictEqual(t.calls('addScore').length, 0, 'saved on this computer');
+  assert.strictEqual(t.calls('setSetting').length, 0, 'the initials were kept');
+  assert.strictEqual(t.world.calls.length, requests, 'something was sent');
+  assert.strictEqual(t.TG.Board.state.send, 'none');
+  assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:select'; }).length, 0);
+  let boxes = drawnBoxes(t);
+  const message = boxes.filter(function (b) { return b.text === 'TRY OTHER INITIALS'; });
+  assert.strictEqual(message.length, 1);
+  assert.strictEqual(message[0].color, CORAL);
+  const letters = boxes.filter(function (b) { return b.h === 32; });
+  assert.deepStrictEqual(letters.map(function (b) { return b.text; }), ['A', 'S', 'S']);
+  assert.ok(letters.every(function (b) { return b.color === CORAL; }), 'the refused letters are not marked');
+  // The boxes shake: over the next frames the letters are seen at two different places.
+  const xs = {};
+  for (let i = 0; i < 12; i++) {
+    t.steps(1);
+    drawnBoxes(t).filter(function (b) { return b.h === 32; }).slice(0, 1).forEach(function (b) { xs[b.x] = true; });
+  }
+  assert.ok(Object.keys(xs).length >= 2, 'the boxes did not move: x ' + Object.keys(xs).join(', '));
+  t.seconds(0.5);
+  boxes = drawnBoxes(t);
+  assert.ok(boxes.some(function (b) { return b.text === 'TRY OTHER INITIALS'; }), 'the message stays until another key');
+  assert.ok(boxes.every(function (b) { return !/ASS/.test(b.text); }), 'the refused initials are shown in the table');
+  assertFits(boxes, 'refused');
+  assertApart(boxes, 'refused');
+  // Enter again changes nothing; in any letter case, every entry of the list is refused.
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'highScoreEntry');
+  // The next letter starts again; Backspace also clears the message.
+  t.type('k');
+  assert.ok(drawnTexts(t).indexOf('TRY OTHER INITIALS') === -1);
+  assert.deepStrictEqual(drawnBoxes(t).filter(function (b) { return b.h === 32; }).map(function (b) { return b.text; }), ['K']);
+  t.type('kk');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'highScoreEntry', 'KKK was accepted');
+  t.press('backspace');
+  assert.ok(drawnTexts(t).indexOf('TRY OTHER INITIALS') === -1);
+  t.type('y');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.TG.Save.scores('medium')[0].name, 'KKY');
+  assert.strictEqual(sends(t).length, 1);
+  assert.strictEqual(sends(t)[0].body.name, 'KKY');
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('Blocked initials saved earlier are not offered while world scores are on: they have to be typed again', function () {
+  const t = worldEnv();
+  t.TG.Save.setSetting('initials', 'ASS');
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  const texts = drawnTexts(t);
+  assert.ok(texts.every(function (x) { return !/ASS/.test(x); }), texts.join(' | '));
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'highScoreEntry', 'Enter alone sent the score');
+  assert.strictEqual(sends(t).length, 0);
+  t.type('amy');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(sends(t)[0].body.name, 'AMY');
+});
+
+// ----- declining, the lock and the placeholder initials -----------------------------------------
+
+// The big letters in the three boxes.
+function boxLetters(t) {
+  return drawnBoxes(t).filter(function (b) { return b.h === 32; }).map(function (b) { return b.text; });
+}
+
+check('Initials screen: Enter and Esc are not read for the first 0.5 s while world scores are on, so a second Enter meant for the results screen sends nothing; letters are taken at once', function () {
+  const t = worldEnv();
+  t.TG.Save.setSetting('initials', 'KEY');
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult(LOW), false), 'highScoreEntry');
+  t.press('enter');                              // one frame after the Enter that left the results
+  assert.strictEqual(t.screen(), 'highScoreEntry', 'the second Enter sent the score');
+  t.press('esc');
+  assert.strictEqual(t.screen(), 'highScoreEntry', 'Esc left the screen during the lock');
+  for (let i = 0; i < 12; i++) { t.press('enter'); t.steps(1); }   // 0.4 s of Enter presses
+  assert.strictEqual(t.screen(), 'highScoreEntry');
+  assert.strictEqual(sends(t).length, 0, 'a score was sent during the lock');
+  assert.strictEqual(t.calls('addScore').length, 0);
+  t.seconds(0.2);
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title', 'Enter after the lock');
+  assert.strictEqual(sends(t).length, 1);
+  assert.strictEqual(sends(t)[0].body.name, 'KEY');
+
+  // Letters typed during the lock are kept.
+  const typed = worldEnv();
+  toMenu(typed);
+  startFakeRun(typed, 'medium');
+  endFakeRun(typed, fakeResult(LOW), false);
+  typed.type('zoe');
+  assert.deepStrictEqual(boxLetters(typed), ['Z', 'O', 'E']);
+  typed.press('enter');
+  assert.strictEqual(typed.screen(), 'highScoreEntry');
+  typed.seconds(0.5);
+  typed.press('enter');
+  assert.strictEqual(sends(typed)[0].body.name, 'ZOE');
+
+  // With world scores off the screen is as it was: Enter is read from the first frame.
+  [{}, { board: true }].forEach(function (kind) {
+    const off = fakeEnv(kind);
+    toMenu(off);
+    startFakeRun(off, 'medium');
+    assert.strictEqual(endFakeRun(off, fakeResult({ score: 99999 }), false), 'highScoreEntry');
+    off.press('enter');
+    assert.strictEqual(off.screen(), 'title');
+    assert.strictEqual(off.TG.Save.scores('medium')[0].name, 'PIP');
+  });
+});
+
+check('Initials screen, WORLD SCORES: Esc goes to the title with nothing sent and nothing saved, and the screen says so (ESC: DO NOT SEND)', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult(LOW)), 'highScoreEntry');
+  const boxes = drawnBoxes(t);
+  const texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('WORLD SCORES') !== -1);
+  const esc = boxes.filter(function (b) { return b.text === 'ESC: DO NOT SEND'; });
+  assert.strictEqual(esc.length, 1, texts.join(' | '));
+  assert.strictEqual(esc[0].color, SILVER);
+  assertFits(boxes, 'entry, world');
+  assertApart(boxes, 'entry, world');
+  const requests = t.world.calls.length;
+  t.log.length = 0;
+  const ui = eventLog(t.TG);
+  t.type('da');                                  // letters typed so far are dropped with the rest
+  t.press('esc');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.TG.UI.panel, 'menu', 'the title menu, as after a run that earns no entry');
+  assert.strictEqual(t.world.calls.length, requests, 'a request was made');
+  assert.strictEqual(t.TG.Board.state.send, 'none');
+  assert.strictEqual(t.calls('addScore').length, 0);
+  assert.strictEqual(t.calls('setSetting').length, 0, 'the initials were saved');
+  assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:back'; }).length, 1);
+  assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:select'; }).length, 0);
+  // The High Scores panel has no status line for a run that was not sent.
+  t.seconds(1.3);                                // the logo is stamped again after a run
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  assert.ok(drawnTexts(t).every(function (x) { return !/YOUR PLACE|SENDING|COULD NOT/.test(x); }));
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('Initials screen, NEW HIGH SCORE!: Esc keeps the score on this computer only (THIS SCORE STAYS ON THIS COMPUTER), Esc again sends it after all', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult({ score: 99999 })), 'highScoreEntry');
+  let boxes = drawnBoxes(t);
+  let texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') !== -1 && texts.indexOf('ESC: DO NOT SEND') !== -1, texts.join(' | '));
+  const ui = eventLog(t.TG);
+  t.press('esc');
+  assert.strictEqual(t.screen(), 'highScoreEntry', 'the score still belongs in the table of this computer');
+  assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:move'; }).length, 1);
+  boxes = drawnBoxes(t);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('THIS SCORE STAYS ON THIS COMPUTER') !== -1 && texts.indexOf('ESC: SEND IT TOO') !== -1, texts.join(' | '));
+  assert.ok(texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') === -1 && texts.indexOf('ESC: DO NOT SEND') === -1);
+  assert.ok(texts.indexOf('ENTER: USE PIP') !== -1, 'nothing is sent, so Enter alone takes PIP as it always did');
+  assertFits(boxes, 'entry, declined');
+  assertApart(boxes, 'entry, declined');
+  t.type('dav');
+  assert.ok(drawnTexts(t).indexOf('ENTER: SAVE') !== -1);
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.TG.Save.scores('medium')[0].name, 'DAV');
+  assert.strictEqual(sends(t).length, 0, 'the score was sent after Esc');
+  assert.strictEqual(t.TG.Board.state.send, 'none');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  assert.strictEqual(t.TG.UI.page, 'local', 'the panel opens where the new entry is');
+  let seen = [];
+  for (let i = 0; i < 30; i++) { t.steps(1); seen = seen.concat(drawnBoxes(t)); }
+  assert.ok(seen.some(function (b) { return b.text === '1 DAV 0099999' && b.color === GOLD; }), 'the new entry is not marked');
+  assert.strictEqual(t.TG.Board.hasToken('medium'), true, 'the token is not used up by a run that was not sent');
+
+  // Esc twice: sent after all.
+  const again = worldEnv();
+  toMenu(again);
+  startFakeRun(again, 'medium');
+  endFakeRun(again, fakeResult({ score: 99999 }));
+  again.press('esc');
+  again.press('esc');
+  texts = drawnTexts(again);
+  assert.ok(texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') !== -1 && texts.indexOf('ESC: DO NOT SEND') !== -1);
+  again.type('dav');
+  assert.ok(drawnTexts(again).indexOf('ENTER: SAVE AND SEND') !== -1);
+  again.press('enter');
+  assert.strictEqual(sends(again).length, 1);
+  assert.strictEqual(again.TG.UI.page, 'medium');
+
+  // With world scores off, and with them on but no run token, Esc does nothing, as before.
+  const off = fakeEnv({ board: true });
+  toMenu(off);
+  startFakeRun(off, 'medium');
+  endFakeRun(off, fakeResult({ score: 99999 }));
+  const before = drawnTexts(off).join('|');
+  off.press('esc');
+  assert.strictEqual(off.screen(), 'highScoreEntry');
+  assert.strictEqual(drawnTexts(off).join('|'), before);
+  const none = worldEnv();
+  none.world.down = true;
+  toMenu(none);
+  startFakeRun(none, 'medium');
+  endFakeRun(none, fakeResult({ score: 99999 }));
+  none.press('esc');
+  assert.strictEqual(none.screen(), 'highScoreEntry');
+  assert.ok(drawnTexts(none).every(function (x) { return !/^ESC|STAYS ON THIS COMPUTER/.test(x); }));
+  none.type('abc');
+  none.press('enter');
+  assert.strictEqual(none.TG.Save.scores('medium')[0].name, 'ABC');
+});
+
+check('Initials screen: with no initials used before, Enter alone does not send the score as PIP; the boxes are empty and the letters have to be typed', function () {
+  [fakeResult(LOW), fakeResult({ score: 99999 })].forEach(function (result) {
+    const t = worldEnv({ canvas: 'soft' });
+    assert.strictEqual(t.TG.Save.getSetting('initials'), 'PIP');
+    toMenu(t);
+    startFakeRun(t, 'medium');
+    assert.strictEqual(endFakeRun(t, result), 'highScoreEntry');
+    assert.deepStrictEqual(boxLetters(t), [], 'PIP is shown in the boxes');
+    let texts = drawnTexts(t);
+    assert.ok(texts.every(function (x) { return !/^ENTER/.test(x); }), 'Enter is offered: ' + texts.join(' | '));
+    const requests = t.world.calls.length;
+    t.log.length = 0;
+    for (let i = 0; i < 5; i++) { t.press('enter'); t.seconds(0.25); }
+    assert.strictEqual(t.screen(), 'highScoreEntry', 'Enter alone was accepted');
+    assert.strictEqual(t.world.calls.length, requests, 'a request was made');
+    assert.strictEqual(t.calls('addScore').length, 0);
+    const boxes = drawnBoxes(t);
+    assert.ok(boxes.some(function (b) { return b.text === 'TYPE 3 LETTERS FIRST'; }), boxes.map(function (b) { return b.text; }).join(' | '));
+    assert.ok(boxes.every(function (b) { return !/PIP  \d{7}/.test(b.text) || b.color !== GOLD; }), 'the new row of the table is shown as PIP');
+    assertFits(boxes, 'entry, nothing offered');
+    assertApart(boxes, 'entry, nothing offered');
+    // PIP can still be chosen: typed, it is sent like any other initials.
+    t.type('pip');
+    assert.ok(drawnTexts(t).indexOf('TYPE 3 LETTERS FIRST') === -1);
+    t.press('enter');
+    assert.strictEqual(t.screen(), 'title');
+    assert.strictEqual(sends(t)[0].body.name, 'PIP');
+  });
+});
+
+check('Initials screen: the line under the boxes says what Enter does: SEND on WORLD SCORES, SAVE AND SEND on NEW HIGH SCORE!, SAVE when nothing is sent', function () {
+  const hint = function (t) {
+    return drawnBoxes(t).filter(function (b) { return b.y === 112; }).map(function (b) { return b.text; });
+  };
+  // WORLD SCORES.
+  let t = worldEnv();
+  t.TG.Save.setSetting('initials', 'KEY');
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult(LOW));
+  assert.deepStrictEqual(hint(t), ['ENTER: SEND AS KEY']);
+  t.type('d');
+  assert.deepStrictEqual(hint(t), ['BACKSPACE: DELETE']);
+  t.type('av');
+  assert.deepStrictEqual(hint(t), ['ENTER: SEND']);
+  assert.ok(drawnTexts(t).every(function (x) { return x !== 'ENTER: SAVE'; }), 'nothing is saved on this computer from this screen');
+  // NEW HIGH SCORE!, sent as well.
+  t = worldEnv();
+  t.TG.Save.setSetting('initials', 'KEY');
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  assert.deepStrictEqual(hint(t), ['ENTER: SAVE AND SEND AS KEY']);
+  t.type('dav');
+  assert.deepStrictEqual(hint(t), ['ENTER: SAVE AND SEND']);
+  t.press('esc');
+  assert.deepStrictEqual(hint(t), ['ENTER: SAVE']);
+  // World scores off: the lines from before.
+  t = fakeEnv({ board: true });
+  t.TG.Save.setSetting('initials', 'KEY');
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  assert.deepStrictEqual(hint(t), ['ENTER: USE KEY']);
+  t.type('dav');
+  assert.deepStrictEqual(hint(t), ['ENTER: SAVE']);
+});
+
+// ----- the page after a send ------------------------------------------------------------------
+
+check('After the initials screen: the WORLD page of the run\'s difficulty with SENDING..., then YOUR PLACE: n OF m and the player\'s row highlighted', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  t.world.holdSend = true;
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  assert.strictEqual(gets(t).length, 1, 'the boards are asked for when the panel opens');
+  let boxes = drawnBoxes(t);
+  let texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('SENDING...') !== -1);
+  assert.ok(texts.indexOf('0099999') === -1, 'the score is on the board before the service answered');
+  assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10, 'the board as it was is shown meanwhile');
+  assertFits(boxes, 'sending');
+  assertApart(boxes, 'sending');
+  t.world.release();
+  const place = t.TG.Board.state.place;
+  assert.ok(place >= 1 && place <= 10, 'place ' + place);
+  boxes = drawnBoxes(t).filter(function (b) { return b.text !== '>'; });
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('YOUR PLACE: ' + place + ' OF 87') !== -1, texts.join(' | '));
+  assert.ok(texts.indexOf('SENDING...') === -1);
+  const row = boxes.filter(function (b) { return b.y === 56 + (place - 1) * 11; });
+  assert.deepStrictEqual(row.map(function (b) { return b.text; }), [String(place), 'DAV', '0099999', '28', '95%', 'A']);
+  assert.ok(row.slice(0, 5).every(function (b) { return b.color === GOLD; }), 'the row is not highlighted');
+  const others = boxes.filter(function (b) { return /^\d{7}$/.test(b.text) && b.text !== '0099999'; });
+  assert.strictEqual(others.length, 9);
+  assert.ok(others.every(function (b) { return b.color === WHITE; }), 'another row is highlighted');
+  assertFits(boxes, 'placed');
+  assertApart(boxes, 'placed');
+  // The status line belongs to that page only.
+  t.seconds(0.6);
+  t.press('right');
+  assert.ok(drawnTexts(t).every(function (x) { return !/YOUR PLACE/.test(x); }));
+  // THIS COMPUTER has the entry too, blinking as before.
+  t.press('right');
+  assert.strictEqual(t.TG.UI.page, 'local');
+  t.press('left'); t.press('left');
+  assert.ok(drawnTexts(t).some(function (x) { return /YOUR PLACE/.test(x); }));
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('The place stays: opened again from the menu, the WORLD page still shows YOUR PLACE and the highlighted row, until the next run starts', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  t.type('dav');
+  t.press('enter');
+  t.seconds(0.6);
+  const place = t.TG.Board.state.place;
+  const line = 'YOUR PLACE: ' + place + ' OF 87';
+  assert.ok(drawnTexts(t).indexOf(line) !== -1);
+  t.press('esc');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  let boxes = drawnBoxes(t);
+  assert.ok(boxes.some(function (b) { return b.text === line && b.color === GOLD; }), 'the place is gone after the panel was left');
+  assert.ok(boxes.some(function (b) { return b.text === 'DAV' && b.color === GOLD && b.y === 56 + (place - 1) * 11; }), 'the row is no longer marked');
+  // The other WORLD pages have no status line.
+  t.press('right');
+  assert.ok(drawnTexts(t).every(function (x) { return !/YOUR PLACE/.test(x); }));
+  // The idle rotation shows the boards without it.
+  t.press('esc');
+  t.seconds(12.1 + 8.05);
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  assert.ok(drawnBoxes(t).every(function (b) { return !/YOUR PLACE/.test(b.text) && !(b.text === 'DAV' && b.color === GOLD); }), 'the rotation shows the status line');
+  t.press('up');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  // The next run starts: the line of the run before goes. This run ends with no score and is not sent.
+  t.press('up'); t.press('up');
+  startFakeRun(t, 'medium');
+  assert.strictEqual(endFakeRun(t, fakeResult({ score: 0, baseScore: 0, bonuses: [], cleared: false, rank: 'C' })), 'title');
+  t.seconds(1.3);
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  boxes = drawnBoxes(t);
+  assert.ok(boxes.every(function (b) { return !/YOUR PLACE/.test(b.text); }), 'the place of the run before is still shown');
+  assert.ok(boxes.every(function (b) { return !(b.text === 'DAV' && b.color === GOLD); }));
+
+  // Leaving while SENDING... is on screen: the reply arrives on the menu, and the panel shows the place.
+  const away = worldEnv({ canvas: 'soft' });
+  toMenu(away);
+  startFakeRun(away, 'medium');
+  endFakeRun(away, fakeResult(LOW));
+  away.world.holdSend = true;
+  away.type('dav');
+  away.press('enter');
+  away.seconds(0.6);
+  assert.ok(drawnTexts(away).indexOf('SENDING...') !== -1);
+  away.press('esc');
+  assert.strictEqual(away.TG.UI.panel, 'menu');
+  away.world.release();
+  assert.strictEqual(away.TG.Board.state.send, 'sent');
+  away.press('down'); away.press('down'); away.press('enter');
+  assert.ok(drawnTexts(away).some(function (x) { return /^YOUR PLACE: \d+ OF 87$/.test(x); }), drawnTexts(away).join(' | '));
+});
+
+check('The page after a send reads no keys for its first 0.5 s, so an Enter meant for the initials screen does not close it', function () {
+  const t = worldEnv();
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  for (let i = 0; i < 6; i++) { t.press('enter'); t.press('esc'); t.press('right'); t.steps(1); }   // 0.4 s
+  assert.strictEqual(t.TG.UI.panel, 'scores', 'the page was closed during the lock');
+  assert.strictEqual(t.TG.UI.page, 'medium', 'the page was changed during the lock');
+  t.seconds(0.2);
+  t.press('right');
+  assert.strictEqual(t.TG.UI.page, 'hard');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  // Opened from the menu the panel reads keys at once, as does the panel after a run that was not sent.
+  t.press('down'); t.press('down'); t.press('enter');
+  t.press('esc');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  const local = worldEnv();
+  local.world.down = true;                       // no token: the entry goes to this computer only
+  toMenu(local);
+  startFakeRun(local, 'medium');
+  endFakeRun(local, fakeResult({ score: 99999 }));
+  local.type('abc');
+  local.press('enter');
+  assert.strictEqual(local.TG.UI.page, 'local');
+  local.press('esc');
+  assert.strictEqual(local.TG.UI.panel, 'menu');
+});
+
+check('After a send that places below the ten rows: YOUR PLACE with no row highlighted', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult(LOW));
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  const st = t.TG.Board.state;
+  assert.strictEqual(st.send, 'sent');
+  assert.ok(st.place > 10 && st.total === 87, 'place ' + st.place);
+  const boxes = drawnBoxes(t);
+  assert.ok(boxes.some(function (b) { return b.text === 'YOUR PLACE: ' + st.place + ' OF 87' && b.color === GOLD; }));
+  assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10);
+  assert.ok(boxes.filter(function (b) { return b.y >= 56 && b.y < 166 && b.color === GOLD && !/^[SABC]$/.test(b.text); }).length === 0, 'a row is highlighted');
+  assertFits(boxes, 'far');
+  assertApart(boxes, 'far');
+});
+
+check('A place of 10: the arrow of the highlighted row stands clear of the two-digit place', function () {
+  const lists = shot.sampleLists();
+  lists.medium.forEach(function (e, i) { e.score = i < 9 ? 200000 - i * 1000 : 90000 - i * 100; });
+  const t = worldEnv({ canvas: 'soft', lists: lists });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.TG.Board.state.place, 10);
+  let arrow = null, number = null;
+  for (let i = 0; i < 40 && !arrow; i++) {
+    t.steps(1);
+    const row = drawnBoxes(t).filter(function (b) { return b.y === 56 + 9 * 11; });
+    arrow = row.filter(function (b) { return b.text === '>'; })[0] || null;
+    number = row.filter(function (b) { return b.text === '10'; })[0];
+  }
+  assert.ok(arrow && number, 'the arrow or the place is not drawn');
+  assert.strictEqual(number.color, GOLD);
+  assert.ok(number.x - (arrow.x + arrow.w) >= 8, 'the arrow is ' + (number.x - arrow.x - arrow.w) + ' px from the place');
+  assert.ok(arrow.x >= 8 + 4, 'the arrow is outside the panel');
+});
+
+check('A full board: a run below its 200 rows is not shown as place 201 of 201 but as NOT IN THE BEST 200 YET. KEEP GOING!', function () {
+  const t = worldEnv({ canvas: 'soft', lists: shot.fullLists() });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult(LOW));
+  t.type('dav');
+  t.press('enter');
+  const st = t.TG.Board.state;
+  assert.strictEqual(st.send, 'sent');
+  assert.strictEqual(st.place, 201);
+  assert.strictEqual(st.total, 201);
+  assert.strictEqual(st.kept, false);
+  let boxes = drawnBoxes(t);
+  let texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('NOT IN THE BEST 200 YET. KEEP GOING!') !== -1, texts.join(' | '));
+  assert.ok(texts.every(function (x) { return !/YOUR PLACE|201/.test(x); }), texts.join(' | '));
+  assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10);
+  assertFits(boxes, 'not kept');
+  assertApart(boxes, 'not kept');
+  // The last row that is kept does get its place.
+  const last = worldEnv({ lists: shot.fullLists() });
+  last.world.lists.medium.pop();                 // 199 rows: the run is the 200th
+  toMenu(last);
+  startFakeRun(last, 'medium');
+  endFakeRun(last, fakeResult(LOW));
+  last.type('dav');
+  last.press('enter');
+  assert.strictEqual(last.TG.Board.state.kept, true);
+  assert.ok(drawnTexts(last).indexOf('YOUR PLACE: 200 OF 200') !== -1, drawnTexts(last).join(' | '));
+});
+
+check('After a send that fails: COULD NOT REACH WORLD SCORES. and, when the score reached this computer\'s table, SAVED ON THIS COMPUTER.', function () {
+  // The send fails, the score in the local top five; the board is known.
+  let t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('enter');   // the boards are loaded while the service works
+  t.press('esc');
+  t.press('up'); t.press('up');
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  t.world.downSend = true;
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'medium');
+  assert.strictEqual(t.TG.Board.state.send, 'failed');
+  assert.strictEqual(t.TG.Board.state.sendError, 'unreachable');
+  let boxes = drawnBoxes(t);
+  let texts = boxes.map(function (b) { return b.text; });
+  assert.ok(boxes.some(function (b) { return b.text === 'COULD NOT REACH WORLD SCORES.' && b.color === CORAL; }), texts.join(' | '));
+  assert.ok(texts.indexOf('SAVED ON THIS COMPUTER.') !== -1);
+  assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10, 'the board that is known is still shown');
+  assert.strictEqual(t.TG.Save.scores('medium')[0].name, 'DAV');
+  assertFits(boxes, 'failed, saved');
+  assertApart(boxes, 'failed, saved');
+
+  // The same with a score under the local top five: only the first line.
+  t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult(LOW));
+  t.world.downSend = true;
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.TG.Board.state.send, 'failed');
+  boxes = drawnBoxes(t);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('COULD NOT REACH WORLD SCORES.') !== -1);
+  assert.ok(texts.indexOf('SAVED ON THIS COMPUTER.') === -1);
+  assertFits(boxes, 'failed');
+  assertApart(boxes, 'failed');
+});
+
+check('A score the service refuses is not reported as a service that cannot be reached: WORLD SCORES DID NOT TAKE THIS SCORE., and for its hourly limit TOO MANY SCORES SENT FROM HERE THIS HOUR.', function () {
+  const cases = [
+    ['implausible', 'refused', 'WORLD SCORES DID NOT TAKE THIS SCORE.'],
+    ['too_soon', 'refused', 'WORLD SCORES DID NOT TAKE THIS SCORE.'],
+    ['used', 'refused', 'WORLD SCORES DID NOT TAKE THIS SCORE.'],
+    ['rate', 'busy', 'TOO MANY SCORES SENT FROM HERE THIS HOUR.'],
+    ['server', 'unreachable', 'COULD NOT REACH WORLD SCORES.']
+  ];
+  cases.forEach(function (c) {
+    [fakeResult({ score: 99999 }), fakeResult(LOW)].forEach(function (result) {
+      const local = result.score === 99999;
+      const t = worldEnv({ canvas: 'soft' });
+      toMenu(t);
+      startFakeRun(t, 'medium');
+      endFakeRun(t, result);
+      t.world.refuse = c[0];
+      t.type('dav');
+      t.press('enter');
+      assert.strictEqual(t.TG.Board.state.send, 'failed', c[0]);
+      assert.strictEqual(t.TG.Board.state.sendError, c[1], c[0]);
+      const boxes = drawnBoxes(t);
+      const texts = boxes.map(function (b) { return b.text; });
+      assert.ok(boxes.some(function (b) { return b.text === c[2] && b.color === CORAL; }), c[0] + ': ' + texts.join(' | '));
+      cases.forEach(function (other) { if (other[2] !== c[2]) assert.ok(texts.indexOf(other[2]) === -1, c[0] + ' also shows ' + other[2]); });
+      assert.strictEqual(texts.indexOf('SAVED ON THIS COMPUTER.') !== -1, local, c[0]);
+      assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10, 'the board is shown: it did load');
+      assertFits(boxes, c[0]);
+      assertApart(boxes, c[0]);
+      boxes.forEach(function (b) { assert.ok(b.x >= 8 + 4 && b.x + b.w <= 376 - 4, '"' + b.text + '" is outside the panel'); });
+      assert.deepStrictEqual(t.env.errors, []);
+    });
+  });
+});
+
+check('The service cannot be reached at all after a run: one block says so once, with what became of the score', function () {
+  // No reply to anything: SENDING... and LOADING... for 6 s, then the block. The game is never held up.
+  let t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult({ score: 99999 }));
+  t.world.hold = true;
+  t.type('dav');
+  t.press('enter');
+  t.seconds(5.5);
+  let texts = drawnTexts(t);
+  assert.ok(texts.indexOf('SENDING...') !== -1 && texts.indexOf('LOADING...') !== -1, texts.join(' | '));
+  t.seconds(0.7);
+  let boxes = drawnBoxes(t);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(boxes.some(function (b) { return b.text === 'WORLD SCORES CANNOT BE REACHED' && b.color === CORAL; }), texts.join(' | '));
+  assert.ok(texts.indexOf('YOUR SCORE IS SAVED ON THIS COMPUTER.') !== -1 && texts.indexOf('PRESS RIGHT TO SEE IT') !== -1, texts.join(' | '));
+  assert.ok(texts.indexOf('COULD NOT REACH WORLD SCORES.') === -1 && texts.indexOf('SAVED ON THIS COMPUTER.') === -1, 'the same thing is said twice: ' + texts.join(' | '));
+  assert.ok(texts.indexOf('PRESS RIGHT FOR THIS COMPUTER\'S SCORES') === -1);
+  assert.strictEqual(boxes.filter(function (b) { return b.color === CORAL; }).length, 1, 'one line in the colour of a failure');
+  assertFits(boxes, 'down, saved');
+  assertApart(boxes, 'down, saved');
+  // Right goes to THIS COMPUTER, where the new entry is marked.
+  t.press('right');
+  assert.strictEqual(t.TG.UI.page, 'local');
+  let seen = [];
+  for (let i = 0; i < 30; i++) { t.steps(1); seen = seen.concat(drawnBoxes(t)); }
+  assert.ok(seen.some(function (b) { return b.text === '1 DAV 0099999' && b.color === GOLD; }), 'the new entry is not marked on THIS COMPUTER');
+  t.press('esc');
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'difficultySelect', 'a new run can start');
+
+  // The score did not reach the table of this computer: the page does not send the player there.
+  t = worldEnv({ canvas: 'soft' });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  endFakeRun(t, fakeResult(LOW));
+  t.world.down = true;
+  t.type('dav');
+  t.press('enter');
+  assert.strictEqual(t.TG.Board.state.boards, 'failed');
+  assert.strictEqual(t.TG.Board.state.send, 'failed');
+  boxes = drawnBoxes(t);
+  texts = boxes.map(function (b) { return b.text; });
+  assert.ok(texts.indexOf('WORLD SCORES CANNOT BE REACHED') !== -1 && texts.indexOf('YOUR SCORE WAS NOT SENT.') !== -1, texts.join(' | '));
+  assert.ok(texts.every(function (x) { return !/PRESS RIGHT|SAVED ON THIS COMPUTER|COULD NOT REACH/.test(x); }), texts.join(' | '));
+  assertFits(boxes, 'down, not saved');
+  assertApart(boxes, 'down, not saved');
+  // Opened again from the menu, the panel is on THIS COMPUTER, as after any failed load.
+  t.seconds(0.6);
+  t.press('esc');
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.page, 'local', 'after a failed load the panel opens on THIS COMPUTER');
+});
+
+// ----- the idle rotation ----------------------------------------------------------------------
+
+check('The idle rotation shows a WORLD page when the boards are known (easy, medium and hard in turn), otherwise the panel of this computer', function () {
+  const t = worldEnv({ canvas: 'soft' });
+  t.TG.Save.setSetting('lastDifficulty', 'hard');
+  toMenu(t);
+  t.seconds(12.1);
+  assert.strictEqual(t.TG.UI.panel, 'story');
+  assert.strictEqual(gets(t).length, 1, 'the boards are asked for when the rotation starts');
+  const pages = [];
+  for (let i = 0; i < 4; i++) {
+    t.seconds(8.05);
+    assert.strictEqual(t.TG.UI.panel, 'scores');
+    pages.push(t.TG.UI.page);
+    const boxes = drawnBoxes(t);
+    const texts = boxes.map(function (b) { return b.text; });
+    assert.ok(texts.indexOf('WORLD ' + t.TG.UI.page.toUpperCase()) !== -1);
+    assert.ok(texts.indexOf('PRESS ANY KEY') !== -1 && texts.indexOf('<') === -1 && texts.indexOf('>') === -1 && texts.every(function (x) { return !/LEFT AND RIGHT/.test(x); }),
+      'the rotation offers no page keys');
+    assert.strictEqual(boxes.filter(function (b) { return /^\d{7}$/.test(b.text); }).length, 10);
+    assertFits(boxes, 'rotation');
+    assertApart(boxes, 'rotation');
+    t.seconds(8.05);
+    assert.strictEqual(t.TG.UI.panel, 'story');
+  }
+  assert.deepStrictEqual(pages, ['hard', 'easy', 'medium', 'hard']);
+  assert.strictEqual(gets(t).length, 1, 'the rotation asked for the boards more than once');
+  t.press('right');                              // any key: back to the menu, and nothing else
+  assert.strictEqual(t.TG.UI.panel, 'menu');
+
+  // The service cannot be reached: the rotation shows the tables of this computer, as before.
+  const down = worldEnv({ canvas: 'soft' });
+  down.world.down = true;
+  toMenu(down);
+  down.seconds(12.1);
+  down.seconds(8.05);
+  assert.strictEqual(down.TG.UI.panel, 'scores');
+  assert.strictEqual(down.TG.UI.page, null);
+  const boxes = drawnBoxes(down);
+  TODAY_SCORES.slice(0, -1).forEach(function (want) {
+    assert.ok(boxes.some(function (b) { return b.text === want[0] && b.y === want[1]; }), '"' + want[0] + '" at y ' + want[1]);
+  });
+  assert.ok(boxes.some(function (b) { return b.text === 'PRESS ANY KEY'; }));
+  assert.ok(boxes.every(function (b) { return !/WORLD/.test(b.text); }));
+});
+
+// ----- the pictures ---------------------------------------------------------------------------
+
+[
+  ['the WORLD page', 'title', { panel: 'scores', world: 'ready', board: 'easy' }, ['WORLD EASY', 'RANK']],
+  ['the WORLD page, loading', 'title', { panel: 'scores', world: 'loading' }, ['LOADING...']],
+  ['the WORLD page, failed', 'title', { panel: 'scores', world: 'failed', board: 'hard' }, ['WORLD HARD', 'WORLD SCORES CANNOT BE REACHED']],
+  ['the WORLD page, empty', 'title', { panel: 'scores', world: 'empty' }, ['NO SCORES YET. BE THE FIRST!']],
+  ['THIS COMPUTER', 'title', { panel: 'scores', world: 'ready', board: 'local' }, ['THIS COMPUTER']],
+  ['Options with the WORLD SCORES line', 'title', { panel: 'options', world: 'ready' }, ['WORLD SCORES', 'SENDS YOUR INITIALS AND SCORE']],
+  ['the initials screen, NEW HIGH SCORE!', 'highScoreEntry', { world: 'ready' }, ['NEW HIGH SCORE!', 'INITIALS AND SCORE ALSO GO TO WORLD SCORES']],
+  ['the initials screen, WORLD SCORES', 'highScoreEntry', { world: 'ready', entry: 'world' }, ['WORLD SCORES']],
+  ['the initials screen, refused', 'highScoreEntry', { world: 'ready', entry: 'refused' }, ['TRY OTHER INITIALS']],
+  ['the initials screen, not sent', 'highScoreEntry', { world: 'ready', entry: 'declined' }, ['NEW HIGH SCORE!', 'THIS SCORE STAYS ON THIS COMPUTER', 'ESC: SEND IT TOO', 'ENTER: SAVE']],
+  ['the initials screen, initials offered', 'highScoreEntry', { world: 'ready', entry: 'offered' }, ['WORLD SCORES', 'ENTER: SEND AS DAV', 'ESC: DO NOT SEND']],
+  ['the initials screen, no initials yet', 'highScoreEntry', { world: 'ready', entry: 'first' }, ['WORLD SCORES', 'TYPE 3 LETTERS FIRST', 'ESC: DO NOT SEND']],
+  ['after a send, sending', 'title', { world: 'ready', send: 'sending' }, ['SENDING...']],
+  ['after a send, placed', 'title', { world: 'ready', send: 'placed' }, ['DAV']],
+  ['after a send, far down', 'title', { world: 'ready', send: 'far' }, ['WORLD MEDIUM']],
+  ['after a send, failed', 'title', { world: 'ready', send: 'failed' }, ['COULD NOT REACH WORLD SCORES.', 'SAVED ON THIS COMPUTER.']],
+  ['after a send, failed and not saved', 'title', { world: 'ready', send: 'failed-far' }, ['COULD NOT REACH WORLD SCORES.']],
+  ['after a send, below a full board', 'title', { world: 'ready', send: 'unkept' }, ['NOT IN THE BEST 200 YET. KEEP GOING!']],
+  ['after a send, refused', 'title', { world: 'ready', send: 'refused' }, ['WORLD SCORES DID NOT TAKE THIS SCORE.', 'SAVED ON THIS COMPUTER.']],
+  ['after a send, the hourly limit', 'title', { world: 'ready', send: 'busy' }, ['TOO MANY SCORES SENT FROM HERE THIS HOUR.', 'SAVED ON THIS COMPUTER.']],
+  ['after a send, the service down', 'title', { world: 'ready', send: 'down' }, ['WORLD SCORES CANNOT BE REACHED', 'YOUR SCORE IS SAVED ON THIS COMPUTER.', 'PRESS RIGHT TO SEE IT']],
+  ['after a send, the service down and not saved', 'title', { world: 'ready', send: 'down-far' }, ['WORLD SCORES CANNOT BE REACHED', 'YOUR SCORE WAS NOT SENT.']]
+].forEach(function (c) {
+  check('Software canvas, real modules: ' + c[0] + ' draws without errors, with every line on the screen (tools/shot-ui.js options)', function () {
+    const world = shot.worldFor(c[2]);
+    const s = shot.createSession({ canvas: 'soft', world: world });
+    shot.reach(s, c[1], c[2]);
+    assert.strictEqual(s.screen(), c[1]);
+    const ctx = s.env.canvas.getContext('2d');
+    const boxes = textBoxes(s.TG, function () { s.TG.UI.draw(ctx, s.TG.Game.state); });
+    const texts = boxes.map(function (b) { return b.text; });
+    c[3].forEach(function (want) { assert.ok(texts.indexOf(want) !== -1, '"' + want + '" is not drawn: ' + texts.join(' | ')); });
+    if (c[2].send === 'placed' || c[2].send === 'far') assert.ok(texts.some(function (x) { return /^YOUR PLACE: \d+ OF 87$/.test(x); }), texts.join(' | '));
+    if (c[2].send && c[2].send !== 'placed' && c[2].send !== 'far') assert.ok(texts.every(function (x) { return !/^YOUR PLACE/.test(x); }), texts.join(' | '));
+    assertFits(boxes, c[0]);
+    assertApart(boxes.filter(function (b) { return b.text !== '>'; }), c[0]);
+    s.frame();
+    assert.deepStrictEqual(s.env.errors, []);
+    assert.deepStrictEqual(s.env.warnings, []);
+  });
+});
+
+check('tools/shot-ui.js: the world options are checked, and need --world', function () {
+  const error = console.error;
+  const lines = [];
+  console.error = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try {
+    assert.strictEqual(shot.main(['--screen', 'title', '--out', 'x.png', '--world', 'sideways']), 2);
+    assert.strictEqual(shot.main(['--screen', 'title', '--out', 'x.png', '--board', 'easy']), 2);
+    assert.strictEqual(shot.main(['--screen', 'title', '--out', 'x.png', '--world', 'ready', '--send', 'never']), 2);
+    assert.strictEqual(shot.main(['--screen', 'highScoreEntry', '--out', 'x.png', '--entry', 'refused']), 2);
+  } finally {
+    console.error = error;
+  }
+  assert.strictEqual(lines.length, 4);
+  assert.ok(!fs.existsSync(path.join(ROOT, 'x.png')), 'a picture was written');
 });
 
 console.log('\n' + passed + ' passed, ' + failed + ' failed, ' + skipped + ' skipped');
