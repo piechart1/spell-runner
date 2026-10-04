@@ -102,7 +102,7 @@ Project root: the repository root, the folder that holds `index.html`.
 <script>TG.Main.init();</script>
 ```
 
-No `type="module"`, no `defer`, no `async`. The page loads nothing from the network: no fonts, images, audio files or analytics. The only network requests the game ever makes are those of `js/board.js` to the world scores service (rule 10 of section 2.2 and section 4.22), and with `TG.Board.URL` empty, as it is until a service is deployed, there are none.
+No `type="module"`, no `defer`, no `async`, with one exception: after the inline script the page may load Cloudflare Web Analytics (`https://static.cloudflareinsights.com/beacon.min.js`, a module script with a `data-cf-beacon` token). It is the only outside script; `test/test-ui.js` and `test/test-integration.js` allow exactly that tag. The page loads nothing from the network: no fonts, images, audio files or analytics. The only network requests the game ever makes are those of `js/board.js` to the world scores service (rule 10 of section 2.2 and section 4.22), and with `TG.Board.URL` empty, as it is until a service is deployed, there are none.
 
 `test/stubs.js` exports the same list as `FILES`. `test/test-ui.js` checks that the script tags in `index.html` match it.
 
@@ -938,7 +938,7 @@ The `bye` panel is the goodbye screen: "THANKS FOR PLAYING!" in GOLD at 2x, Pip 
 
 **World scores** (`TG.Board`, section 4.22; DESIGN 8.9 and 12). `TG.UI` makes no network request. It calls `TG.Board` and reads `TG.Board.state` each frame, every call guarded. "World scores are on" below means `TG.Board.enabled()` is true. When `js/board.js` is absent, `TG.Board.URL` is empty, the browser has no `fetch` or the `worldScores` setting is off, every screen looks and behaves as it did before world scores existed, and the rest of this part does not apply.
 
-- **Options.** When `TG.Board.available()` is true the panel has a ninth line, WORLD SCORES (ON / OFF, the `worldScores` setting of 5.12), between ADAPTIVE PACE and RESET SCORES. Its help lines are "SENDS YOUR INITIALS AND SCORE" and "TO A BOARD SHARED BY ALL PLAYERS.". With nine lines the row pitch is 12 px from y 42 (eight lines: 13 px from y 44). The line stays while the setting is off.
+- **Options.** When `TG.Board.available()` is true the panel has a ninth line, WORLD SCORES (ON / OFF, the `worldScores` setting of 5.12), between ADAPTIVE PACE and RESET SCORES. Its help lines are "SENDS YOUR INITIALS AND SCORE" and "TO A SHARED BOARD. COUNTS GAMES PLAYED.". With nine lines the row pitch is 12 px from y 42 (eight lines: 13 px from y 44). The line stays while the setting is off.
 - **Run token.** Confirming a difficulty (on entering `howToPlay` from `difficultySelect`) calls `TG.Board.startRun(difficulty)`. A later confirm calls it again. Starting the run, a continue and a restart from a checkpoint do not.
 - **When the initials screen appears.** `results` goes on to `highScoreEntry` when the score reaches the top five of this computer (`TG.Save.qualifies`), or when the run goes to the world scores: world scores are on, `TG.Board.hasToken(result.difficulty)` is true, the score is above zero and `floor(result.time)` is at least `TG.Board.MIN_TIME` (10 s; the service refuses a shorter run, so it is not offered). Otherwise it goes to `title`, as before.
 - **Initials screen.** The heading is "NEW HIGH SCORE!" when the score reaches the local top five and "WORLD SCORES" when the screen is shown for the world scores alone. While a score will be sent, the screen says so: under the local table "INITIALS AND SCORE ALSO GO TO WORLD SCORES" (the table rows then have a pitch of 11 px from y 129, instead of 12 px from y 132), or, when there is no local table to show, "YOUR INITIALS AND SCORE GO ON THE WORLD SCORES FOR <DIFFICULTY>." and "WORLD SCORES CAN BE SWITCHED OFF IN OPTIONS ON THE TITLE SCREEN.". The line under the boxes (y 112) says what Enter does: "ENTER: SEND" (WORLD SCORES), "ENTER: SAVE AND SEND" (NEW HIGH SCORE! with a send) or "ENTER: SAVE" (nothing is sent), with " AS <INITIALS>" added while the boxes are empty and initials are offered; when nothing is sent the offer reads "ENTER: USE <INITIALS>", as before.
@@ -1047,6 +1047,9 @@ TG.Board.enabled() -> boolean            // available() and the worldScores sett
 TG.Board.startRun(difficulty) -> void    // asks for a run token: POST <URL>/v1/runs
 TG.Board.hasToken(difficulty) -> boolean // a token for a run of this difficulty is held (any difficulty when none is given)
 TG.Board.submit(entry, result) -> void   // sends a finished run: POST <URL>/v1/scores. entry: section 5.12; result: state.result
+TG.Board.stat(event, info) -> void       // counts a run for the owner's daily totals: POST <URL>/v1/stats (LEADERBOARD 10). event: 'start'
+                                         // (TG.UI, when a run starts from the menus) or 'end' (when it reaches results, with
+                                         // info { time, cleared, section }). Needs a held token; the reply is not used
 TG.Board.refresh(force) -> void          // loads the three boards: GET <URL>/v1/scores
 TG.Board.blocked(name) -> boolean        // the initials are on the block list (any letter case); works whether world scores are on or off
 TG.Board.BLOCKLIST                       // frozen array: a copy of the array in server/src/blocklist.js

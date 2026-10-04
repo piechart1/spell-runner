@@ -381,6 +381,37 @@ async function main() {
     assert.ok(JSON.stringify(t.state()).indexOf('run-1') === -1, 'the token is in TG.Board.state');
   });
 
+  await check('stat sends POST <URL>/v1/stats with the token and, for an end, the time, cleared and section only; nothing without a token, with the setting off or for another event', function () {
+    const t = board();
+    t.B.stat('start');
+    assert.strictEqual(t.world.calls.length, 0, 'a count was sent without a token');
+    t.token('medium');
+    t.B.stat('start');
+    t.B.stat('end', { time: 317.9, cleared: true, section: 3, name: 'DAV', score: 5 });
+    t.B.stat('won');
+    t.B.stat('end');
+    const sent = t.world.calls.filter(function (c) { return c.path === '/v1/stats'; });
+    assert.strictEqual(sent.length, 3);
+    const token = sent[0].body.token;
+    assert.ok(typeof token === 'string' && token.length > 0);
+    assert.deepStrictEqual(sent[0].body, { token: token, event: 'start' });
+    assert.deepStrictEqual(sent[1].body, { token: token, event: 'end', time: 317, cleared: true, section: 3 });
+    assert.deepStrictEqual(sent[2].body, { token: token, event: 'end', time: 0, cleared: false, section: 0 });
+    assert.strictEqual(sent[1].init.credentials, 'omit');
+    assert.strictEqual(t.B.hasToken('medium'), true, 'a count used up the token');
+    assert.strictEqual(t.state().send, 'none', 'a count changed the state the interface reads');
+    // The setting off: nothing is sent.
+    const off = board({ setting: false });
+    off.B.startRun('easy');
+    off.B.stat('start');
+    assert.strictEqual(off.world.calls.length, 0);
+    // No network function, or one that throws: nothing throws.
+    const none = board({ fetch: null });
+    none.B.stat('start');
+    const bad = board({ fetch: function () { throw new Error('no network'); } });
+    bad.B.stat('end', {});
+  });
+
   await check('startRun with an unknown difficulty makes no request', function () {
     const t = board();
     [undefined, null, 'extreme', '', 3, {}, ['easy']].forEach(function (d) { t.B.startRun(d); });

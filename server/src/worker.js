@@ -6,6 +6,7 @@
 //   POST /v1/runs      start a run: answers with a signed run token and writes nothing (3.1)
 //   POST /v1/scores    submit a finished run: the checks of section 5, then one row in `scores` (3.2)
 //   GET  /v1/scores    the three boards (3.3)
+//   POST /v1/stats     count a run that started or ended: daily totals only (section 10)
 //   scheduled          once an hour: deletes what is no longer needed of `hits` and `used` (section 4)
 //
 // Bindings: env.DB (the D1 database of server/schema.sql) and env.TOKEN_SECRET (a secret string of at
@@ -146,6 +147,35 @@ export const SQL = Object.freeze({
       AND (score > ?2
         OR (score = ?2 AND created_at < ?3)
         OR (score = ?2 AND created_at = ?3 AND id < (SELECT id FROM scores WHERE run_id = ?4)))`,
+
+  // Section 10: one row of totals per UTC day and difficulty.
+  // ?1 day, ?2 difficulty
+  statStart: `
+    INSERT INTO stats (day, difficulty, starts) VALUES (?1, ?2, 1)
+    ON CONFLICT (day, difficulty) DO UPDATE SET starts = starts + 1`,
+
+  // ?1 day, ?2 difficulty, ?3 cleared (0 or 1), ?4 seconds played, ?5 to ?8: 1 for the part reached
+  statEnd: `
+    INSERT INTO stats (day, difficulty, finishes, cleared, time_s, reach0, reach1, reach2, reach3)
+    VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8)
+    ON CONFLICT (day, difficulty) DO UPDATE SET
+      finishes = finishes + 1, cleared = cleared + ?3, time_s = time_s + ?4,
+      reach0 = reach0 + ?5, reach1 = reach1 + ?6, reach2 = reach2 + ?7, reach3 = reach3 + ?8`,
+
+  // The sources seen today, kept only to count each one once. ?1 today
+  pruneSeen: `
+    DELETE FROM seen WHERE day < ?1`,
+
+  // Returns a row only if the source had not been seen today. ?1 day, ?2 hash of day and source
+  addSeen: `
+    INSERT INTO seen (day, hash) VALUES (?1, ?2)
+    ON CONFLICT (day, hash) DO NOTHING
+    RETURNING day`,
+
+  // ?1 day
+  addPlayer: `
+    INSERT INTO days (day, players) VALUES (?1, 1)
+    ON CONFLICT (day) DO UPDATE SET players = players + 1`,
 
   // ?1 difficulty, ?2 rows to keep
   trim: `
@@ -522,6 +552,41 @@ async function readBoards(url, env) {
   return reply(200, boards, { 'cache-control': 'public, max-age=' + Math.floor((life - (now - use.at)) / 1000) });
 }
 
+// POST /v1/stats (section 10). Counts a run that started or ended in the totals of the day. Nothing
+// about the player is kept: a start also counts the source once per day, through a hash that is made
+// with the day, so that it cannot be matched with another day's, and is deleted when the day is over.
+// The token only shows that the request comes from a game that asked for one; it is not used up.
+async function recordStat(body, request, env) {
+  const secret = secretOf(env);
+  const db = databaseOf(env);
+  const now = clock(env);
+  if (!isRecord(body) || typeof body.token !== 'string' || (body.event !== 'start' && body.event !== 'end')) {
+    return fail('bad_request');
+  }
+  const payload = await verifyToken(secret, body.token);
+  if (!payload) return fail('bad_token');
+  if (now - payload.t > RULES.tokenLife * 1000) return fail('expired');
+  const day = new Date(now).toISOString().slice(0, 10);
+
+  if (body.event === 'start') {
+    const hash = await sourceHash(secret + day, request.headers.get('cf-connecting-ip'));
+    const counted = await db.batch([
+      db.prepare(SQL.pruneSeen).bind(day),
+      db.prepare(SQL.addSeen).bind(day, hash),
+      db.prepare(SQL.statStart).bind(day, payload.d)
+    ]);
+    if (counted[1].results.length > 0) await db.prepare(SQL.addPlayer).bind(day).run();
+    return reply(200, { ok: true });
+  }
+
+  if (!whole(body.time, 0, RULES.maxTime) || typeof body.cleared !== 'boolean' || !whole(body.section, 0, 3)) {
+    return fail('bad_request');
+  }
+  await db.prepare(SQL.statEnd).bind(day, payload.d, body.cleared ? 1 : 0, body.time,
+    body.section === 0 ? 1 : 0, body.section === 1 ? 1 : 0, body.section === 2 ? 1 : 0, body.section === 3 ? 1 : 0).run();
+  return reply(200, { ok: true });
+}
+
 // The hourly clean-up (section 4): what a submission would delete, done also when nobody submits, so
 // that no hash of an address stays in the database for long on a quiet day.
 async function cleanUp(env) {
@@ -529,7 +594,8 @@ async function cleanUp(env) {
   const now = clock(env);
   await db.batch([
     db.prepare(SQL.pruneHits).bind(now - HOUR_MS),
-    db.prepare(SQL.pruneUsed).bind(now - RULES.tokenLife * 1000)
+    db.prepare(SQL.pruneUsed).bind(now - RULES.tokenLife * 1000),
+    db.prepare(SQL.pruneSeen).bind(new Date(now).toISOString().slice(0, 10))
   ]);
 }
 
@@ -541,7 +607,7 @@ async function route(request, env) {
   if (request.method === 'OPTIONS') return preflight();
   const url = new URL(request.url);
   const path = url.pathname;
-  if (path !== '/v1/runs' && path !== '/v1/scores') return fail('not_found');
+  if (path !== '/v1/runs' && path !== '/v1/scores' && path !== '/v1/stats') return fail('not_found');
   if (request.method === 'GET' && path === '/v1/scores') return readBoards(url, env);
   if (request.method !== 'POST') return fail('method', { allow: path === '/v1/scores' ? 'GET, POST, OPTIONS' : 'POST, OPTIONS' });
   // A POST from a browser page that is not the game is refused, and the body must be sent as JSON
@@ -552,6 +618,7 @@ async function route(request, env) {
   const text = await readBody(request);
   if (text === null) return fail('too_large');
   const body = parseJson(text);
+  if (path === '/v1/stats') return recordStat(body, request, env);
   return path === '/v1/runs' ? startRun(body, env) : submitScore(body, request, env);
 }
 

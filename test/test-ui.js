@@ -256,11 +256,24 @@ function eventLog(TG) {
 const html = exists('index.html') ? read('index.html') : '';
 const css = exists('css/style.css') ? read('css/style.css') : '';
 
-check('index.html: the script tags are the 20 files of CONTRACT 1 in order, then the inline TG.Main.init()', function () {
-  const tags = [];
+// The one outside script the page may load: Cloudflare Web Analytics (visits and referrers, no
+// cookies), added at the owner's request. It comes last, so the game never waits for it.
+const ANALYTICS_SRC = 'https://static.cloudflareinsights.com/beacon.min.js';
+const ANALYTICS_TAG = /<script type="module" src="https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js" data-cf-beacon='\{"token": "[0-9a-f]{32}"\}'><\/script>/;
+
+check('index.html: the script tags are the 20 files of CONTRACT 1 in order, then the inline TG.Main.init(), then the analytics script', function () {
+  const all = [];
   const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
   let m;
-  while ((m = re.exec(html))) tags.push({ attrs: m[1], body: m[2].trim() });
+  while ((m = re.exec(html))) all.push({ attrs: m[1], body: m[2].trim() });
+  // The analytics script: at most one, the last tag, exactly as Cloudflare gives it.
+  const outside = all.filter(function (t) { return t.attrs.indexOf(ANALYTICS_SRC) !== -1; });
+  assert.ok(outside.length <= 1, 'more than one analytics script');
+  if (outside.length === 1) {
+    assert.strictEqual(all[all.length - 1], outside[0], 'the analytics script is not the last script');
+    assert.strictEqual((html.match(ANALYTICS_TAG) || []).length, 1, 'the analytics tag is not the expected one');
+  }
+  const tags = all.filter(function (t) { return outside.indexOf(t) === -1; });
   const srcs = tags.filter(function (t) { return /\bsrc\s*=/.test(t.attrs); }).map(function (t) {
     return /\bsrc\s*=\s*"([^"]*)"/.exec(t.attrs)[1];
   });
@@ -278,7 +291,9 @@ check('index.html: the script tags are the 20 files of CONTRACT 1 in order, then
 
 check('index.html and css/style.css: no network references; the only local ones are the scripts and the stylesheet', function () {
   assert.ok(css.length > 0, 'css/style.css exists');
-  [html, css].forEach(function (text) {
+  // The analytics tag is the one outside reference; everything else is held to the rule.
+  const page = html.replace(ANALYTICS_TAG, '').replace(/<!-- Cloudflare Web Analytics[^>]*-->/, '');
+  [page, css].forEach(function (text) {
     assert.ok(!/https?:/i.test(text), 'no http: or https:');
     assert.ok(!/(src|href)\s*=\s*"\/\//i.test(text), 'no protocol-relative URL');
     assert.ok(!/@import|@font-face/i.test(text), 'no @import or web font');
@@ -287,7 +302,7 @@ check('index.html and css/style.css: no network references; the only local ones 
   const refs = [];
   const re = /\b(src|href)\s*=\s*"([^"]*)"/gi;
   let m;
-  while ((m = re.exec(html))) refs.push(m[2]);
+  while ((m = re.exec(page))) refs.push(m[2]);
   refs.forEach(function (r) {
     const ok = stubs.FILES.indexOf(r) !== -1 || r === 'css/style.css' || r === 'data:,';
     assert.ok(ok, 'unexpected reference ' + r);

@@ -222,8 +222,12 @@ check('network: only js/board.js may make requests, and only to TG.Board.URL; no
     [/serviceWorker/, 'serviceWorker'], [/new\s+Audio\s*\(/, 'Audio element'], [/@import/, '@import'],
     [/url\(\s*['"]?(?!data:)[^)'"\s]/, 'url() of a file']
   ];
+  // index.html may load one outside script, Cloudflare Web Analytics, as its last script
+  // (test/test-ui.js checks the tag); that tag is left out here and everything else is checked.
+  const ANALYTICS_TAG = /<script type="module" src="https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js" data-cf-beacon='\{"token": "[0-9a-f]{32}"\}'><\/script>/;
   const codeOf = function (f) {
-    return read(f).split('\n').map(function (line) {
+    const text = f === 'index.html' ? read(f).replace(ANALYTICS_TAG, '').replace(/<!-- Cloudflare Web Analytics[^>]*-->/, '') : read(f);
+    return text.split('\n').map(function (line) {
       return line.replace(/^\s*\/\/.*$/, '').replace(/^\s*\*.*$/, '').replace(/\/\*.*?\*\//g, '');
     });
   };
@@ -274,7 +278,7 @@ check('network: only js/board.js may make requests, and only to TG.Board.URL; no
   assert(addresses.length === (url === '' ? 0 : 1), 'the address of TG.Board.URL is written ' + addresses.length + ' times');
 
   // The page itself refers only to the scripts, the style sheet and an empty data: icon.
-  const html = read('index.html');
+  const html = read('index.html').replace(ANALYTICS_TAG, '');
   const refs = [];
   html.replace(/(?:src|href)\s*=\s*"([^"]*)"/g, function (m, v) { refs.push(v); return m; });
   const allowed = new Set(stubs.FILES.concat(['css/style.css', 'data:,']));

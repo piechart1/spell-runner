@@ -126,7 +126,7 @@
     { key: 'keyGuide', label: 'KEY GUIDE', type: 'tri', help: ['A SMALL KEYBOARD THAT LIGHTS THE NEXT KEY.', 'AUTO: ON FOR EASY ONLY.'] },
     { key: 'adaptive', label: 'ADAPTIVE PACE', type: 'bool', help: ['THE GAME SLOWS DOWN A LITTLE', 'IF WORDS KEEP REACHING PIP.'] },
     // Shown only when this copy of the game has a world scores service (TG.Board.available()).
-    { key: 'worldScores', label: 'WORLD SCORES', type: 'bool', world: true, help: ['SENDS YOUR INITIALS AND SCORE', 'TO A BOARD SHARED BY ALL PLAYERS.'] },
+    { key: 'worldScores', label: 'WORLD SCORES', type: 'bool', world: true, help: ['SENDS YOUR INITIALS AND SCORE', 'TO A SHARED BOARD. COUNTS GAMES PLAYED.'] },
     { id: 'reset', label: 'RESET SCORES', help: ['CLEARS THE HIGH SCORES AND BESTS.'] },
     { id: 'back', label: 'BACK', help: ['BACK TO THE MENU.'] }
   ];
@@ -682,6 +682,7 @@
     lastSent = null;                             // the status line of the run before goes with it
     emit('ui:select');
     callGame('newRun', { difficulty: name, seed: (Date.now() >>> 0) });
+    boardCall('stat', 'start');                  // the owner's daily totals; nothing about the player
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1663,6 +1664,7 @@
       } catch (e) {
         report('TG.Save.recordRun', e);
       }
+      boardCall('stat', 'end', { time: res.time, cleared: res.cleared === true, section: st ? st.section : 0 });
     }
     return {
       result: res, pages: buildPages(res), page: 0, row: 0, rowT: 0, tickT: 0,

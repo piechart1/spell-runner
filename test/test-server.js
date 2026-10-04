@@ -405,7 +405,7 @@ async function main() {
     assert.strictEqual(d1.count('scores'), 1, 'running the schema again lost data');
     assert.strictEqual(d1.count('used'), 1, 'running the schema again lost data');
     const names = d1.rows("SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").map((r) => r.type + ' ' + r.name);
-    assert.deepStrictEqual(names, ['table hits', 'index hits_at', 'index hits_ip', 'table scores', 'index scores_board', 'table used', 'index used_at']);
+    assert.deepStrictEqual(names, ['table days', 'table hits', 'index hits_at', 'index hits_ip', 'table scores', 'index scores_board', 'table seen', 'table stats', 'table used', 'index used_at']);
     const columns = d1.rows('PRAGMA table_info(scores)').map((c) => c.name);
     assert.deepStrictEqual(columns, ['id', 'run_id', 'difficulty', 'name', 'score', 'wpm', 'accuracy', 'rank', 'cleared', 'time_s', 'created_at']);
     assert.deepStrictEqual(d1.rows('PRAGMA table_info(hits)').map((c) => c.name), ['ip_hash', 'at']);
@@ -490,7 +490,7 @@ async function main() {
     assert.deepStrictEqual(imports, ["import { BLOCKLIST } from './blocklist.js';"]);
     assert.ok(!/\brequire\s*\(|\bimport\s*\(/.test(SOURCE), 'worker.js loads something at run time');
     const lines = SOURCE.split('\n').length;
-    assert.ok(lines < 600, 'worker.js has ' + lines + ' lines');
+    assert.ok(lines < 700, 'worker.js has ' + lines + ' lines');
   });
 
   const documentPath = path.join(ROOT, 'docs', 'LEADERBOARD.md');
@@ -1887,7 +1887,7 @@ async function main() {
       }
     }
     const tables = s.d1.rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").map((t) => t.name);
-    assert.deepStrictEqual(tables.sort(), ['hits', 'scores', 'used']);
+    assert.deepStrictEqual(tables.sort(), ['days', 'hits', 'scores', 'seen', 'stats', 'used']);
     let texts = 0;
     const secrets = addresses.concat([forwarded, SECRET]).concat(tokens).concat(tokens.map((t) => t.split('.')[1]));
     for (const table of tables) {
@@ -1976,7 +1976,7 @@ async function main() {
     const hashes = s.d1.rows('SELECT ip_hash FROM hits').map((h) => h.ip_hash);
     assert.deepStrictEqual(hashes, printable.map((a) => sha256Hex(SECRET + a).slice(0, 32)));
     const schema = s.d1.rows("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name").map((r) => r.name);
-    assert.deepStrictEqual(schema, ['hits', 'hits_at', 'hits_ip', 'scores', 'scores_board', 'used', 'used_at']);
+    assert.deepStrictEqual(schema, ['days', 'hits', 'hits_at', 'hits_ip', 'scores', 'scores_board', 'seen', 'stats', 'used', 'used_at']);
   });
 
   await check('statements: every prepare() in worker.js takes a constant of SQL, and no statement text is put together at run time', () => {
@@ -2461,6 +2461,80 @@ async function main() {
   // ===============================================================================================
   // Every statement the Worker ran in this file
   // ===============================================================================================
+
+  // --- Counters (LEADERBOARD.md, section 10) ----------------------------------------------------
+
+  await check('stats: a start and an end are added to the totals of the day and difficulty', async () => {
+    const s = service();
+    const day = new Date(s.clock.now).toISOString().slice(0, 10);
+    const t1 = await s.start('medium');
+    const t2 = await s.start('hard');
+    assert.strictEqual((await s.call('POST', '/v1/stats', { body: { token: t1, event: 'start' }, ip: '203.0.113.5' })).status, 200);
+    assert.strictEqual((await s.call('POST', '/v1/stats', { body: { token: t1, event: 'start' }, ip: '203.0.113.5' })).status, 200);
+    assert.strictEqual((await s.call('POST', '/v1/stats', { body: { token: t2, event: 'start' }, ip: '203.0.113.6' })).status, 200);
+    const end = await s.call('POST', '/v1/stats', { body: { token: t1, event: 'end', time: 300, cleared: true, section: 3 }, ip: '203.0.113.5' });
+    assert.deepStrictEqual(end.json, { ok: true });
+    await s.call('POST', '/v1/stats', { body: { token: t1, event: 'end', time: 40, cleared: false, section: 1 }, ip: '203.0.113.5' });
+    const rows = s.d1.rows('SELECT * FROM stats ORDER BY difficulty').map((r) => Object.assign({}, r));
+    assert.deepStrictEqual(rows, [
+      { day: day, difficulty: 'hard', starts: 1, finishes: 0, cleared: 0, time_s: 0, reach0: 0, reach1: 0, reach2: 0, reach3: 0 },
+      { day: day, difficulty: 'medium', starts: 2, finishes: 2, cleared: 1, time_s: 340, reach0: 0, reach1: 1, reach2: 0, reach3: 1 }
+    ]);
+    assert.strictEqual(s.d1.count('scores'), 0, 'a counter request wrote a score');
+    assert.strictEqual(s.d1.count('used'), 0, 'a counter request used up a token');
+  });
+
+  await check('stats: a source is counted as one player a day, by a hash that differs from day to day and is deleted the next day', async () => {
+    const s = service();
+    const token = await s.start('easy');
+    const start = function (ip) { return s.call('POST', '/v1/stats', { body: { token: token, event: 'start' }, ip: ip }); };
+    await start('203.0.113.5'); await start('203.0.113.5'); await start('203.0.113.9');
+    await start('2001:db8:1:2::1'); await start('2001:db8:1:2::ffff');          // one /64: one player
+    const day1 = new Date(s.clock.now).toISOString().slice(0, 10);
+    assert.deepStrictEqual(s.d1.rows('SELECT day, players FROM days').map((r) => Object.assign({}, r)), [{ day: day1, players: 3 }]);
+    const hashes1 = s.d1.rows('SELECT hash FROM seen').map((r) => r.hash);
+    assert.strictEqual(hashes1.length, 3);
+    for (const h of hashes1) assert.match(h, /^[0-9a-f]{32}$/);
+    assert.ok(!JSON.stringify(s.d1.rows('SELECT * FROM seen')).includes('203.0.113'), 'an address is stored');
+    s.wait(24 * 3600);
+    const token2 = await s.start('easy');
+    await s.call('POST', '/v1/stats', { body: { token: token2, event: 'start' }, ip: '203.0.113.5' });
+    const day2 = new Date(s.clock.now).toISOString().slice(0, 10);
+    assert.notStrictEqual(day2, day1);
+    const seen = s.d1.rows('SELECT day, hash FROM seen');
+    assert.strictEqual(seen.length, 1, 'the hashes of the day before were not deleted');
+    assert.strictEqual(seen[0].day, day2);
+    assert.ok(!hashes1.includes(seen[0].hash), 'the same source has the same hash on two days');
+    assert.deepStrictEqual(s.d1.rows('SELECT players FROM days ORDER BY day').map((r) => r.players), [3, 1]);
+  });
+
+  await check('stats: a request without a valid token, with a wrong event or with values out of range is refused and counts nothing', async () => {
+    const s = service();
+    const token = await s.start('easy');
+    expectError(await s.call('POST', '/v1/stats', { body: { event: 'start' } }), 400, 'bad_request');
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token + 'x', event: 'start' } }), 400, 'bad_token');
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token, event: 'won' } }), 400, 'bad_request');
+    for (const bad of [{ time: -1 }, { time: 1.5 }, { time: 10801 }, { cleared: 1 }, { section: 4 }, { section: '1' }]) {
+      const body = Object.assign({ token: token, event: 'end', time: 10, cleared: false, section: 0 }, bad);
+      expectError(await s.call('POST', '/v1/stats', { body: body }), 400, 'bad_request', JSON.stringify(bad));
+    }
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token, event: 'start' }, headers: { Origin: 'https://example.com' } }), 403, 'origin');
+    expectError(await s.call('GET', '/v1/stats'), 405, 'method');
+    s.wait(3 * 3600 + 1);
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token, event: 'start' } }), 400, 'expired');
+    assert.strictEqual(s.d1.count('stats') + s.d1.count('days') + s.d1.count('seen'), 0);
+  });
+
+  await check('stats: the hourly clean-up deletes the hashes of earlier days', async () => {
+    const s = service();
+    const token = await s.start('easy');
+    await s.call('POST', '/v1/stats', { body: { token: token, event: 'start' }, ip: '203.0.113.5' });
+    assert.strictEqual(s.d1.count('seen'), 1);
+    s.wait(24 * 3600);
+    await worker.scheduled({}, s.env, {});
+    assert.strictEqual(s.d1.count('seen'), 0);
+    assert.strictEqual(s.d1.count('days'), 1, 'the count of the day was lost');
+  });
 
   await check('statements: every SQL text the Worker prepared in these tests is one of its constants, and each constant was run', () => {
     const constants = Object.keys(W.SQL).map((name) => W.SQL[name]);

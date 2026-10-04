@@ -11,6 +11,7 @@
 //   POST <URL>/v1/scores    a finished run: the token, three initials, score, WPM, accuracy, rank,
 //                           whether the level was cleared, and the run's length in seconds
 //   GET  <URL>/v1/scores    the three boards
+//   POST <URL>/v1/stats     a count of a run started or ended, for the owner's daily totals
 //
 // The game must work without the service. So:
 //   - TG.Board.URL is the empty string until a service is deployed. With an empty URL the module is
@@ -116,7 +117,7 @@
   var net = { fetch: null, now: null };
   var ticks = 0;                  // ms counted by update(dt); the clock when init gave none
   var token = null;               // { value, difficulty, at, life }: the run token that is held
-  var pending = { token: null, send: null, boards: null };   // the request in flight of each kind
+  var pending = { token: null, send: null, boards: null, stat: null };   // the request in flight of each kind
   var askedAt = null;             // when the boards were last asked for
   var sentAt = null;              // when the last score was accepted
   var warned = {};
@@ -246,6 +247,7 @@
     pending.token = null;
     pending.send = null;
     pending.boards = null;
+    pending.stat = null;
     askedAt = null;
     sentAt = null;
     state.boards = 'off';
@@ -295,7 +297,7 @@
     return REFUSED_STATUS.indexOf(status) !== -1 ? 'refused' : 'unreachable';
   }
 
-  // Starts a request of a kind ('token' | 'send' | 'boards'), replacing one of the same kind that is
+  // Starts a request of a kind ('token' | 'send' | 'boards' | 'stat'), replacing one of the same kind that is
   // still in flight. body: an object sent as JSON, or null. The reply counts only if its status is
   // 2xx and its body is a JSON object with ok === true.
   function request(kind, method, path, body, done) {
@@ -493,6 +495,28 @@
         askToken(difficulty);
       } catch (e) {
         report('startRun', e);
+      }
+    },
+
+    // Counts a run for the owner's daily totals (LEADERBOARD 10). event: 'start' when a run starts from
+    // the menus, 'end' when it reaches the results screen, with info { time, cleared, section }.
+    // Nothing about the player is sent: the request carries the run token and, for 'end', those three
+    // values. Does nothing when world scores are off or no token is held; the reply is not used.
+    stat: function (event, info) {
+      try {
+        if ((event !== 'start' && event !== 'end') || !sync()) return;
+        var held = tokenFor();
+        if (!held) return;
+        var body = { token: held.value, event: event };
+        if (event === 'end') {
+          var i = isRecord(info) ? info : {};
+          body.time = whole(i.time, 0, 10800);
+          body.cleared = i.cleared === true;
+          body.section = whole(i.section, 0, 3);
+        }
+        request('stat', 'POST', '/v1/stats', body, function () {});
+      } catch (e) {
+        report('stat', e);
       }
     },
 

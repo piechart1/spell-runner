@@ -129,6 +129,32 @@ CREATE TABLE IF NOT EXISTS used (
   at     INTEGER NOT NULL                -- ms since epoch
 );
 CREATE INDEX IF NOT EXISTS used_at ON used (at);   -- for deleting the rows older than a token's life
+
+-- Counters (docs/LEADERBOARD.md, section 10): totals only, nothing about a player.
+CREATE TABLE IF NOT EXISTS stats (
+  day        TEXT    NOT NULL,           -- UTC date, YYYY-MM-DD
+  difficulty TEXT    NOT NULL,
+  starts     INTEGER NOT NULL DEFAULT 0, -- runs started
+  finishes   INTEGER NOT NULL DEFAULT 0, -- runs that reached the results screen
+  cleared    INTEGER NOT NULL DEFAULT 0, -- of those, runs that beat the level
+  time_s     INTEGER NOT NULL DEFAULT 0, -- seconds played in the finished runs
+  reach0     INTEGER NOT NULL DEFAULT 0, -- finished runs that ended in section 1
+  reach1     INTEGER NOT NULL DEFAULT 0, -- ... in section 2
+  reach2     INTEGER NOT NULL DEFAULT 0, -- ... in section 3
+  reach3     INTEGER NOT NULL DEFAULT 0, -- ... at the boss
+  PRIMARY KEY (day, difficulty)
+);
+
+CREATE TABLE IF NOT EXISTS days (
+  day     TEXT    NOT NULL PRIMARY KEY,
+  players INTEGER NOT NULL DEFAULT 0     -- sources that started at least one run that day
+);
+
+CREATE TABLE IF NOT EXISTS seen (
+  day  TEXT NOT NULL,
+  hash TEXT NOT NULL,                    -- hex SHA-256 of TOKEN_SECRET + day + source; deleted when the day is over
+  PRIMARY KEY (day, hash)
+);
 ```
 
 `scores`: after each accepted score the service keeps only the best 200 rows per difficulty.
@@ -228,4 +254,40 @@ TG.Board.state = {
   place: 0, total: 0, sentDifficulty: null,       // set when send is 'sent'
   sentEntry: null                                 // the entry that was sent, for highlighting it in a list
 };
+```
+
+## 10. Counters
+
+The service also keeps daily totals, so that the owner can see how much the game is played. It stores totals only: nothing in these tables describes a player or a run.
+
+### `POST /v1/stats`
+
+The same rules as the other `POST` paths apply (origin, content type, size). The game sends two kinds of request, each with the run token it holds. The token only shows that the request comes from a game that asked for one; it is not used up, and the request is refused as `bad_token` or `expired` without a valid one.
+
+```json
+{ "token": "<run token>", "event": "start" }
+{ "token": "<run token>", "event": "end", "time": 317, "cleared": true, "section": 3 }
+```
+
+`start` is sent when a run starts from the menus. `end` is sent once, when the run reaches the results screen: `time` is the run's length in whole seconds (0 to 10,800), `cleared` whether the level was beaten, and `section` the part the run ended in (0, 1 or 2 for the three sections, 3 for the boss). The difficulty comes from the token. The response is `{ "ok": true }`.
+
+### What is kept
+
+- `stats`: one row per UTC day and difficulty with the number of runs started, runs finished, runs cleared, the seconds played in finished runs, and how many finished runs ended in each part.
+- `days`: one row per UTC day with the number of sources that started at least one run.
+- `seen`: used only to count each source once a day. It holds a hash of the secret, the day and the source (the source as in section 4). Because the day is part of the hash, a source's hash differs from day to day. Rows of earlier days are deleted on the next `start` and by the hourly clean-up.
+
+### Limits of the numbers
+
+- The game sends nothing when world scores are switched off in Options, when the service cannot be reached, or from a copy opened from a file, so those runs are not counted.
+- "Players" counts network addresses, not people: a household or a school behind one address counts once a day, and one person on two networks counts twice.
+- The counters are not protected against someone sending made-up requests, beyond the origin rule and the token. They are for the owner's interest, not for anything that depends on them being exact.
+
+### Reading the numbers
+
+Run from the `server/` folder:
+
+```bash
+npx wrangler d1 execute spell-runner-scores --remote --command "SELECT s.day, d.players, SUM(s.starts) AS started, SUM(s.finishes) AS finished, SUM(s.cleared) AS cleared, ROUND(SUM(s.time_s) / 60.0) AS minutes FROM stats s LEFT JOIN days d ON d.day = s.day GROUP BY s.day ORDER BY s.day DESC LIMIT 30"
+npx wrangler d1 execute spell-runner-scores --remote --command "SELECT day, difficulty, starts, finishes, cleared, time_s, reach0, reach1, reach2, reach3 FROM stats ORDER BY day DESC, difficulty LIMIT 90"
 ```

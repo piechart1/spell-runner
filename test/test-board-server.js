@@ -304,7 +304,8 @@ async function main() {
     }
     assert.strictEqual(s.screen(), 'results');
     s.seconds(4.5);
-    assert.strictEqual(p.requests.length, before + (p.TG.Board.enabled() ? 1 : 0), 'no request during the run');
+    // The token on confirming the difficulty, then the two counter requests (LEADERBOARD 10): start and end.
+    assert.strictEqual(p.requests.length, before + (p.TG.Board.enabled() ? 3 : 0), 'requests during the run');
     return p.TG.Game.state.result;
   }
 
@@ -380,7 +381,14 @@ async function main() {
     s.press('right');
     assert.strictEqual(TG.UI.page, 'hard');
     assert.ok(texts(p).indexOf('NO SCORES YET. BE THE FIRST!') !== -1);
-    assert.deepStrictEqual(p.paths(), ['POST /v1/runs 200', 'POST /v1/scores 200', 'GET /v1/scores 200']);
+    assert.deepStrictEqual(p.paths(), ['POST /v1/runs 200', 'POST /v1/stats 200', 'POST /v1/stats 200', 'POST /v1/scores 200', 'GET /v1/scores 200']);
+    // The counters reached the Worker: one run started and ended for the difficulty, and one player.
+    const totals = p.d1.rows('SELECT difficulty, starts, finishes, cleared, time_s FROM stats').map((r) => Object.assign({}, r));
+    assert.strictEqual(totals.length, 1);
+    assert.strictEqual(totals[0].starts, 1);
+    assert.strictEqual(totals[0].finishes, 1);
+    assert.ok(totals[0].time_s > 0, 'no time was counted');
+    assert.strictEqual(p.d1.rows('SELECT players FROM days')[0].players, 1);
     assert.deepStrictEqual(s.env.errors, []);
   });
 
@@ -761,7 +769,7 @@ async function main() {
     assert.strictEqual(s.screen(), 'title', 'the run went to the initials screen');
     assert.strictEqual(TG.UI.panel, 'menu');
     await p.settle();
-    assert.deepStrictEqual(p.paths(), ['POST /v1/runs 200']);
+    assert.deepStrictEqual(p.paths(), ['POST /v1/runs 200', 'POST /v1/stats 200', 'POST /v1/stats 200']);
     // The limit the game follows is the Worker's own.
     assert.strictEqual(TG.Board.MIN_TIME, W.RULES.minTime);
     assert.deepStrictEqual(s.env.errors, []);

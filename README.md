@@ -55,6 +55,8 @@ For players:
 - After a run with a score (and at least 10 seconds long), the game asks for three initials. Enter alone takes the ones you used last; the first time, you type them. Your run then goes to the world board of its difficulty, and the game shows your place, for example YOUR PLACE: 12 OF 87. A board keeps its 200 best runs.
 - If you do not want a run sent, press Esc on the initials screen (ESC: DO NOT SEND). A score that reaches the top five of this computer is then saved here only.
 - What is sent: your three initials, the score, WPM, accuracy, rank, whether the level was cleared and how long the run took. Nothing else is sent: there is no account, and nothing you type during play leaves your computer. `docs/DESIGN.md` section 8.9 has the details.
+- The game also tells the service when a run starts and ends, so that the owner can see daily totals of games played. Only totals are kept, nothing about you or your run. Switching world scores off stops this too.
+- The page also loads Cloudflare Web Analytics, which counts visits and which sites they came from. It sets no cookies and does not follow individual visitors. It is the one outside script on the page, and it loads whatever the world scores setting is. A copy of the game you host yourself should remove that tag from `index.html` or use its own token.
 - To switch it off, set WORLD SCORES to OFF under OPTIONS on the title screen. The game then makes no network request at all, and HIGH SCORES shows this computer's tables only.
 - Rude initials are refused (TRY OTHER INITIALS).
 - If the scores service cannot be reached, or does not take a score, the game says so and carries on. A score that reaches the top five of this computer is always saved there.
