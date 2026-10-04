@@ -27,6 +27,8 @@
 //   --reduce-flash       the reduceFlash setting on
 //   --key-guide on|off   the keyGuide setting
 //   --info               print the state at each written frame (entities, lock, player)
+//   --events <file.json> also write the game events emitted from the first written frame on, as
+//                        [{ f, name, payload }] with f the frame index at which the event happened
 // Exit codes: 0 written; 1 bad options or the moment never came; 2 the run failed before the moment.
 //
 // The run is the same as `node test/sim.js`, with its assertions: a console.warn or console.error
@@ -54,7 +56,7 @@ function parse(argv) {
     out: null, difficulty: 'medium', seed: 1, at: null, until: null, frames: 1, scale: 3, when: null,
     event: null, eventN: 1, after: 0, every: 1, sheet: false, profile: null, wpm: undefined, accuracy: undefined,
     react: undefined, adaptive: undefined, noType: false, noJump: false, noDuck: false, reduceFlash: false,
-    keyGuide: null, info: false, crop: null, cols: 4
+    keyGuide: null, info: false, crop: null, cols: 4, events: null
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -108,6 +110,7 @@ function parse(argv) {
       case '--reduce-flash': o.reduceFlash = true; break;
       case '--key-guide': o.keyGuide = next(); break;
       case '--info': o.info = true; break;
+      case '--events': o.events = next(); break;
       case '--help': case '-h': usage(); break;
       default: usage('unknown option ' + a);
     }
@@ -165,6 +168,7 @@ function main() {
   const sim = require('../test/sim');
 
   const frames = [];            // { rgba, time, info }
+  const eventLog = [];          // --events: { f, name, payload }
   let armed = o.at === null && o.when === null && o.event === null ? null : false;
   let triggerTime = null;
   let eventsSeen = 0;
@@ -213,6 +217,14 @@ function main() {
     if (TG.Render && TG.Render.init) TG.Render.init(env.canvas);
     if (TG.UI && TG.UI.init) TG.UI.init();
     if (o.event) TG.Events.on(o.event, function () { eventsSeen++; });
+    if (o.events) {
+      TG.Events.on('*', function (payload, name) {
+        if (frames.length === 0) return;
+        let plain = null;
+        try { plain = JSON.parse(JSON.stringify(payload === undefined ? null : payload)); } catch (e) { plain = null; }
+        eventLog.push({ f: frames.length - 1 + stepsSinceFrame / o.every, name: name, payload: plain });
+      });
+    }
 
     const step = TG.Game.step;
     const useMain = !!(TG.Main && typeof TG.Main.tick === 'function');
@@ -305,6 +317,7 @@ function main() {
     });
   }
   frames.forEach(function (f) { if (f.info) console.log(f.info); });
+  if (o.events) require('fs').writeFileSync(o.events, JSON.stringify(eventLog));
   process.exit(0);
 }
 

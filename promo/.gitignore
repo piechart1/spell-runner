@@ -1,0 +1,14 @@
+node_modules
+dist
+.DS_Store
+.env
+
+# Ignore the output video from Git but not videos you import into src/.
+out
+
+# Generated from the game, not source: captured gameplay frames, rendered audio, event logs and
+# menu screenshots. See README.md for how they are made.
+public/frames
+public/audio
+public/events
+public/ui
