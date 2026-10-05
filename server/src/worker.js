@@ -72,7 +72,9 @@ export const RULES = Object.freeze({
 // Section 3: the addresses a browser may send a POST from. A request without an Origin header (curl,
 // a program) is not affected, and neither is GET. A copy of the game served from the same machine
 // (http://localhost, http://127.0.0.1 or http://[::1], any port) is accepted for development.
-export const ORIGINS = Object.freeze(['https://piechart1.github.io']);
+// html-classic.itch.zone is where itch.io serves every browser game from, this one included. It is
+// shared by all games there, so for that address the rule only keeps out ordinary websites.
+export const ORIGINS = Object.freeze(['https://piechart1.github.io', 'https://html-classic.itch.zone']);
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?$/;
 
 // Section 6: error code -> HTTP status.

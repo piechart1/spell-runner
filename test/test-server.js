@@ -663,7 +663,13 @@ async function main() {
 
   await check('origin: a POST from a page of another site gives 403 origin on both paths, and nothing is issued or stored', async () => {
     const s = service();
-    assert.deepStrictEqual(Array.from(W.ORIGINS), [GAME_ORIGIN]);
+    // The game's own page, and the address itch.io serves every browser game from.
+    assert.deepStrictEqual(Array.from(W.ORIGINS), [GAME_ORIGIN, 'https://html-classic.itch.zone']);
+    const itch = await s.call('POST', '/v1/runs', { body: { difficulty: 'easy' }, headers: { Origin: 'https://html-classic.itch.zone' } });
+    assert.strictEqual(itch.status, 200, 'the itch.io address was refused');
+    for (const near of ['https://itch.zone', 'https://html-classic.itch.zone.example.com', 'http://html-classic.itch.zone', 'https://evil.itch.zone']) {
+      expectError(await s.call('POST', '/v1/runs', { body: { difficulty: 'easy' }, headers: { Origin: near } }), 403, 'origin', near);
+    }
     const token = await s.start('easy');
     s.wait(60);
     for (const origin of OTHER_ORIGINS) {
