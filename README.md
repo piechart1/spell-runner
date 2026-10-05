@@ -4,7 +4,7 @@ A typing game for the browser in the style of late-1980s console games. Pip the 
 
 Level 1, QUILL MEADOWS, is complete: three sections, a boss with three phases, three difficulties, high scores and settings that are kept between visits, and world scores that all players share (when a scores service is set up; see below).
 
-**Play it online: https://piechart1.github.io/spell-runner/** (needs a computer with a keyboard).
+**Play it online: https://piechart1.github.io/spell-runner/** (needs a computer with a keyboard). It is also on itch.io: https://piechart1.itch.io/spell-runner. Both copies share the same world scores.
 
 ## Starting the game
 
