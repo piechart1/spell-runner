@@ -1474,6 +1474,60 @@ check('level:start after an Hourglass and a boss warning returns the tempo scale
   return true;
 });
 
+// LEVEL2 11.1. No level has a ready jingle of its own yet, so jingle_checkpoint stands in for one.
+check('level:start plays the ready jingle named by music.ready, and jingle_ready when the level names none or names something that is not a track', function () {
+  const cases = [
+    // [the music of the level:start payload, the jingle that plays]
+    [{ level: 'level1', boss: 'boss1', ready: 'jingle_checkpoint' }, 'jingle_checkpoint'],
+    [{ level: 'level1', boss: 'boss1' }, 'jingle_ready'],
+    [{ level: 'level1', boss: 'boss1', ready: 'no_such_jingle' }, 'jingle_ready'],
+    [{ level: 'level1', boss: 'boss1', ready: 7 }, 'jingle_ready'],
+    [{ level: 'level1', boss: 'boss1', ready: null }, 'jingle_ready']
+  ];
+  const bad = [];
+  [false, true].forEach(function (continued) {
+    cases.forEach(function (c) {
+      const env = unlocked();
+      const jingles = spyJingle(env);
+      const label = JSON.stringify(c[0].ready) + ' (continued ' + continued + ')';
+      emit(env, 'screen:change', { from: continued ? 'gameOver' : 'howToPlay', to: 'playing', data: null });
+      if (continued) emit(env, 'game:continue', { checkpoint: 1, continues: 1, assist: 0.85 });
+      emit(env, 'level:start', { levelId: 2, difficulty: 'medium', name: 'X', continued: continued, music: c[0] });
+      const once = env.TG.Audio._internals.sequencer('once');
+      if (!same(jingles, [c[1]])) bad.push(label + ' asked for ' + jingles.join(','));
+      else if (once.name !== c[1] || !once.playing) bad.push(label + ' plays ' + JSON.stringify(once));
+      if (env.warnings.length || env.errors.length) bad.push(label + ' wrote to the console: ' + env.warnings.concat(env.errors).join('; '));
+    });
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('a level\'s own ready jingle takes the section\'s transpose after a continue, and is not carried into a run of a level that names none', function () {
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  const jingles = spyJingle(env);
+  emit(env, 'screen:change', { from: 'gameOver', to: 'playing', data: null });
+  emit(env, 'game:continue', { checkpoint: 2, continues: 1, assist: 0.85 });
+  emit(env, 'level:start', { levelId: 2, difficulty: 'medium', name: 'X', continued: true, music: { level: 'level1', boss: 'boss1', ready: 'jingle_checkpoint' } });
+  emit(env, 'section:enter', { index: 2, name: 'C', stage: '2-3', palette: 'crystal', music: { transpose: 3, tempo: 148, keyOk: { root: 5, mode: 'minor' } } });
+  run(env, 30);
+  const own = I.sequencer('once');
+  if (own.name !== 'jingle_checkpoint' || own.transpose !== 3) return 'the level\'s own jingle: ' + JSON.stringify(own);
+  emit(env, 'screen:change', { from: 'playing', to: 'paused', data: null });
+  emit(env, 'screen:change', { from: 'paused', to: 'results', data: null });
+  emit(env, 'screen:change', { from: 'results', to: 'title', data: null });
+  emit(env, 'screen:change', { from: 'title', to: 'difficultySelect', data: null });
+  emit(env, 'screen:change', { from: 'difficultySelect', to: 'howToPlay', data: null });
+  emit(env, 'screen:change', { from: 'howToPlay', to: 'playing', data: null });
+  jingles.length = 0;
+  emit(env, 'level:start', { levelId: 1, difficulty: 'medium', name: 'X', continued: false, music: { level: 'level1', boss: 'boss1' } });
+  emit(env, 'section:enter', { index: 0, name: 'A', stage: '1-1', palette: 'day', music: { transpose: 0, tempo: 150, keyOk: { root: 0, mode: 'major' } } });
+  run(env, 30);
+  const next = I.sequencer('once');
+  return (same(jingles, ['jingle_ready']) && next.name === 'jingle_ready' && next.transpose === 0) ||
+    'the next level: ' + jingles.join(',') + ' ' + JSON.stringify(next);
+});
+
 check('level:start with music.level "level1" followed by screen:change to playing plays level1', function () {
   const env = unlocked();
   emit(env, 'level:start', { levelId: 1, difficulty: 'medium', name: 'X', continued: false, music: { level: 'level1', boss: 'boss1' } });
@@ -1879,6 +1933,110 @@ check('a boss track started after a continue in phase 3 uses 184 BPM and pulse 2
   emit(env, 'screen:change', { from: 'bossIntro', to: 'boss', data: null });
   const s = env.TG.Audio._internals.sequencer('loop');
   return s.name === 'boss1' && s.bpm === 184 && s.p2Octave === 12;
+});
+
+// LEVEL2 11.2. The arena's music as Level 1 has it, with a phase3 entry when one is given, up to the
+// boss track playing. No second boss track exists yet, so boss1 plays with the phase3 values of the test.
+function bossTrack(env, phase3) {
+  const music = { transpose: 0, tempo: 168, keyOk: { root: 4, mode: 'minor' } };
+  if (phase3 !== undefined) music.phase3 = phase3;
+  emit(env, 'level:start', { levelId: 1, difficulty: 'medium', name: 'X', continued: true, music: { level: 'level1', boss: 'boss1' } });
+  emit(env, 'section:enter', { index: 3, name: 'B', stage: '1-B', palette: 'dusk', music: music });
+  emit(env, 'screen:change', { from: 'bossIntro', to: 'boss', data: null });
+  run(env, 30);
+  return env.TG.Audio._internals.sequencer('loop');
+}
+
+check('boss:phase 3 moves the boss track to the tempo and pulse 2 octave of the arena\'s music.phase3; where that is missing, or one of its values is, to 184 BPM and an octave up', function () {
+  const cases = [
+    // [phase3 in the arena's music, the tempo of phase 3, its pulse 2 octave]
+    [undefined, 184, 12],
+    [{ tempo: 176, p2Octave: 12 }, 176, 12],      // the values of LEVEL2 11.2
+    [{ tempo: 200, p2Octave: 0 }, 200, 0],        // 0 is a value: pulse 2 stays where it is
+    [{ tempo: 176 }, 176, 12],
+    [{ p2Octave: 7 }, 184, 7],
+    [{ tempo: 0, p2Octave: NaN }, 184, 12],
+    [{ tempo: '176', p2Octave: '5' }, 184, 12],
+    [null, 184, 12],
+    ['fast', 184, 12]
+  ];
+  const bad = [];
+  cases.forEach(function (c, i) {
+    const env = unlocked();
+    const I = env.TG.Audio._internals;
+    const label = 'case ' + i + ' (' + String(JSON.stringify(c[0])) + ')';
+    const before = bossTrack(env, c[0]);
+    if (before.name !== 'boss1' || before.bpm !== 168 || before.p2Octave !== 0) {
+      bad.push(label + ' before phase 3: ' + JSON.stringify(before));
+      return;
+    }
+    emit(env, 'boss:phase', { phase: 2 });
+    run(env, 60 * 3);   // one bar at 168 BPM is 1.43 s
+    const two = I.sequencer('loop');
+    if (two.bpm !== 168 || two.p2Octave !== 0) bad.push(label + ' phase 2 changed the track: ' + JSON.stringify(two));
+    emit(env, 'boss:phase', { phase: 3 });
+    run(env, 60 * 3);
+    const three = I.sequencer('loop');
+    if (three.bpm !== c[1] || three.p2Octave !== c[2]) bad.push(label + ' gave ' + three.bpm + ' BPM and octave ' + three.p2Octave);
+    if (env.warnings.length || env.errors.length) bad.push(label + ' wrote to the console: ' + env.warnings.concat(env.errors).join('; '));
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('a boss track started after a continue in phase 3 uses the arena\'s music.phase3 when the level has one', function () {
+  const env = unlocked();
+  env.TG.Game = { state: { screen: 'bossIntro', entities: [], boss: { phase: 3 } } };
+  const s = bossTrack(env, { tempo: 176, p2Octave: 5 });
+  return (s.name === 'boss1' && s.bpm === 176 && s.p2Octave === 5) || JSON.stringify(s);
+});
+
+check('the phase 3 values of one level are not carried into the next: a fresh run forgets them, and an arena without music.phase3 goes to 184 BPM and an octave up', function () {
+  const arena = { index: 3, name: 'B', stage: '1-B', palette: 'dusk', music: { transpose: 0, tempo: 168, keyOk: { root: 4, mode: 'minor' } } };
+  const bad = [];
+  // With `sections` the next run sends section:enter as the game does; without, only level:start is heard.
+  [true, false].forEach(function (sections) {
+    const env = unlocked();
+    const I = env.TG.Audio._internals;
+    bossTrack(env, { tempo: 176, p2Octave: 5 });
+    emit(env, 'boss:phase', { phase: 3 });
+    run(env, 60 * 3);
+    if (I.sequencer('loop').bpm !== 176 || I.sequencer('loop').p2Octave !== 5) {
+      bad.push('the first level: ' + JSON.stringify(I.sequencer('loop')));
+      return;
+    }
+    emit(env, 'screen:change', { from: 'boss', to: 'paused', data: null });
+    emit(env, 'screen:change', { from: 'paused', to: 'results', data: null });
+    emit(env, 'screen:change', { from: 'results', to: 'title', data: null });
+    emit(env, 'screen:change', { from: 'title', to: 'difficultySelect', data: null });
+    emit(env, 'screen:change', { from: 'difficultySelect', to: 'howToPlay', data: null });
+    emit(env, 'screen:change', { from: 'howToPlay', to: 'playing', data: null });
+    emit(env, 'level:start', { levelId: 1, difficulty: 'medium', name: 'X', continued: false, music: { level: 'level1', boss: 'boss1' } });
+    if (sections) emit(env, 'section:enter', { index: 0, name: 'A', stage: '1-1', palette: 'day', music: { transpose: 0, tempo: 150, keyOk: { root: 0, mode: 'major' } } });
+    run(env, 30);
+    if (sections) emit(env, 'section:enter', arena);
+    emit(env, 'screen:change', { from: 'playing', to: 'bossIntro', data: null });
+    emit(env, 'screen:change', { from: 'bossIntro', to: 'boss', data: null });
+    run(env, 30);
+    emit(env, 'boss:phase', { phase: 3 });
+    run(env, 60 * 3);
+    const s = I.sequencer('loop');
+    if (s.name !== 'boss1' || s.bpm !== 184 || s.p2Octave !== 12) bad.push((sections ? 'with' : 'without') + ' section:enter: ' + JSON.stringify(s));
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('a section:enter whose music has no phase3 forgets the phase3 of the one before, with no fresh run between: boss:phase 3 then goes to 184 BPM and an octave up', function () {
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  bossTrack(env, { tempo: 176, p2Octave: 5 });
+  // The same run goes on (bossTrack sends level:start with continued: true, which resets nothing) into
+  // an arena whose music names no phase3.
+  const before = bossTrack(env);
+  if (before.name !== 'boss1' || before.bpm !== 168 || before.p2Octave !== 0) return 'before phase 3: ' + JSON.stringify(before);
+  emit(env, 'boss:phase', { phase: 3 });
+  run(env, 60 * 3);
+  const s = I.sequencer('loop');
+  return (s.name === 'boss1' && s.bpm === 184 && s.p2Octave === 12) || JSON.stringify(s);
 });
 
 check('the checkpoint event plays the checkpoint sound and jingle_checkpoint for index > 0 only', function () {

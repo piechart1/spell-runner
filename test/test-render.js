@@ -1599,6 +1599,776 @@ check('no canvas is made per frame: once a busy, animated scene has run for 4 s,
 });
 
 // ---------------------------------------------------------------------------------------------
+// 7. What the presentation reads from the level data (LEVEL2 13.4, milestone M0)
+// ---------------------------------------------------------------------------------------------
+//
+// Every key is optional, and without it the picture is Level 1's. The cases below use scratch level
+// data built here: sprite names that are not defined (TG.Gfx draws its labelled box for them and warns
+// once per name), a scratch remap and a scratch backdrop. No Level 2 art is needed.
+
+// Every sprite drawn during fn, in order: TG.Gfx.draw, and TG.Gfx.get for the parts that are drawn
+// clipped at the ground line (those have no position here).
+function drawCalls(TG, fn) {
+  const calls = [];
+  const draw = TG.Gfx.draw, get = TG.Gfx.get;
+  TG.Gfx.draw = function (ctx, name, frame, x, y, o) {
+    calls.push({ name: name, frame: frame, x: x, y: y, remap: (o && o.remap) || null, flipX: !!(o && o.flipX), anchor: !o || o.anchor !== false });
+    return draw.apply(TG.Gfx, arguments);
+  };
+  TG.Gfx.get = function (name, frame, o) {
+    calls.push({ name: name, frame: frame, remap: (o && o.remap) || null, flipX: !!(o && o.flipX), clipped: true });
+    return get.apply(TG.Gfx, arguments);
+  };
+  try { fn(); } finally { TG.Gfx.draw = draw; TG.Gfx.get = get; }
+  return calls;
+}
+
+function named(calls, name) {
+  return calls.filter(function (c) { return c.name === name; });
+}
+
+// The colours of the 1 and 2 px square particles that TG.Effects draws in the world.
+function particleColors(TG, env, s) {
+  const colors = [];
+  const rect = TG.Gfx.rect;
+  TG.Gfx.rect = function (ctx, x, y, w, h, c) {
+    if (w === h && (w === 1 || w === 2)) colors.push(c);
+    return rect.apply(TG.Gfx, arguments);
+  };
+  try { TG.Effects.draw(env.canvas.getContext('2d'), 'world', s.camera.x); } finally { TG.Gfx.rect = rect; }
+  return colors;
+}
+
+const SCRATCH_TILES = {
+  top: 'x_top', fill: 'x_fill', edgeL: 'x_edge_l', edgeR: 'x_edge_r', wallL: 'x_wall_l', wallR: 'x_wall_r',
+  gapFill: 'x_pool', gapFillDark: 'x_dark', plank: 'x_girder', arenaTop: 'x_floor', arenaFill: 'x_under', rail: 'x_rail'
+};
+const SCRATCH_HAZARDS = { bramble: 'x_spikes', branch: 'x_pipe', beehive: 'x_lantern', arch: 'x_tunnel',
+  trunk: 'x_riser', rope: 'x_chain', canopy: 'x_ceiling' };
+
+check('tiles and hazards are drawn from theme.tiles and theme.hazardSkins: same frames, places and remaps, the theme\'s names', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  // Level 1's sprite of each key, as the hand-built state (whose theme names none) draws it.
+  const GROUND = { tile_grass: 'top', tile_soil: 'fill', tile_edge_l: 'edgeL', tile_edge_r: 'edgeR', tile_wall_l: 'wallL', tile_wall_r: 'wallR',
+    tile_plank: 'plank' };
+  const L1 = {
+    playing: Object.assign({ tile_water: 'gapFill' }, GROUND),
+    dark: Object.assign({ tile_dark: 'gapFillDark' }, GROUND),          // the gaps of a section with gapFill 'dark'
+    boss: { tile_arena: 'arenaTop', tile_soil: 'arenaFill', tile_rail: 'rail' }
+  };
+  const L1_HAZ = { haz_bramble: 'bramble', haz_branch: 'branch', haz_beehive: 'beehive', haz_arch: 'arch', haz_trunk: 'trunk',
+    haz_rope: 'rope', haz_canopy: 'canopy' };
+  for (const scene of ['playing', 'dark', 'boss']) {
+    const build = function (theme) {
+      const s = handState(TG, scene === 'boss' ? 'boss' : 'playing', scene === 'dark' ? { section: 2 } : {});
+      if (scene === 'dark') s.level.hazards.forEach(function (h) { h.section = 2; });
+      Object.assign(s.level.theme, theme);
+      return s;
+    };
+    const plain = drawCalls(TG, function () { TG.Render.draw(build({})); });
+    const themed = drawCalls(TG, function () { TG.Render.draw(build({ tiles: SCRATCH_TILES, hazardSkins: SCRATCH_HAZARDS })); });
+    const used = {};
+    const want = plain.map(function (c) {
+      let name = c.name;
+      if (L1[scene][name]) { used[L1[scene][name]] = true; name = SCRATCH_TILES[L1[scene][name]]; }
+      else if (L1_HAZ[name]) { used[L1_HAZ[name]] = true; name = SCRATCH_HAZARDS[L1_HAZ[name]]; }
+      return Object.assign({}, c, { name: name });
+    });
+    if (themed.length !== want.length) return scene + ': ' + themed.length + ' sprites drawn, ' + want.length + ' without the theme names';
+    for (let i = 0; i < want.length; i++) {
+      if (JSON.stringify(themed[i]) !== JSON.stringify(want[i])) return scene + ': call ' + i + ' is ' + JSON.stringify(themed[i]) + ', want ' + JSON.stringify(want[i]);
+    }
+    // The scene must have exercised its keys, or the comparison proves nothing.
+    const keys = Object.keys(L1[scene]).map(function (k) { return L1[scene][k]; }).concat(scene === 'boss' ? [] : Object.keys(SCRATCH_HAZARDS));
+    const unused = keys.filter(function (k) { return !used[k]; });
+    if (unused.length) return scene + ': the scene draws no ' + unused.join(', ');
+  }
+  if (env.errors.length) return env.errors[0];
+});
+
+check('without the theme names the fallbacks are Level 1\'s: the hand-built state draws the same sprites with Level 1\'s theme and with a theme that names none', function () {
+  const env = loadEnv({ sim: SIM_PRESENT });
+  const TG = env.TG;
+  const theme = SIM_PRESENT ? TG.Levels[1].theme : {
+    tiles: { top: 'tile_grass', fill: 'tile_soil', edgeL: 'tile_edge_l', edgeR: 'tile_edge_r', wallL: 'tile_wall_l', wallR: 'tile_wall_r',
+      gapFill: 'tile_water', gapFillDark: 'tile_dark', plank: 'tile_plank', arenaTop: 'tile_arena', arenaFill: 'tile_soil', rail: 'tile_rail' },
+    hazardSkins: { bramble: 'haz_bramble', branch: 'haz_branch', beehive: 'haz_beehive', arch: 'haz_arch' }
+  };
+  if (!theme.tiles || !theme.hazardSkins) return 'Level 1 names no tiles or hazard skins';
+  for (const key of ['trunk', 'rope', 'canopy', 'archTrunk']) {
+    if (key in theme.hazardSkins) return 'Level 1 names hazardSkins.' + key + ', so its fallback is not tested here';
+  }
+  for (const scene of [['playing', {}], ['playing', { section: 2 }], ['boss', {}]]) {
+    const build = function (withNames) {
+      const s = handState(TG, scene[0], scene[1]);
+      if (scene[1].section) s.level.hazards.forEach(function (h) { h.section = scene[1].section; });
+      if (withNames) { s.level.theme.tiles = theme.tiles; s.level.theme.hazardSkins = theme.hazardSkins; }
+      return s;
+    };
+    const plain = JSON.stringify(drawCalls(TG, function () { TG.Render.draw(build(false)); }));
+    const level1 = JSON.stringify(drawCalls(TG, function () { TG.Render.draw(build(true)); }));
+    if (plain !== level1) return scene[0] + ' ' + JSON.stringify(scene[1]) + ': the two differ';
+    for (const name of scene[0] === 'boss' ? ['tile_arena', 'tile_soil', 'tile_rail']
+      : ['tile_grass', 'tile_soil', scene[1].section ? 'tile_dark' : 'tile_water', 'haz_bramble', 'haz_branch', 'haz_trunk', 'haz_canopy', 'haz_beehive', 'haz_rope', 'haz_arch']) {
+      if (plain.indexOf('"' + name + '"') === -1) return scene[0] + ': ' + name + ' is not drawn';
+    }
+  }
+  // A theme may name some keys and leave the others to the fallbacks.
+  const s = handState(TG, 'playing');
+  s.level.theme.tiles = { top: 'x_top' };
+  s.level.theme.hazardSkins = { beehive: 'x_lantern' };
+  const names = spritesDrawn(TG, function () { TG.Render.draw(s); });
+  const missing = ['x_top', 'tile_soil', 'tile_water', 'x_lantern', 'haz_rope', 'haz_branch'].filter(function (n) { return names.indexOf(n) === -1; });
+  if (missing.length) return 'a theme with two names: no ' + missing.join(', ');
+  if (names.indexOf('tile_grass') !== -1 || names.indexOf('haz_beehive') !== -1) return 'a named key still draws Level 1\'s sprite';
+});
+
+check('the trunks under an arch are hazardSkins.archTrunk, which defaults to hazardSkins.trunk, which defaults to haz_trunk', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const HANG = TG.C.GROUND_Y - TG.C.HANG_CLEAR;
+  const trunks = function (skins) {
+    const s = handState(TG, 'playing');
+    if (skins) s.level.theme.hazardSkins = skins;
+    const branch = s.level.hazards[2], arch = s.level.hazards[4];
+    const calls = drawCalls(TG, function () { TG.Render.draw(s); });
+    const at = function (x) {
+      const set = {};
+      calls.forEach(function (c) { if (c.x === Math.floor(x - s.camera.x) && c.y < HANG && c.y > TG.C.PLAY_TOP && !c.clipped && /trunk|riser|column/.test(c.name)) set[c.name] = true; });
+      return Object.keys(set).join(',');
+    };
+    return { branch: at(branch.x), archLeft: at(arch.x), archRight: at(arch.x + arch.w - 16) };
+  };
+  let t = trunks(null);
+  if (t.branch !== 'haz_trunk' || t.archLeft !== 'haz_trunk' || t.archRight !== 'haz_trunk') return 'no names: ' + JSON.stringify(t);
+  t = trunks({ trunk: 'x_riser' });
+  if (t.branch !== 'x_riser' || t.archLeft !== 'x_riser' || t.archRight !== 'x_riser') return 'trunk only: ' + JSON.stringify(t);
+  t = trunks({ trunk: 'x_riser', archTrunk: 'x_column' });
+  if (t.branch !== 'x_riser' || t.archLeft !== 'x_column' || t.archRight !== 'x_column') return 'trunk and archTrunk: ' + JSON.stringify(t);
+  t = trunks({ archTrunk: 'x_column' });
+  if (t.branch !== 'haz_trunk' || t.archLeft !== 'x_column') return 'archTrunk only: ' + JSON.stringify(t);
+});
+
+check('a theme name with no sprite still draws: the labelled box of TG.Gfx where the tile or hazard goes, with one warning per name', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const G = TG.C.GROUND_Y;
+  const s = handState(TG, 'playing');
+  // Screen column 1 (x 16 to 31) is plain ground in the hand-built scene.
+  TG.Render.draw(s);
+  if (pixel(env.canvas.toRGBA(), 384, 16, G) === pal[26]) return 'the grass tile already has a CORAL corner, so the box cannot be told from it';
+  s.level.theme.tiles = { top: 'tile_nosuch' };
+  s.level.theme.hazardSkins = { arch: 'haz_nosuch' };
+  let names = [];
+  for (let i = 0; i < 2; i++) names = spritesDrawn(TG, function () { TG.Render.draw(s); });
+  const rgba = env.canvas.toRGBA();
+  // The box: INK with a 1 px CORAL border, 16 x 16 for a name that is not in the manifest.
+  for (const p of [[16, G], [31, G], [16, G + 15], [31, G + 15], [24, G], [16, G + 8]]) {
+    if (pixel(rgba, 384, p[0], p[1]) !== pal[26]) return 'no CORAL border at ' + p.join(',') + ': ' + pixel(rgba, 384, p[0], p[1]);
+  }
+  if (pixel(rgba, 384, 17, G + 1) !== pal[0]) return 'the box is not INK inside';
+  if (names.indexOf('haz_nosuch') === -1) return 'the hazard with an unknown skin is not drawn';
+  for (const name of ['tile_nosuch', 'haz_nosuch']) {
+    const n = env.warnings.filter(function (w) { return w.indexOf('"' + name + '"') !== -1; }).length;
+    if (n !== 1) return n + ' warnings for ' + name;
+  }
+  if (env.errors.length) return env.errors[0];
+});
+
+check('skinFor: an entity is drawn with its own skin, else the sprite of theme.skins for its kind, else the sprite of its kind; the frame and the place stay', function () {
+  for (const sim of SIM_PRESENT ? [false, true] : [false]) {
+    const env = loadEnv({ sim: sim });            // with and without TG.Entities.KINDS
+    const TG = env.TG;
+    const where = sim ? 'with entities.js' : 'without entities.js';
+    const scenes = function (skins, edit) {
+      const out = [];
+      for (const screen of ['playing', 'boss']) {
+        const s = handState(TG, screen);
+        if (skins) s.level.theme.skins = skins;
+        if (edit) edit(s);
+        out.push(drawCalls(TG, function () { TG.Render.draw(s); }));
+      }
+      return out[0].concat(out[1]);
+    };
+    const KIND = { boulder: 'en_boulder', dawdle: 'en_dawdle', hoppet: 'en_hoppet', buzzle: 'en_buzzle', swoop: 'en_swoop',
+      truffle: 'en_truffle', rock: 'pr_rock', crate: 'crate_balloon', shock: 'pr_shock', pick: 'pr_pickaxe' };
+    const plain = scenes(null);
+    for (const k of Object.keys(KIND)) if (!named(plain, KIND[k]).length) return where + ': the ' + k + ' is not drawn as ' + KIND[k];
+    // A sprite for every kind.
+    const skins = {};
+    Object.keys(KIND).forEach(function (k) { skins[k] = { sprite: 'x_' + k }; });
+    const skinned = scenes(skins);
+    const want = plain.map(function (c) {
+      const kind = Object.keys(KIND).filter(function (k) { return KIND[k] === c.name; })[0];
+      return kind ? Object.assign({}, c, { name: 'x_' + kind }) : c;
+    });
+    if (JSON.stringify(skinned) !== JSON.stringify(want)) {
+      for (let i = 0; i < want.length; i++) {
+        if (JSON.stringify(skinned[i]) !== JSON.stringify(want[i])) return where + ': ' + JSON.stringify(skinned[i]) + ', want ' + JSON.stringify(want[i]);
+      }
+      return where + ': ' + skinned.length + ' sprites, want ' + want.length;
+    }
+    // A skin with only a remap keeps the sprite of the kind; a kind with no skin is untouched.
+    const tin = scenes({ hoppet: { remap: 'scratchtin' } });
+    if (named(tin, 'en_hoppet').length !== 1 || named(tin, 'en_hoppet')[0].remap !== 'scratchtin') return where + ': the hoppet under a remap skin: ' + JSON.stringify(named(tin, 'en_hoppet'));
+    if (named(tin, 'en_dawdle')[0].remap !== null) return where + ': the remap reached another kind';
+    // The Digby above ground: its own skin wins over the level's, and the mound stays the Digby's.
+    const up = function (s) {
+      const d = s.entities.filter(function (e) { return e.kind === 'digby'; })[0];
+      if (d) Object.assign(d, { phase: 'up', elev: 14, y: TG.C.GROUND_Y - 14, t: TG.C.DIGBY_POP_T + 0.1, skin: 'x_baronet' });
+    };
+    const own = scenes({ digby: { sprite: 'x_mole', remap: 'scratchtin' } }, up);
+    const baronet = named(own, 'x_baronet');
+    if (baronet.length !== 1 || !baronet[0].clipped || baronet[0].frame !== 'up') return where + ': the entity\'s own skin: ' + JSON.stringify(baronet);
+    if (baronet[0].remap !== null) return where + ': the remap of the level\'s skin was put on an entity with its own skin';
+    if (named(own, 'x_mole').length || named(own, 'en_digby').length) return where + ': the level\'s skin or en_digby drawn beside the entity\'s own';
+    if (!named(own, 'en_mound').length) return where + ': no mound under the skinned Digby';
+    const level = scenes({ digby: { sprite: 'x_mole' } }, function (s) { up(s); s.entities.forEach(function (e) { delete e.skin; }); });
+    if (named(level, 'x_mole').length !== 1 || named(level, 'en_digby').length) return where + ': the level\'s skin for the Digby';
+    // Underground the Digby is its mound, which no skin replaces.
+    if (!named(skinned, 'en_mound').length || named(scenes({ digby: { sprite: 'x_mole' } }), 'x_mole').length) return where + ': the mound of a Digby underground was skinned';
+    // A kind that is not in KINDS is drawn as en_<kind>, as before.
+    const other = scenes(null, function (s) { if (s.entities[1]) s.entities[1].kind = 'newt'; });
+    if (!named(other, 'en_newt').length) return where + ': an unknown kind is not drawn as en_newt';
+    if (env.errors.length) return where + ': ' + env.errors[0];
+  }
+});
+
+check('the remap of a skin is applied under the white flash of a correct key, and recolours the sprite', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  TG.Remaps.scratchtin = { 14: 16, 15: 18, 4: 3 };        // GRASS to BRONZE, LIME to GOLD, WHITE to SILVER
+  const s = handState(TG, 'playing');
+  withGame(TG, s);
+  const frog = s.entities[2];
+  if (frog.kind !== 'hoppet') return 'hand state: ' + frog.kind;
+  s.entities = [frog];
+  s.level.hazards = [];
+  s.items = [];
+  const box = function () {
+    TG.Render.draw(s);
+    const rgba = env.canvas.toRGBA();
+    const set = {};
+    const x0 = Math.floor(frog.x - s.camera.x) - 8, y0 = Math.floor(frog.y) - 16;
+    for (let y = y0; y < y0 + 16; y++) for (let x = x0; x < x0 + 16; x++) set[pixel(rgba, 384, x, y)] = true;
+    return set;
+  };
+  const green = box();
+  if (!green[pal[14]]) return 'the frog has no GRASS pixel to remap';
+  s.level.theme.skins = { hoppet: { remap: 'scratchtin' } };
+  const tin = box();
+  if (tin[pal[14]] || !tin[pal[16]]) return 'under the remap the frog is not BRONZE for GRASS';
+  // A correct key: the sprite is all WHITE for 2 frames, whatever the skin's remap says.
+  TG.Events.emit('type:hit', { target: frog, id: frog.id, kind: 'hoppet', ch: 'f', index: 0, length: 4, complete: false, x: frog.x, y: frog.y });
+  const calls = drawCalls(TG, function () { TG.Render.draw(s); });
+  const hit = named(calls, 'en_hoppet');
+  if (hit.length !== 1 || hit[0].remap !== 'white') return 'during the flash: ' + JSON.stringify(hit);
+  for (let i = 0; i < 4; i++) TG.Effects.update(1 / 60);
+  const after = named(drawCalls(TG, function () { TG.Render.draw(s); }), 'en_hoppet');
+  if (after.length !== 1 || after[0].remap !== 'scratchtin') return 'after the flash: ' + JSON.stringify(after);
+  if (env.warnings.length) return 'warning: ' + env.warnings[0];
+});
+
+check('a correct key turns the mound of a Digby underground and the power icon of a crate white; the remap of a skin reaches neither', function () {
+  const TIN = { 14: 16, 15: 18, 4: 3 };
+  for (const skins of [null, { digby: { remap: 'scratchtin' }, crate: { remap: 'scratchtin' } }]) {
+    const env = loadEnv();
+    const TG = env.TG;
+    TG.Remaps.scratchtin = TIN;
+    const where = skins ? 'with remap skins for the Digby and the crate' : 'without skins';
+    const s = handState(TG, 'playing');
+    withGame(TG, s);
+    if (skins) s.level.theme.skins = skins;
+    const mole = s.entities.filter(function (e) { return e.kind === 'digby'; })[0];
+    const crate = s.entities.filter(function (e) { return e.kind === 'crate'; })[0];
+    if (mole.phase !== 'mound') return 'hand state: ' + mole.phase;
+    crate.power = 'blast';        // an icon the HUD of the hand-built state does not draw as well
+    // The remaps of the mound, the power icon and the crate itself, each drawn once.
+    const remaps = function () {
+      const calls = drawCalls(TG, function () { TG.Render.draw(s); });
+      return JSON.stringify(['en_mound', 'pw_blast', 'crate_balloon'].map(function (name) {
+        const c = named(calls, name);
+        return c.length === 1 ? c[0].remap : name + ' drawn ' + c.length + ' times';
+      }));
+    };
+    const skin = skins ? 'scratchtin' : null;
+    const still = JSON.stringify([null, null, skin]);
+    if (remaps() !== still) return where + ', before the key: ' + remaps() + ', want ' + still;
+    for (const e of [mole, crate]) {
+      TG.Events.emit('type:hit', { target: e, id: e.id, kind: e.kind, ch: e.word.charAt(0), index: 0, length: e.word.length, complete: false, x: e.x, y: e.y });
+    }
+    const white = JSON.stringify(['white', 'white', 'white']);
+    if (remaps() !== white) return where + ', on the key: ' + remaps() + ', want ' + white;
+    for (let i = 0; i < 4; i++) TG.Effects.update(1 / 60);
+    if (remaps() !== still) return where + ', after the flash: ' + remaps() + ', want ' + still;
+    if (env.warnings.length || env.errors.length) return where + ': console: ' + env.warnings.concat(env.errors)[0];
+  }
+});
+
+check('the remap of a skin for the shockwave or the pickaxe is put on that attack\'s sprite; without a skin it has none', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  TG.Remaps.scratchtin = { 14: 16, 15: 18, 4: 3 };
+  const remaps = function (skins) {
+    const s = handState(TG, 'boss');
+    if (skins) s.level.theme.skins = skins;
+    const calls = drawCalls(TG, function () { TG.Render.draw(s); });
+    return JSON.stringify(['pr_shock', 'pr_pickaxe'].map(function (name) {
+      const c = named(calls, name);
+      return c.length === 1 ? c[0].remap : name + ' drawn ' + c.length + ' times';
+    }));
+  };
+  const cases = [[null, [null, null]], [{ shock: { remap: 'scratchtin' } }, ['scratchtin', null]], [{ pick: { remap: 'scratchtin' } }, [null, 'scratchtin']],
+    [{ shock: { remap: 'scratchtin' }, pick: { remap: 'scratchtin' } }, ['scratchtin', 'scratchtin']]];
+  for (const c of cases) {
+    if (remaps(c[0]) !== JSON.stringify(c[1])) return 'skins ' + JSON.stringify(c[0]) + ': ' + remaps(c[0]) + ', want ' + JSON.stringify(c[1]);
+  }
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+// The target bot of the pixel regression (test/test-level1-pixels.js) types every Digby while it is under
+// its mound, so no reference frame shows one above ground. Its place is checked here.
+check('a Digby above ground is drawn at its elev, cut at the ground line, with its mound in front: the peek frame just after the pop, then the up frame', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const C = TG.C;
+  const G = C.GROUND_Y;
+  const ctx = env.canvas.getContext('2d');
+  // The Digby's part of a frame: the 9-argument drawImage of its cached sprite frame (16 x 16, anchored
+  // at the middle of its bottom edge), and the mound.
+  const drawn = function (elev, t) {
+    const s = handState(TG, 'playing');
+    const mole = s.entities.filter(function (e) { return e.kind === 'digby'; })[0];
+    Object.assign(mole, { phase: 'up', elev: elev, y: G - elev, t: t, harmful: true, onScreen: true });
+    const sources = { peek: TG.Gfx.get('en_digby', 'peek', { flipX: false, remap: null }), up: TG.Gfx.get('en_digby', 'up', { flipX: false, remap: null }) };
+    const parts = [];
+    const drawImage = ctx.drawImage;
+    ctx.drawImage = function (cv) {
+      for (const frame of ['peek', 'up']) if (cv === sources[frame]) parts.push([frame].concat(Array.prototype.slice.call(arguments, 1)));
+      return drawImage.apply(ctx, arguments);
+    };
+    let calls;
+    try { calls = drawCalls(TG, function () { TG.Render.draw(s); }); } finally { ctx.drawImage = drawImage; }
+    const x = Math.floor(mole.x - s.camera.x);
+    const order = calls.map(function (c) { return c.name; });
+    return { parts: JSON.stringify(parts), x: x, mound: JSON.stringify(named(calls, 'en_mound').map(function (c) { return [c.frame, c.x, c.y, c.remap]; })),
+      moundAfter: order.lastIndexOf('en_mound') > order.lastIndexOf('en_digby') };
+  };
+  const pop = C.DIGBY_POP_T;
+  // [elev, t, frame, rows drawn]: half out just after the pop, all out later, still under the ground.
+  const cases = [[-6, pop + 0.02, 'peek', 10], [14, pop + 0.1, 'up', 16], [0, pop + 0.06, 'up', 16], [-16, pop, null, 0]];
+  for (const c of cases) {
+    const d = drawn(c[0], c[1]);
+    const want = c[2] === null ? '[]' : JSON.stringify([[c[2], 0, 0, 16, c[3], d.x - 8, G - c[0] - 16, 16, c[3]]]);
+    if (d.parts !== want) return 'elev ' + c[0] + ', t ' + c[1].toFixed(2) + ': ' + d.parts + ', want ' + want;
+    if (d.mound !== JSON.stringify([[0, d.x, G, null]])) return 'elev ' + c[0] + ': the mound ' + d.mound;
+    if (!d.moundAfter) return 'elev ' + c[0] + ': the mound is drawn before the Digby';
+  }
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('the steady chevron of an attack follows its action: SHOCK_WIN for jump, PICK_WIN for duck', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const C = TG.C;
+  // An eta inside PICK_WIN and outside SHOCK_WIN, drawn in the off half of the 2 Hz blink, so that the
+  // chevron shows only when its window is open.
+  const eta = (C.SHOCK_WIN[1] + C.PICK_WIN[1]) / 2;
+  if (!(eta > C.SHOCK_WIN[1] && eta < C.PICK_WIN[1])) return 'the two windows no longer differ at their far ends';
+  const chevrons = function (kind, action) {
+    const s = handState(TG, 'boss');
+    s.boss.word = null;
+    s.time = 12.75;
+    const a = attack(TG, s, kind, 100);
+    a.action = action;
+    a.eta = eta;
+    s.entities = [a];
+    const dy = kind === 'pick' ? 28 : 20;
+    let n = 0;
+    const fn = TG.Font.drawGlyph;
+    TG.Font.drawGlyph = function (ctx, ch, x, y, color) {
+      if (color === 18 && y === Math.floor(a.y) - dy) n++;
+      return fn.apply(TG.Font, arguments);
+    };
+    try { TG.Render.draw(s); } finally { TG.Font.drawGlyph = fn; }
+    return n;
+  };
+  if (chevrons('shock', 'jump') !== 0) return 'a jump attack outside SHOCK_WIN has a steady chevron';
+  if (chevrons('pick', 'duck') !== 1) return 'a duck attack inside PICK_WIN has no steady chevron';
+  // The kind does not decide: the same two sprites with the actions exchanged.
+  if (chevrons('shock', 'duck') !== 1) return 'a shock that is ducked does not use PICK_WIN';
+  if (chevrons('pick', 'jump') !== 0) return 'a pick that is jumped does not use SHOCK_WIN';
+});
+
+// A scratch backdrop with one arena palette in the form of LEVEL2 Appendix C: PLUM, a MAROON floor band
+// dithered PLUM, the two later phases as `phases`, DEEP_BLUE for the Hourglass.
+function scratchArena(TG, palette) {
+  TG.Backdrops.scratch = { palettes: { hall: palette }, layers: [] };
+  const s = handState(TG, 'boss');
+  s.level.theme.backdrop = 'scratch';
+  s.level.arena.palette = 'hall';
+  s.boss.word = null;
+  s.entities = [];
+  s.power.slowT = 0;
+  return s;
+}
+
+check('the sky of each boss phase comes from the palette\'s phases: the first band only, and the Hourglass sky over it', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const hall = { sky: [{ y: 0, h: 150, color: 28 }, { y: 150, h: 34, color: 24, dither: 28 }], remap: null, slowSky: 5,
+    phases: { 2: { color: 28, dither: 24 }, 3: { color: 0, dither: 28 } } };
+  const s = scratchArena(TG, hall);
+  // Two neighbouring pixels of a band: [the dither's pixel (x + y even), the band's own].
+  const pair = function (y) {
+    TG.Render.draw(s);
+    const rgba = env.canvas.toRGBA();
+    return [pal.indexOf(pixel(rgba, 384, 2, y)), pal.indexOf(pixel(rgba, 384, 3, y))].join(',');
+  };
+  const want = { 1: '28,28', 2: '24,28', 3: '28,0' };
+  for (const ph of [1, 2, 3]) {
+    s.boss.phase = ph;
+    if (pair(60) !== want[ph]) return 'phase ' + ph + ': the band at y 60 is ' + pair(60) + ', want ' + want[ph];
+    if (pair(160) !== '28,24') return 'phase ' + ph + ': the floor band changed to ' + pair(160);
+  }
+  s.power.slowT = 3;
+  if (pair(60) !== '5,5') return 'the Hourglass sky during phase 3: ' + pair(60);
+  s.power.slowT = 0;
+  // A phase the palette does not list keeps the band.
+  hall.phases = { 3: { color: 0, dither: 28 } };
+  s.boss.phase = 2;
+  if (pair(60) !== '28,28') return 'phase 2 without an entry: ' + pair(60);
+  // An entry may give the colour alone: the band then keeps its own dither (none here).
+  hall.phases = { 2: { color: 24 } };
+  if (pair(60) !== '24,24') return 'an entry with a colour and no dither: ' + pair(60);
+  if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
+});
+
+check('without phases the dusk rule stands: DEEP_BLUE, DEEP_BLUE with a PLUM dither, INK with a PLUM dither; another palette keeps its band', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  if (TG.Backdrops.meadow.palettes.dusk.phases) return 'the meadow\'s dusk palette has phases, so the fallback is not tested here';
+  const colors = function (s, y) {
+    TG.Render.draw(s);
+    const rgba = env.canvas.toRGBA();
+    const even = {}, odd = {};
+    for (let x = 0; x < 24; x++) ((x + y) % 2 === 0 ? even : odd)[pal.indexOf(pixel(rgba, 384, x, y))] = true;
+    return Object.keys(even).join('/') + ',' + Object.keys(odd).join('/');
+  };
+  const want = { 1: '5,5', 2: '28,5', 3: '28,0' };
+  for (const ph of [1, 2, 3]) {
+    const s = handState(TG, 'boss');
+    s.boss.word = null;
+    s.entities = [];
+    s.power.slowT = 0;
+    s.boss.phase = ph;
+    if (colors(s, 26) !== want[ph]) return 'dusk, phase ' + ph + ': ' + colors(s, 26) + ', want ' + want[ph];
+  }
+  // A palette of another name with no phases: nothing changes with the phase.
+  const t = scratchArena(TG, { sky: [{ y: 0, h: 184, color: 28 }], remap: null, slowSky: 5 });
+  for (const ph of [1, 2, 3]) {
+    t.boss.phase = ph;
+    if (colors(t, 26) !== '28,28') return 'a palette without phases, phase ' + ph + ': ' + colors(t, 26);
+  }
+  // A palette named dusk that has phases uses them.
+  TG.Backdrops.scratch.palettes.dusk = { sky: [{ y: 0, h: 184, color: 5 }], remap: null, slowSky: 5, phases: { 2: { color: 9, dither: 11 } } };
+  t.level.arena.palette = 'dusk';
+  t.boss.phase = 2;
+  if (colors(t, 26) !== '11,9') return 'a dusk palette with its own phases: ' + colors(t, 26);
+  t.boss.phase = 3;
+  if (colors(t, 26) !== '5,5') return 'a dusk palette with its own phases, phase 3 not listed: ' + colors(t, 26);
+});
+
+check('drawSky draws the palette\'s starSprite and moonSprite, the moon with the frame of its fps; bg_star and bg_moon without them', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const hall = { sky: [{ y: 0, h: 184, color: 28 }], remap: 'dusk', slowSky: 5, stars: [{ x: 22, y: 72 }, { x: 58, y: 112 }, { x: 118, y: 64 }],
+    moon: { x: 328, y: 84 } };
+  const s = scratchArena(TG, hall);
+  const sky = function (time) {
+    s.time = time;
+    return drawCalls(TG, function () { TG.Render.draw(s); }).filter(function (c) { return !c.clipped && c.y < 150 && /^(bg_|tile_water$)/.test(c.name); });
+  };
+  let calls = sky(12.5);
+  if (JSON.stringify(calls.map(function (c) { return [c.name, c.frame, c.x, c.y, c.remap]; })) !==
+      JSON.stringify([['bg_star', 1, 22, 72, null], ['bg_star', 0, 58, 112, null], ['bg_star', 1, 118, 64, null], ['bg_moon', 0, 328, 84, null]])) {
+    return 'without the keys: ' + JSON.stringify(calls);
+  }
+  // tile_water stands in for a moon with two frames at 3 fps, as bg_clockface has two at 1 fps.
+  hall.starSprite = 'bg_cloud';
+  hall.moonSprite = 'tile_water';
+  calls = sky(12.5);
+  if (JSON.stringify(calls.map(function (c) { return [c.name, c.frame, c.x, c.y, c.remap]; })) !==
+      JSON.stringify([['bg_cloud', 1, 22, 72, null], ['bg_cloud', 0, 58, 112, null], ['bg_cloud', 1, 118, 64, null], ['tile_water', 1, 328, 84, null]])) {
+    return 'with the keys at 12.5 s: ' + JSON.stringify(calls);
+  }
+  calls = sky(12.7);
+  if (named(calls, 'tile_water')[0].frame !== 0) return 'the moon sprite does not follow its fps: frame ' + named(calls, 'tile_water')[0].frame + ' at 12.7 s';
+});
+
+check('a boss of a kind with no parts of its own is drawn with the Baron\'s: in the fight, in the intro gesture and in the defeat', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const parts = function (kind, screen, edit) {
+    const s = handState(TG, screen);
+    if (kind === undefined) delete s.boss.kind; else s.boss.kind = kind;
+    if (edit) edit(s);
+    return JSON.stringify(drawCalls(TG, function () { TG.Render.draw(s); }).filter(function (c) { return /^(boss_|en_digby$)/.test(c.name); }));
+  };
+  const intro = function (s) { s.boss.state = 'intro'; s.boss.introTime = 4; s.boss.stateT = 2.0; s.boss.rise = 0; };
+  const cases = [['boss', null, ['boss_body', 'boss_arm', 'boss_head', 'boss_mound']], ['bossIntro', intro, ['boss_monocle']],
+    ['levelComplete', function (s) { s.screenT = 1.0; }, ['en_digby', 'boss_mound']],
+    ['levelComplete', function (s) { s.screenT = 2.0; }, ['en_digby', 'boss_mound']]];
+  for (const c of cases) {
+    const baron = parts('baron', c[0], c[1]);
+    for (const name of c[2]) if (baron.indexOf('"' + name + '"') === -1) return c[0] + ': the Baron draws no ' + name;
+    for (const kind of ['nobody', undefined]) {
+      if (parts(kind, c[0], c[1]) !== baron) return c[0] + ': a boss of kind ' + kind + ' is not drawn as the Baron';
+    }
+  }
+});
+
+check('boss:hit and boss:defeat throw the Baron\'s monocle and helmet for the Baron, for a boss of a kind with no effects of its own, and without a game', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const thrown = function (kind) {
+    const s = handState(TG, 'boss');
+    if (kind === null) delete TG.Game; else { s.boss.kind = kind; withGame(TG, s); }
+    const p = payloads(TG, s);
+    TG.Effects.reset();
+    TG.Events.emit('boss:hit', p['boss:hit']);
+    TG.Events.emit('boss:defeat', p['boss:defeat']);
+    return TG.Effects._list().filter(function (f) { return f.type === 'part' && /^boss_/.test(String(f.kind)); })
+      .map(function (f) { return f.kind; }).join(',');
+  };
+  for (const kind of ['baron', 'nobody', null]) {
+    if (thrown(kind) !== 'boss_monocle,boss_helmet') return 'kind ' + kind + ': ' + thrown(kind);
+  }
+});
+
+check('hazard:hit bursts in the colours of theme.hazardFx for the hazard\'s kind, and in Level 1\'s leaf colours without it', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const IMPACT = [4, 18, 25];                              // the hit star's own burst: WHITE, GOLD, RED
+  const burst = function (kind, hazardFx) {
+    const s = handState(TG, 'playing');
+    if (hazardFx) s.level.theme.hazardFx = hazardFx;
+    withGame(TG, s);
+    TG.Effects.reset();
+    TG.Events.emit('hazard:hit', { id: 'h2', kind: kind, x: s.player.x, y: s.player.y });
+    TG.Effects.update(1 / 60);
+    return particleColors(TG, env, s).filter(function (c) { return IMPACT.indexOf(c) === -1; });
+  };
+  const only = function (colors, allowed) { return colors.length === 8 && colors.every(function (c) { return allowed.indexOf(c) !== -1; }); };
+  // Level 1, no key: GRASS, CORAL, LIME for the bramble; GRASS, LIME, SOIL for the others.
+  let c = burst('bramble', null);
+  if (!only(c, [14, 26, 15])) return 'bramble without hazardFx: ' + c.join(' ');
+  for (const kind of ['branch', 'beehive', 'arch']) {
+    c = burst(kind, null);
+    if (!only(c, [14, 15, 21])) return kind + ' without hazardFx: ' + c.join(' ');
+  }
+  // From the data, per kind. The colours are scratch ones that neither Level 1 nor the hit star uses.
+  const fx = { bramble: [11, 9, 30], branch: [16, 2, 1], beehive: [19, 16, 3], arch: [2, 3, 1] };
+  for (const kind of Object.keys(fx)) {
+    c = burst(kind, fx);
+    if (!only(c, fx[kind])) return kind + ' with hazardFx ' + fx[kind].join(' ') + ': ' + c.join(' ');
+  }
+  // A kind the data leaves out keeps Level 1's colours.
+  c = burst('branch', { bramble: [11, 9, 30] });
+  if (!only(c, [14, 15, 21])) return 'branch with hazardFx for the bramble only: ' + c.join(' ');
+  c = burst('bramble', { bramble: [] });
+  if (!only(c, [14, 26, 15])) return 'bramble with an empty list: ' + c.join(' ');
+  if (env.errors.length) return env.errors[0];
+});
+
+check('the boss bar label is level.boss.label at x 272 - 8 per letter with its INK box from 4 px before it to x 380: RATCHET at 216, BARON at 232', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const bar = function (label) {
+    const s = handState(TG, 'boss');
+    if (label !== undefined) s.level.boss.label = label;
+    const texts = [], boxes = [];
+    const fdraw = TG.Font.draw, rect = TG.Gfx.rect;
+    TG.Font.draw = function (ctx, str, x, y, o) {
+      if (y === 23) texts.push([String(str), x, o && o.color]);
+      return fdraw.apply(TG.Font, arguments);
+    };
+    TG.Gfx.rect = function (ctx, x, y, w, h, c) {
+      if (y === 20 && h === 11) boxes.push([x, y, w, h, c]);
+      return rect.apply(TG.Gfx, arguments);
+    };
+    try { TG.Render.draw(s); } finally { TG.Font.draw = fdraw; TG.Gfx.rect = rect; }
+    return { texts: JSON.stringify(texts), boxes: JSON.stringify(boxes), rgba: env.canvas.toRGBA() };
+  };
+  const cases = [[undefined, 'BARON', 232, 228, 152], ['BARON', 'BARON', 232, 228, 152], ['RATCHET', 'RATCHET', 216, 212, 168], ['', 'BARON', 232, 228, 152]];
+  for (const c of cases) {
+    const b = bar(c[0]);
+    if (b.texts !== JSON.stringify([[c[1], c[2], 4]])) return 'label ' + JSON.stringify(c[0]) + ': text ' + b.texts;
+    if (b.boxes !== JSON.stringify([[c[3], 20, c[4], 11, 0]])) return 'label ' + JSON.stringify(c[0]) + ': box ' + b.boxes;
+    // On the canvas: the box is INK from its first column to x 379 on the row under the bar, and the
+    // label has WHITE pixels inside its own columns only.
+    if (pixel(b.rgba, 384, c[3], 30) !== pal[0] || pixel(b.rgba, 384, 379, 30) !== pal[0]) return 'label ' + JSON.stringify(c[0]) + ': the box is not INK at its ends';
+    let first = -1, last = -1;
+    for (let x = c[3]; x < 280; x++) for (let y = 23; y < 30; y++) if (pixel(b.rgba, 384, x, y) === pal[4]) { if (first < 0) first = x; last = x; }
+    if (first < c[2] || first > c[2] + 1 || last > c[2] + 8 * c[1].length - 1 || last < c[2] + 8 * c[1].length - 3) {
+      return 'label ' + JSON.stringify(c[0]) + ': WHITE from x ' + first + ' to ' + last;
+    }
+  }
+  // The bar itself does not move with the label.
+  const b = bar('RATCHET');
+  if (pixel(b.rgba, 384, 281, 26) !== pal[25] || pixel(b.rgba, 384, 370, 26) !== pal[1]) return 'the bar moved';
+});
+
+check('the tips for the boss\'s attacks come from level.boss.tips and the arch tip\'s noun from theme.hazardNames; Level 1\'s lines without them', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const ctx = env.canvas.getContext('2d');
+  const tipAfter = function (edit, name, payload) {
+    const s = handState(TG, 'boss');
+    if (edit) edit(s.level);
+    TG.Hud.reset();
+    TG.Events.emit(name, payload);
+    const seen = [];
+    const draw = TG.Font.draw;
+    TG.Font.draw = function (c, str, x, y) {
+      if (y === 186) seen.push(String(str));
+      return draw.apply(TG.Font, arguments);
+    };
+    try { TG.Hud.draw(ctx, s); } finally { TG.Font.draw = draw; }
+    return seen.join('');
+  };
+  const lost = function (cause) { return { lives: 3, cause: cause }; };
+  const shock = lost({ type: 'attack', kind: 'shock', id: 7, from: 'right' }), pick = lost({ type: 'attack', kind: 'pick', id: 8, from: 'right' });
+  const archLost = lost({ type: 'hazard', kind: 'arch', id: 'h5', from: null }), archHit = { id: 'h5', kind: 'arch', x: 0, y: 0 };
+  const ratchet = function (level) {
+    level.boss.tips = { shock: 'JUMP THE GEAR', pick: 'DUCK THE PENDULUM' };
+    level.theme.hazardNames = { arch: 'TUNNEL' };
+  };
+  const cases = [
+    [null, 'life:lost', shock, 'TIP: JUMP THE SHOCKWAVE'], [null, 'life:lost', pick, 'TIP: DUCK THE PICKAXE'],
+    [null, 'life:lost', archLost, 'TIP: HOLD ENTER UNDER THE ARCH'], [null, 'hazard:hit', archHit, 'TIP: HOLD ENTER UNDER THE ARCH'],
+    [ratchet, 'life:lost', shock, 'TIP: JUMP THE GEAR'], [ratchet, 'life:lost', pick, 'TIP: DUCK THE PENDULUM'],
+    [ratchet, 'life:lost', archLost, 'TIP: HOLD ENTER UNDER THE TUNNEL'], [ratchet, 'hazard:hit', archHit, 'TIP: HOLD ENTER UNDER THE TUNNEL'],
+    // The other tips are not the level's to change, and one tip of the two may be given alone.
+    [ratchet, 'life:lost', lost({ type: 'threat', kind: 'hoppet', id: 5, from: 'right' }), 'TIP: TYPE THE NEAREST WORD FIRST'],
+    [ratchet, 'life:lost', lost({ type: 'hazard', kind: 'branch', id: 'h3', from: null }), 'TIP: ENTER TO DUCK'],
+    [function (level) { level.boss.tips = { pick: 'DUCK THE PENDULUM' }; }, 'life:lost', shock, 'TIP: JUMP THE SHOCKWAVE'],
+    [function (level) { level.boss = null; level.theme.hazardNames = {}; }, 'life:lost', pick, 'TIP: DUCK THE PICKAXE'],
+    [function (level) { level.boss = null; level.theme.hazardNames = {}; }, 'hazard:hit', archHit, 'TIP: HOLD ENTER UNDER THE ARCH']
+  ];
+  for (let i = 0; i < cases.length; i++) {
+    const c = cases[i];
+    const got = tipAfter(c[0], c[1], c[2]);
+    if (got !== c[3]) return 'case ' + i + ': "' + got + '", want "' + c[3] + '"';
+  }
+});
+
+// The letters of the speech plate's line that TG.Hud.draw writes for the state, or -1 with no plate.
+function speechShown(TG, env, s) {
+  let text = null;
+  const draw = TG.Font.draw;
+  TG.Font.draw = function (c, str, x, y) {
+    if (y === 43) text = String(str);
+    return draw.apply(TG.Font, arguments);
+  };
+  try { TG.Hud.draw(env.canvas.getContext('2d'), s); } finally { TG.Font.draw = draw; }
+  return text === null ? -1 : text.length;
+}
+
+const BARON_LINE = 'MY MEADOW! MY WORDS!', RATCHET_LINE = 'TICK TOCK! WORDS INTO COGS!';      // Level 1's, and LEVEL2 10.6's
+
+check('the speech plate types 30 letters a second, and faster when the line would not be whole before the intro ends: both of Level 1\'s intros stay at 30', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const C = TG.C;
+  const shown = function (speech, introTime, since) {
+    const s = handState(TG, 'bossIntro', { screenT: introTime / 2 + since });
+    s.level.boss.speech = speech;
+    s.boss.introTime = introTime;
+    return speechShown(TG, env, s);
+  };
+  if (BARON_LINE.length !== 20 || RATCHET_LINE.length !== 27) return 'the lines changed length';
+  for (const intro of [C.BOSS_INTRO_TIME, C.BOSS_INTRO_SHORT]) {
+    for (const since of [0, 0.125, 0.25, 0.5, 0.625, 0.75]) {       // eighths, so that the sums are exact
+      const want = Math.min(20, Math.floor(since * 30));
+      if (shown(BARON_LINE, intro, since) !== want) return 'Level 1, intro ' + intro + ' s, ' + since + ' s in: ' + shown(BARON_LINE, intro, since) + ' letters, want ' + want;
+    }
+  }
+  // 27 letters: the 4 s intro has 2 s for them, so 30 a second. The 1.5 s intro has 0.75 s, so the line
+  // and two letters more go into it: 29 / 0.75 = 38.67 a second.
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5) !== 15) return '27 letters in the long intro: ' + shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5);
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0) !== 0) return '27 letters in the short intro at its half: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0);
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25) !== 9) return '27 letters in the short intro after 0.25 s: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25);
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.5) !== 19) return '27 letters in the short intro after 0.5 s: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.5);
+  // The last frame of an intro is drawn one step before its end: the step that reaches the end changes
+  // the screen. Every line the screen holds (8 px a letter and 5 px of plate: 47 letters) is whole on it.
+  for (const intro of [C.BOSS_INTRO_TIME, C.BOSS_INTRO_SHORT]) {
+    for (let n = 1; n <= 47; n++) {
+      const got = shown('TICK TOCK! '.repeat(5).slice(0, n), intro, intro / 2 - C.DT);
+      if (got !== n) return 'a line of ' + n + ' letters on the last frame of the ' + intro + ' s intro: ' + got + ' letters';
+    }
+  }
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, -0.1) !== -1) return 'a plate before the half';
+});
+
+if (!SIM_PRESENT) {
+  skip('in the game, the last frame of the boss intro shows the whole speech line', 'the simulation files are not all present');
+} else {
+  check('in the game, the last frame of the boss intro shows the whole speech line, in the 4 s intro and in the 1.5 s intro after a continue: 20 letters and 27', function () {
+    for (const speech of [BARON_LINE, RATCHET_LINE]) {
+      const env = loadEnv({ sim: true });
+      const TG = env.TG;
+      const C = TG.C;
+      // Level 1 with this line, started a few steps before the arena flag.
+      const data = JSON.parse(JSON.stringify(TG.Levels[1]));
+      data.boss.speech = speech;
+      TG.Levels.scratch = data;
+      TG.Input.clear();
+      TG.Game.init();
+      const s0 = TG.Game.newRun({ difficulty: 'medium', seed: 1, levelId: 'scratch', adaptive: false, assist: 1, tutorial: false });
+      s0.player.x = s0.level.arenaX - 8;
+      s0.camera.x = Math.max(0, s0.player.x - C.HERO_SCREEN_X);
+      // Steps to the end of the next boss intro. Returns the letters shown on each of its frames.
+      const intro = function () {
+        const shown = [];
+        for (let i = 0; i < 2000; i++) {
+          const was = TG.Game.state.screen;
+          TG.Game.step(C.DT);
+          const s = TG.Game.state;
+          TG.Effects.update(C.DT);
+          TG.Hud.update(C.DT, s);
+          if (s.screen === 'bossIntro') shown.push(speechShown(TG, env, s));
+          else if (was === 'bossIntro') return shown;
+        }
+        return shown;
+      };
+      const long = intro();
+      if (TG.Game.state.screen !== 'boss' || !TG.Game.pause() || !TG.Game.continueRun()) return 'the run did not reach the fight and continue from it';
+      if (TG.Game.state.boss.introTime !== C.BOSS_INTRO_SHORT) return 'the intro after the continue is ' + TG.Game.state.boss.introTime + ' s';
+      const short = intro();
+      for (const frames of [['4 s', long, C.BOSS_INTRO_TIME], ['1.5 s', short, C.BOSS_INTRO_SHORT]]) {
+        const shown = frames[1];
+        if (Math.abs(shown.length - frames[2] / C.DT) > 1) return frames[0] + ' intro: ' + shown.length + ' frames';
+        if (shown[shown.length - 1] !== speech.length) {
+          return speech.length + ' letters, ' + frames[0] + ' intro: the last frame shows ' + shown[shown.length - 1];
+        }
+        // Letter by letter: no plate in the first half, an empty one at the half, never a letter fewer.
+        const first = shown.findIndex(function (n) { return n >= 0; });
+        if (Math.abs(first - shown.length / 2) > 1 || shown[first] > 1) return frames[0] + ' intro: the plate starts at frame ' + first + ' with ' + shown[first] + ' letters';
+        for (let i = first + 1; i < shown.length; i++) if (shown[i] < shown[i - 1]) return frames[0] + ' intro: the line shrinks at frame ' + i;
+      }
+      if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 
 console.log('SUMMARY passed=' + passed + ' failed=' + failed + ' skipped=' + skipped);
 process.exit(failed > 0 ? 1 : 0);

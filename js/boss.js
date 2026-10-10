@@ -310,6 +310,9 @@
     var spec = entry === 'minion'
       ? { kind: 'digby', section: 3 }
       : { kind: 'rock', from: entry === 'rockhigh' ? 'above' : 'right', section: 3 };
+    // A level may dress the minion in a sprite of its own (level.boss.minionSkin, LEVEL2 4.4 and 10.6).
+    var minionSkin = state.level && state.level.boss ? state.level.boss.minionSkin : null;
+    if (entry === 'minion' && minionSkin) spec.skin = minionSkin;
     var e = TG.Entities.spawn(state, spec);
     if (!e) {
       boss.retryT = C.SPAWN_RETRY;

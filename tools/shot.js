@@ -4,7 +4,7 @@
 // the software canvas, calls TG.Main.tick (or the same steps when js/main.js is absent) and
 // TG.Render.draw on every simulation step, and writes the frame at the chosen moment as a PNG.
 //
-//   node tools/shot.js --out <file.png> [--difficulty medium] [--seed 1] [--at <seconds>]
+//   node tools/shot.js --out <file.png> [--difficulty medium] [--seed 1] [--level 1] [--at <seconds>]
 //                      [--until checkpoint1|checkpoint2|boss|results] [--frames <n>] [--scale 3]
 //
 // Choosing the moment (the first one that applies; without any, the last frame of the run):
@@ -21,6 +21,7 @@
 //   --cols <n>           frames per row of the sheet
 //   --crop x,y,w,h       write only this part of each frame (internal pixels), e.g. around a creature
 // The run:
+//   --level <n>          the level to play (default 1)
 //   --profile floor|target|fast|exact   bot profile (default target)
 //   --wpm N --accuracy A --react R      custom bot (profile custom)
 //   --adaptive on|off, --no-type, --no-jump, --no-duck
@@ -33,6 +34,10 @@
 //
 // The run is the same as `node test/sim.js`, with its assertions: a console.warn or console.error
 // from any module (for example a missing sprite) stops the run and is printed.
+//
+// As a module:  const { run } = require('./shot');  run(options, { setup, afterDraw })  is the same drawn
+// run with the caller choosing the frames (test/test-level1-pixels.js takes all its frames of a difficulty
+// from one run).
 'use strict';
 
 const path = require('path');
@@ -44,7 +49,7 @@ const SENTINEL = 'tools/shot.js: done';
 
 function usage(message) {
   if (message) console.error('shot: ' + message);
-  console.error('usage: node tools/shot.js --out <file.png> [--difficulty medium] [--seed 1] [--at <seconds>] ' +
+  console.error('usage: node tools/shot.js --out <file.png> [--difficulty medium] [--seed 1] [--level 1] [--at <seconds>] ' +
     '[--until checkpoint1|checkpoint2|boss|results] [--frames <n>] [--scale 3] [--when <expr>] [--event <name>[:<n>]] ' +
     '[--after <s>] [--every <k>] [--sheet] [--cols <n>] [--crop x,y,w,h] [--profile target] [--wpm N --accuracy A --react R] ' +
     '[--adaptive on|off] [--no-type] [--no-jump] [--no-duck] [--reduce-flash] [--key-guide on|off] [--info]');
@@ -53,7 +58,7 @@ function usage(message) {
 
 function parse(argv) {
   const o = {
-    out: null, difficulty: 'medium', seed: 1, at: null, until: null, frames: 1, scale: 3, when: null,
+    out: null, difficulty: 'medium', seed: 1, level: 1, at: null, until: null, frames: 1, scale: 3, when: null,
     event: null, eventN: 1, after: 0, every: 1, sheet: false, profile: null, wpm: undefined, accuracy: undefined,
     react: undefined, adaptive: undefined, noType: false, noJump: false, noDuck: false, reduceFlash: false,
     keyGuide: null, info: false, crop: null, cols: 4, events: null
@@ -73,6 +78,7 @@ function parse(argv) {
       case '--out': o.out = next(); break;
       case '--difficulty': o.difficulty = next(); break;
       case '--seed': o.seed = number(); break;
+      case '--level': o.level = number(); break;
       case '--at': o.at = number(); break;
       case '--until': o.until = next(); break;
       case '--frames': o.frames = Math.max(1, Math.floor(number())); break;
@@ -117,6 +123,7 @@ function parse(argv) {
   }
   if (!o.out) usage('--out is required');
   if (['easy', 'medium', 'hard'].indexOf(o.difficulty) === -1) usage('--difficulty must be easy, medium or hard');
+  if (!Number.isInteger(o.level) || o.level < 1) usage('--level must be a level number');
   if (o.until && ['checkpoint1', 'checkpoint2', 'boss', 'results'].indexOf(o.until) === -1) usage('bad --until');
   return o;
 }
@@ -155,10 +162,16 @@ function describe(TG, s) {
   return lines.join('\n');
 }
 
-function main() {
-  const o = parse(process.argv.slice(2));
-
-  // Every stubs.load made by test/sim.js gets software canvases, and the env is kept.
+// One bot run with every file loaded and the software canvas, drawn on every simulation step.
+// `o` holds the run options of parse(): difficulty, seed, level, profile, wpm, accuracy, react, adaptive,
+// until, noType, noJump, noDuck, reduceFlash and keyGuide. hooks.setup(TG, env), if given, is called once
+// when the presentation modules are ready and before the run starts: the place to listen for events.
+// hooks.afterDraw(TG, env) is called after every drawn frame, with the picture in env.canvas, and the run
+// stops when it returns true. Returns { report, env, stopped }: the report of test/sim.js (undefined when
+// afterDraw stopped the run on the game over screen), the stubs environment, and whether afterDraw
+// stopped the run.
+function run(o, hooks) {
+  // Every stubs.load made by test/sim.js during the run gets software canvases, and the env is kept.
   let env = null;
   const load = stubs.load;
   stubs.load = function (opts) {
@@ -166,46 +179,12 @@ function main() {
     return env;
   };
   const sim = require('../test/sim');
-
-  const frames = [];            // { rgba, time, info }
-  const eventLog = [];          // --events: { f, name, payload }
-  let armed = o.at === null && o.when === null && o.event === null ? null : false;
-  let triggerTime = null;
-  let eventsSeen = 0;
-  let stepsSinceFrame = 0;
-  let whenFn = null;
-  if (o.when) {
-    try {
-      whenFn = new Function('s', 'TG', 'return (' + o.when + ');');
-    } catch (e) {
-      usage('--when does not compile: ' + e.message);
-    }
-  }
-
-  function capture(TG, s) {
-    frames.push({ rgba: env.canvas.toRGBA(), time: s.time, info: o.info ? describe(TG, s) : null });
-    stepsSinceFrame = 0;
-    if (frames.length >= o.frames) throw new Error(SENTINEL);
-  }
+  let stopped = false;
 
   function afterDraw(TG) {
-    const s = TG.Game.state;
-    if (armed === null) return;            // no moment: the last frame is written at the end
-    if (frames.length > 0) {
-      stepsSinceFrame++;
-      if (stepsSinceFrame >= o.every) capture(TG, s);
-      return;
-    }
-    if (triggerTime === null) {
-      let hit = false;
-      if (o.at !== null && s.time >= o.at) hit = true;
-      if (whenFn) {
-        try { hit = hit || !!whenFn(s, TG); } catch (e) { hit = false; }
-      }
-      if (o.event && eventsSeen >= o.eventN) hit = true;
-      if (hit) triggerTime = s.time;
-    }
-    if (triggerTime !== null && s.time >= triggerTime + o.after - 1e-9) capture(TG, s);
+    if (!hooks.afterDraw(TG, env)) return;
+    stopped = true;
+    throw new Error(SENTINEL);
   }
 
   function setup(TG) {
@@ -216,15 +195,7 @@ function main() {
     if (TG.Hud && TG.Hud.init) TG.Hud.init();
     if (TG.Render && TG.Render.init) TG.Render.init(env.canvas);
     if (TG.UI && TG.UI.init) TG.UI.init();
-    if (o.event) TG.Events.on(o.event, function () { eventsSeen++; });
-    if (o.events) {
-      TG.Events.on('*', function (payload, name) {
-        if (frames.length === 0) return;
-        let plain = null;
-        try { plain = JSON.parse(JSON.stringify(payload === undefined ? null : payload)); } catch (e) { plain = null; }
-        eventLog.push({ f: frames.length - 1 + stepsSinceFrame / o.every, name: name, payload: plain });
-      });
-    }
+    if (hooks.setup) hooks.setup(TG, env);
 
     const step = TG.Game.step;
     const useMain = !!(TG.Main && typeof TG.Main.tick === 'function');
@@ -255,19 +226,82 @@ function main() {
   let report;
   try {
     report = sim.runBot({
-      difficulty: o.difficulty, seed: o.seed, profile: o.profile || undefined, wpm: o.wpm, accuracy: o.accuracy,
-      react: o.react, adaptive: o.adaptive, until: o.until || 'results', noType: o.noType, noJump: o.noJump,
-      noDuck: o.noDuck, setup: setup, onGameOver: onGameOver, maxSeconds: 1500
+      difficulty: o.difficulty, seed: o.seed, levelId: o.level, profile: o.profile || undefined, wpm: o.wpm,
+      accuracy: o.accuracy, react: o.react, adaptive: o.adaptive, until: o.until || 'results', noType: o.noType,
+      noJump: o.noJump, noDuck: o.noDuck, setup: setup, onGameOver: onGameOver, maxSeconds: 1500
     });
   } catch (e) {
     if (!(e && e.message === SENTINEL)) throw e;
+  } finally {
+    stubs.load = load;
   }
-  const stopped = report && report.error && report.error.indexOf(SENTINEL) !== -1;
-  if (report && report.error && !stopped && frames.length === 0) {
+  return { report: report, env: env, stopped: stopped };
+}
+
+function main() {
+  const o = parse(process.argv.slice(2));
+
+  const frames = [];            // { rgba, time, info }
+  const eventLog = [];          // --events: { f, name, payload }
+  let armed = o.at === null && o.when === null && o.event === null ? null : false;
+  let triggerTime = null;
+  let eventsSeen = 0;
+  let stepsSinceFrame = 0;
+  let whenFn = null;
+  if (o.when) {
+    try {
+      whenFn = new Function('s', 'TG', 'return (' + o.when + ');');
+    } catch (e) {
+      usage('--when does not compile: ' + e.message);
+    }
+  }
+
+  // Takes the frame; true when it was the last one wanted.
+  function capture(TG, env, s) {
+    frames.push({ rgba: env.canvas.toRGBA(), time: s.time, info: o.info ? describe(TG, s) : null });
+    stepsSinceFrame = 0;
+    return frames.length >= o.frames;
+  }
+
+  function afterDraw(TG, env) {
+    const s = TG.Game.state;
+    if (armed === null) return false;      // no moment: the last frame is written at the end
+    if (frames.length > 0) {
+      stepsSinceFrame++;
+      return stepsSinceFrame >= o.every && capture(TG, env, s);
+    }
+    if (triggerTime === null) {
+      let hit = false;
+      if (o.at !== null && s.time >= o.at) hit = true;
+      if (whenFn) {
+        try { hit = hit || !!whenFn(s, TG); } catch (e) { hit = false; }
+      }
+      if (o.event && eventsSeen >= o.eventN) hit = true;
+      if (hit) triggerTime = s.time;
+    }
+    return triggerTime !== null && s.time >= triggerTime + o.after - 1e-9 && capture(TG, env, s);
+  }
+
+  function setup(TG) {
+    if (o.event) TG.Events.on(o.event, function () { eventsSeen++; });
+    if (o.events) {
+      TG.Events.on('*', function (payload, name) {
+        if (frames.length === 0) return;
+        let plain = null;
+        try { plain = JSON.parse(JSON.stringify(payload === undefined ? null : payload)); } catch (e) { plain = null; }
+        eventLog.push({ f: frames.length - 1 + stepsSinceFrame / o.every, name: name, payload: plain });
+      });
+    }
+  }
+
+  const ran = run(o, { setup: setup, afterDraw: afterDraw });
+  const report = ran.report;
+  const env = ran.env;
+  if (report && report.error && !ran.stopped && frames.length === 0) {
     console.error('shot: the run failed before the moment: ' + report.error);
     process.exit(2);
   }
-  if (report && report.error && !stopped) console.error('shot: note: the run ended with: ' + report.error);
+  if (report && report.error && !ran.stopped) console.error('shot: note: the run ended with: ' + report.error);
 
   if (frames.length === 0) {
     if (armed !== null) {
@@ -323,4 +357,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { parse };
+module.exports = { parse, run };

@@ -181,6 +181,28 @@
     return !!(s && s.power && s.power.quillT > 0);
   }
 
+  // The particle colours of a hazard:hit by hazard kind (LEVEL2 3.4): the level's theme.hazardFx[kind], a
+  // list of palette indices, or Level 1's leaves: with thorns for the bramble, with soil for the others.
+  function hazardColors(kind) {
+    var s = gameState();
+    var fx = s && s.level && s.level.theme ? s.level.theme.hazardFx : null;
+    var colors = fx ? fx[kind] : null;
+    if (Array.isArray(colors) && colors.length > 0) return colors;
+    return kind === 'bramble' ? [GRASS, CORAL, LIME] : [GRASS, LIME, SOIL];
+  }
+
+  // The sprites thrown for each boss by boss.kind (LEVEL2 10.6), with the Baron as the default: what pops
+  // off him on boss:hit and what flies off on boss:defeat.
+  var BOSS_FX = {
+    baron: { hit: 'boss_monocle', defeat: 'boss_helmet' }
+  };
+
+  function bossFx() {
+    var s = gameState();
+    var kind = s && s.boss ? s.boss.kind : null;
+    return hasOwn(BOSS_FX, kind) ? BOSS_FX[kind] : BOSS_FX.baron;
+  }
+
   // --- drawing ---------------------------------------------------------------------------------
 
   var drawOpts = { flipX: false, remap: null, scale: 1, anchor: true };
@@ -874,8 +896,7 @@
     'hazard:hit': function (p) {
       heroPos(heroTmp);
       impact(heroTmp.x, heroTmp.y - 12, false);
-      var colors = p.kind === 'bramble' ? [GRASS, CORAL, LIME] : [GRASS, LIME, SOIL];
-      burst(WORLD, heroTmp.x, heroTmp.y - 16, 8, 90, colors, 300, 0.5);
+      burst(WORLD, heroTmp.x, heroTmp.y - 16, 8, 90, hazardColors(p.kind), 300, 0.5);
     },
 
     'shield:break': function (p) {
@@ -977,7 +998,7 @@
         var C = TG.C;
         var x = num(p.x, camX() + 296), y = num(p.y, C.GROUND_Y - 32);
         // The monocle pops off.
-        var m = spriteParticle('boss_monocle', x - 10, y - 8, -rnd(50, 80), -rnd(170, 210), 520, 1.2);
+        var m = spriteParticle(bossFx().hit, x - 10, y - 8, -rnd(50, 80), -rnd(170, 210), 520, 1.2);
         m.ground = C.GROUND_Y - 4;
         m.bounces = 2;
         m.blinkOut = 0.3;
@@ -1015,7 +1036,7 @@
         var x = num(p.x, camX() + 296), y = num(p.y, C.GROUND_Y);
         delayedFlash.t = 0.5;
         delayedFlash.color = WHITE;
-        var hm = spriteParticle('boss_helmet', x - 2, y - 52, rnd(40, 60), -260, 480, 2.4);
+        var hm = spriteParticle(bossFx().defeat, x - 2, y - 52, rnd(40, 60), -260, 480, 2.4);
         hm.delay = 0.55;
         hm.spin = 0.12;
         hm.ground = C.GROUND_Y - 4;

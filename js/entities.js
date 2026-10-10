@@ -19,7 +19,9 @@
 //   player.fallen        the fall has reached FALL_COMMIT and cost its life; cleared by the rescue
 //   threat.contact       HERO_W / 2 + (w - 2 * INSET) / 2, px
 //   threat.closing       closing speed towards Pip, px/ws (dawdle, hoppet, buzzle, truffle); 0 otherwise
-//   threat.anchorX       boulder only: its fixed world x; 0 otherwise
+//   threat.anchorX       anchored kinds only (KINDS[kind].anchored: the boulder): its fixed world x; 0 otherwise
+//   threat.skin          only when the spawn spec gave one: the sprite drawn in place of the kind's
+//                        (LEVEL2 4.4 and 4.5). Presentation only; nothing in the simulation reads it
 //   threat.entered       the sprite has intersected the playfield (threat:enter is emitted once)
 //   threat.urgentSent    threat:urgent has been emitted
 //   threat.bestTyped     the most letters of the word ever typed; written by TG.Game, which pays letter
@@ -36,9 +38,11 @@
   // 1. Helpers and the KINDS table (CONTRACT 5.4)
   // ---------------------------------------------------------------------------------------------
 
+  // `anchored` marks a kind that stands at a fixed point in the world while Pip runs up to it: its x is
+  // its anchorX and its clock follows from the distance left (DESIGN 4.3 "Boulder", LEVEL2 4.3).
   var KINDS = TG.Util.deepFreeze({
     //         type       from      sprite box   sprite           sound family      letter stall
-    boulder: { type: 'threat', from: 'right',  w: 24, h: 32, sprite: 'en_boulder',    family: 'crunch', stall: false },
+    boulder: { type: 'threat', from: 'right',  w: 24, h: 32, sprite: 'en_boulder',    family: 'crunch', stall: false, anchored: true },
     dawdle:  { type: 'threat', from: 'right',  w: 16, h: 16, sprite: 'en_dawdle',     family: 'twang',  stall: true  },
     hoppet:  { type: 'threat', from: 'right',  w: 16, h: 16, sprite: 'en_hoppet',     family: 'pop',    stall: true  },
     buzzle:  { type: 'threat', from: 'right',  w: 16, h: 16, sprite: 'en_buzzle',     family: 'pop',    stall: true  },
@@ -379,6 +383,8 @@
     var spacing = A > 0 ? latest + config.impactGap : 0;
 
     var budget = Math.max(base, queue, spacing);
+    // The Boulder's own minimum, by name and not for every anchored kind: it keeps a Boulder from
+    // appearing inside the view (DESIGN 4.3; LEVEL2 4.3 "Minimum budget").
     if (kind === 'boulder') budget = Math.max(budget, C.BOULDER_MIN_BUDGET / config.pace);
     var budgetWs = budget * config.pace;
     if (def.type === 'threat') budgetWs = keepClear(state, budgetWs);
@@ -432,7 +438,7 @@
     } else if (kind === 'truffle') {
       closing = Math.max(C.TRUFFLE_MIN_CLOSING, C.TRUFFLE_SPAN / budgetWs);
       holdSpan = C.TRUFFLE_HOLD;
-    } else if (kind === 'boulder') {
+    } else if (def.anchored) {
       anchorX = p.x + contact + C.RUN_SPEED * budgetWs;
     }
 
@@ -481,6 +487,7 @@
       urgentSent: false
     };
     if (isCrate) e.power = spec.power || null;
+    if (spec.skin) e.skin = spec.skin;
 
     state.entities.push(e);
     place(state, e);
@@ -645,7 +652,7 @@
         break;
     }
 
-    e.x = e.kind === 'boulder' ? e.anchorX : p.x + dx;
+    e.x = KINDS[e.kind].anchored ? e.anchorX : p.x + dx;
     e.elev = elev;
     e.y = C.GROUND_Y - elev;
     e.phase = phase;
@@ -662,7 +669,7 @@
     var p = state.player;
     e.animT += wdt;
 
-    if (e.kind === 'boulder') {
+    if (KINDS[e.kind].anchored) {
       // Not a clock: t follows from the distance Pip still has to run.
       e.age = e.budget - (e.anchorX - p.x - e.contact) / C.RUN_SPEED;
     } else {
@@ -972,7 +979,9 @@
     for (i = 0; i < list.length; i++) {
       var e = list[i];
       if (e.dead || e.type !== 'attack' || e.eta < 0) continue;
-      var win = e.kind === 'shock' ? C.SHOCK_WIN : C.PICK_WIN;
+      // By the action and not the kind's name: an attack to jump has the shockwave's window, one to
+      // duck the pickaxe's (LEVEL2 13.1).
+      var win = e.action === 'jump' ? C.SHOCK_WIN : C.PICK_WIN;
       var opensA = Math.max(0, e.eta - win[1]);
       if (opensA < bestOpens) {
         bestOpens = opensA;

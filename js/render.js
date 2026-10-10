@@ -116,20 +116,22 @@
   }
 
   // A sprite drawn only above the screen row clipY (the ground line), from the cached frame with the
-  // 9-argument drawImage. There is no clip() in the canvas subset.
+  // 9-argument drawImage. There is no clip() in the canvas subset. A name from the level data that is
+  // neither defined nor in the manifest is TG.Gfx's labelled box of 16 x 16, placed by its corner as
+  // TG.Gfx.draw places it.
   function spriteClipped(c, name, frame, x, y, flip, remap, clipY) {
     if (!TG.Gfx || !TG.Gfx.get) return;
     var inf = info(name);
-    if (!inf) return;
     getOpts.flipX = !!flip;
     getOpts.remap = remap || null;
     var cv = TG.Gfx.get(name, frame, getOpts);
     if (!cv) return;
-    var ax = flip ? inf.w - inf.ax : inf.ax;
-    var left = Math.floor(x) - ax, top = Math.floor(y) - inf.ay;
-    var rows = Math.min(inf.h, Math.floor(clipY) - top);
+    var w = inf ? inf.w : 16, h = inf ? inf.h : 16;
+    var ax = inf ? (flip ? inf.w - inf.ax : inf.ax) : 0;
+    var left = Math.floor(x) - ax, top = Math.floor(y) - (inf ? inf.ay : 0);
+    var rows = Math.min(h, Math.floor(clipY) - top);
     if (rows <= 0) return;
-    c.drawImage(cv, 0, 0, inf.w, rows, left, top, inf.w, rows);
+    c.drawImage(cv, 0, 0, w, rows, left, top, w, rows);
   }
 
   function rect(c, x, y, w, h, color) {
@@ -204,6 +206,33 @@
     return bd.palettes[name] || bd.palettes.day || null;
   }
 
+  // Level 1's tile and hazard sprites, for a theme that does not name one (CONTRACT 5.9 theme.tiles and
+  // theme.hazardSkins; LEVEL2 3.4). archTrunk, the trunks under an arch, has no entry: it defaults to trunk.
+  var TILES = {
+    top: 'tile_grass', fill: 'tile_soil', edgeL: 'tile_edge_l', edgeR: 'tile_edge_r', wallL: 'tile_wall_l',
+    wallR: 'tile_wall_r', gapFill: 'tile_water', gapFillDark: 'tile_dark', plank: 'tile_plank',
+    arenaTop: 'tile_arena', arenaFill: 'tile_soil', rail: 'tile_rail'
+  };
+  var HAZARD_SKINS = {
+    bramble: 'haz_bramble', branch: 'haz_branch', trunk: 'haz_trunk', canopy: 'haz_canopy',
+    beehive: 'haz_beehive', rope: 'haz_rope', arch: 'haz_arch'
+  };
+
+  // The sprite name that level.theme[group] gives for key, or null.
+  function themeName(level, group, key) {
+    var names = level.theme ? level.theme[group] : null;
+    var name = names ? names[key] : null;
+    return typeof name === 'string' && name ? name : null;
+  }
+
+  function tileName(level, key) {
+    return themeName(level, 'tiles', key) || TILES[key];
+  }
+
+  function hazardSkin(level, key) {
+    return themeName(level, 'hazardSkins', key) || HAZARD_SKINS[key];
+  }
+
   // ---------------------------------------------------------------------------------------------
   // 3. Backdrop (CONTRACT 6.5)
   // ---------------------------------------------------------------------------------------------
@@ -219,13 +248,19 @@
       var dith = i === 0 && skyDither !== null ? skyDither : b.dither;
       if (isNum(dith) && TG.Gfx && TG.Gfx.dither) TG.Gfx.dither(c, 0, b.y, C.W, b.h, dith, 0);
     }
+    // The palette may name the sprites of its stars and its moon (LEVEL2 3.3); the moon is drawn with the
+    // frame of its fps, which is frame 0 for bg_moon.
     if (pal && pal.stars) {
+      var star = pal.starSprite || 'bg_star';
       for (var s = 0; s < pal.stars.length; s++) {
         var st = pal.stars[s];
-        sprite(c, 'bg_star', (Math.floor(time * 2) + s) % 2, st.x, st.y, false, null);
+        sprite(c, star, (Math.floor(time * 2) + s) % 2, st.x, st.y, false, null);
       }
     }
-    if (pal && pal.moon) sprite(c, 'bg_moon', 0, pal.moon.x, pal.moon.y, false, null);
+    if (pal && pal.moon) {
+      var moon = pal.moonSprite || 'bg_moon';
+      sprite(c, moon, fpsFrame(moon, time), pal.moon.x, pal.moon.y, false, null);
+    }
   }
 
   // Parallax layers: those with front: true when `front` is set (L6), the others (L1 to L4) otherwise.
@@ -301,24 +336,25 @@
         else if (!q.bridged && wx === q.x + q.w) rightOf = true;
       }
       if (gap) {
-        // The upper row of a gap is darkness; the lower row is water or the dark fill.
+        // The upper row of a gap is darkness; the lower row is the theme's gap fill (water in Level 1) or
+        // its dark fill.
         var dark = gapFillOf(level, gap) === 'dark';
         rect(c, sx, G, T, T, INK);
-        tile(c, dark ? 'tile_dark' : 'tile_water', dark ? 0 : water, sx, G + T, remap);
-        if (gap.bridged) tile(c, 'tile_plank', 0, sx, G, remap);
+        tile(c, tileName(level, dark ? 'gapFillDark' : 'gapFill'), dark ? 0 : water, sx, G + T, remap);
+        if (gap.bridged) tile(c, tileName(level, 'plank'), 0, sx, G, remap);
       } else if (wx >= arenaTiles) {
-        tile(c, 'tile_arena', ((col % 2) + 2) % 2, sx, G, remap);
-        tile(c, 'tile_rail', 0, sx, G, remap);
-        tile(c, 'tile_soil', (((col + 1) % 2) + 2) % 2, sx, G + T, remap);
+        tile(c, tileName(level, 'arenaTop'), ((col % 2) + 2) % 2, sx, G, remap);
+        tile(c, tileName(level, 'rail'), 0, sx, G, remap);
+        tile(c, tileName(level, 'arenaFill'), (((col + 1) % 2) + 2) % 2, sx, G + T, remap);
       } else if (leftOf) {
-        tile(c, 'tile_edge_l', 0, sx, G, remap);
-        tile(c, 'tile_wall_l', 0, sx, G + T, remap);
+        tile(c, tileName(level, 'edgeL'), 0, sx, G, remap);
+        tile(c, tileName(level, 'wallL'), 0, sx, G + T, remap);
       } else if (rightOf) {
-        tile(c, 'tile_edge_r', 0, sx, G, remap);
-        tile(c, 'tile_wall_r', 0, sx, G + T, remap);
+        tile(c, tileName(level, 'edgeR'), 0, sx, G, remap);
+        tile(c, tileName(level, 'wallR'), 0, sx, G + T, remap);
       } else {
-        tile(c, 'tile_grass', ((col % 2) + 2) % 2, sx, G, remap);
-        tile(c, 'tile_soil', (((col + 1) % 2) + 2) % 2, sx, G + T, remap);
+        tile(c, tileName(level, 'top'), ((col % 2) + 2) % 2, sx, G, remap);
+        tile(c, tileName(level, 'fill'), (((col + 1) % 2) + 2) % 2, sx, G + T, remap);
       }
     }
   }
@@ -394,34 +430,38 @@
           if (showChev) chevron(c, true, sx + h.w / 2, G - 13, time, inWin);
           break;
         case 'bramble':
-          sprite(c, 'haz_bramble', 0, sx, G, false, null);
+          sprite(c, hazardSkin(level, 'bramble'), 0, sx, G, false, null);
           if (showChev) chevron(c, true, sx + 8, G - 22, time, inWin);
           break;
         case 'branch':
-          sprite(c, 'haz_branch', 0, sx, HANG, false, null);
-          for (y = HANG - 16; y > C.PLAY_TOP - 16; y -= 16) sprite(c, 'haz_trunk', 0, sx, y, false, null);
+          sprite(c, hazardSkin(level, 'branch'), 0, sx, HANG, false, null);
+          var trunk = hazardSkin(level, 'trunk');
+          for (y = HANG - 16; y > C.PLAY_TOP - 16; y -= 16) sprite(c, trunk, 0, sx, y, false, null);
           // The trunk ends in a tree crown at the top of the playfield (its top rows run under the HUD).
-          sprite(c, 'haz_canopy', 0, sx - 16, CANOPY_BOTTOM, false, remap);
+          sprite(c, hazardSkin(level, 'canopy'), 0, sx - 16, CANOPY_BOTTOM, false, remap);
           if (showChev) chevron(c, false, sx + 8, HANG - 27, time, inWin);
           break;
         case 'beehive':
           // The hive swings up to 6 px either way; the rope leans with it (cosmetic, DESIGN 5).
           var swing = Math.round(Math.sin(time * 2.4 + h.x * 0.013) * 6);
-          sprite(c, 'haz_beehive', 0, sx + swing, HANG, false, null);
+          sprite(c, hazardSkin(level, 'beehive'), 0, sx + swing, HANG, false, null);
+          var rope = hazardSkin(level, 'rope');
           var ropeTop = HANG - 24;
           for (y = ropeTop; y > C.PLAY_TOP - 16; y -= 16) {
             var lean = Math.round(swing * (y - C.PLAY_TOP) / (ropeTop - C.PLAY_TOP + 16));
-            sprite(c, 'haz_rope', 0, sx + lean, y, false, null);
+            sprite(c, rope, 0, sx + lean, y, false, null);
           }
           if (showChev) chevron(c, false, sx + 8 + swing, HANG - 35, time, inWin);
           break;
         case 'arch':
-          sprite(c, 'haz_arch', 0, sx, HANG, false, null);
+          sprite(c, hazardSkin(level, 'arch'), 0, sx, HANG, false, null);
+          // The trunks under the arch's ends are the theme's archTrunk, or its trunk.
+          var archTrunk = themeName(level, 'hazardSkins', 'archTrunk') || hazardSkin(level, 'trunk');
           for (y = HANG - 16; y > C.PLAY_TOP - 16; y -= 16) {
-            sprite(c, 'haz_trunk', 0, sx, y, false, null);
-            sprite(c, 'haz_trunk', 0, sx + h.w - 16, y, false, null);
+            sprite(c, archTrunk, 0, sx, y, false, null);
+            sprite(c, archTrunk, 0, sx + h.w - 16, y, false, null);
           }
-          sprite(c, 'haz_canopy', 0, sx + Math.floor(h.w / 2) - 24, CANOPY_BOTTOM, false, remap);
+          sprite(c, hazardSkin(level, 'canopy'), 0, sx + Math.floor(h.w / 2) - 24, CANOPY_BOTTOM, false, remap);
           if (showChev) {
             var held = inWin || (px > h.winStart && px < h.holdUntil);
             chevron(c, false, sx + h.w / 2, HANG - 27, time, held);
@@ -455,6 +495,18 @@
 
   var HEAD_FRAME = { laugh: 'laugh', hurt: 'hurt', dizzy: 'dizzy' };
 
+  // The sprites of each boss by boss.kind (LEVEL2 10.6), with the Baron as the default: the parts of
+  // drawBoss (CONTRACT 6.4) with the base he stands behind, the thing in his hand in the intro gesture,
+  // and the minion-size figure of drawDefeat.
+  var BOSS_PARTS = {
+    baron: { body: 'boss_body', arm: 'boss_arm', head: 'boss_head', base: 'boss_mound', gesture: 'boss_monocle',
+      small: 'en_digby' }
+  };
+
+  function bossParts(boss) {
+    return hasOwn(BOSS_PARTS, boss.kind) ? BOSS_PARTS[boss.kind] : BOSS_PARTS.baron;
+  }
+
   function drawBoss(c, state, camX, time) {
     var C = TG.C;
     var boss = state.boss;
@@ -464,6 +516,7 @@
     if (!visible(bx, 48)) return;
     var r = clamp(Math.floor(num(boss.rise, 0)), 0, 60);
     var pose = boss.pose || 'idle';
+    var parts = bossParts(boss);
 
     // A letter of a weak-point or finisher word makes him flinch and flash.
     var lab = boss.word ? effectsLabel(boss.word.id) : null;
@@ -471,7 +524,7 @@
     var white = (num(boss.flashT, 0) > 0 && !reduceFlash()) || (lab && lab.white);
 
     if (state.screen === 'levelComplete' && boss.state === 'defeated') {
-      if (drawDefeat(c, state, bx, by, time)) return;
+      if (drawDefeat(c, state, parts, bx, by, time)) return;
     }
 
     var nearArm = (pose === 'raise' || pose === 'stomp') ? 'raise' : (pose === 'throw' ? 'throw' : 'rest');
@@ -484,19 +537,19 @@
     var bodyRemap = white ? 'white' : null;
     var stomp = pose === 'stomp' ? 2 : 0;
 
-    spriteClipped(c, 'boss_body', Math.floor(time * 4) % 2, bx, by - 8 + r + stomp, false, bodyRemap, by);
-    spriteClipped(c, 'boss_arm', farArm, bx + 20, by - 26 + r + stomp, true, bodyRemap, by);
-    spriteClipped(c, 'boss_head', HEAD_FRAME[pose] || 'normal', bx - 2, by - 34 + r + stomp, false, headRemap, by);
+    spriteClipped(c, parts.body, Math.floor(time * 4) % 2, bx, by - 8 + r + stomp, false, bodyRemap, by);
+    spriteClipped(c, parts.arm, farArm, bx + 20, by - 26 + r + stomp, true, bodyRemap, by);
+    spriteClipped(c, parts.head, HEAD_FRAME[pose] || 'normal', bx - 2, by - 34 + r + stomp, false, headRemap, by);
     // Intro (DESIGN 11.6): once he is up he polishes his monocle, then laughs.
     var polish = boss.state === 'intro' && state.screen === 'bossIntro' ? introPolish(boss) : -1;
     if (polish >= 0) nearArm = 'raise';
-    spriteClipped(c, 'boss_arm', nearArm, bx - 20, by - 26 + r + stomp, false, bodyRemap, by);
+    spriteClipped(c, parts.arm, nearArm, bx - 20, by - 26 + r + stomp, false, bodyRemap, by);
     if (polish >= 0) {
       var a = polish * Math.PI * 6;
-      sprite(c, 'boss_monocle', 0, bx - 7 + Math.round(Math.cos(a) * 2), by - 44 + r + Math.round(Math.sin(a) * 2), false,
+      sprite(c, parts.gesture, 0, bx - 7 + Math.round(Math.cos(a) * 2), by - 44 + r + Math.round(Math.sin(a) * 2), false,
         Math.floor(time * 12) % 2 === 0 ? 'white' : null);
     }
-    sprite(c, 'boss_mound', 0, bx, by, false, null);
+    sprite(c, parts.base, 0, bx, by, false, null);
     if (pose === 'dizzy' && r < 30) dizzyStars(c, bx - 2, by - 60 + r, 16, time);
   }
 
@@ -519,18 +572,56 @@
   // DESIGN 11.6 defeat, after the freeze and the flash: he spins, shrinks to minion size and goes
   // down the hole in his mound; TG.Effects throws the helmet and the letter fountain. Returns false
   // while the full-size Baron is still to be drawn.
-  function drawDefeat(c, state, bx, by, time) {
+  function drawDefeat(c, state, parts, bx, by, time) {
     var t = num(state.screenT, 0);
     if (t < 0.55) return false;
     if (t < 1.7) {
-      sprite(c, 'en_digby', 'spin', bx, by - 11, Math.floor(t * 20) % 2 === 1, null);
+      sprite(c, parts.small, 'spin', bx, by - 11, Math.floor(t * 20) % 2 === 1, null);
       dizzyStars(c, bx, by - 30, 10, time);
     } else if (t < 2.2) {
       var sink = Math.floor((t - 1.7) / 0.5 * 18);
-      spriteClipped(c, 'en_digby', 'spin', bx, by - 11 + sink, false, null, by);
+      spriteClipped(c, parts.small, 'spin', bx, by - 11 + sink, false, null, by);
     }
-    sprite(c, 'boss_mound', 0, bx, by, false, null);
+    sprite(c, parts.base, 0, bx, by, false, null);
     return true;
+  }
+
+  // The sprite of each kind (CONTRACT 5.4), for when js/entities.js is not loaded.
+  var KIND_SPRITE = {
+    boulder: 'en_boulder', dawdle: 'en_dawdle', hoppet: 'en_hoppet', buzzle: 'en_buzzle', swoop: 'en_swoop',
+    truffle: 'en_truffle', digby: 'en_digby', rock: 'pr_rock', crate: 'crate_balloon', shock: 'pr_shock',
+    pick: 'pr_pickaxe'
+  };
+
+  function kindSprite(kind) {
+    var K = TG.Entities && TG.Entities.KINDS;
+    if (K && hasOwn(K, kind)) return K[kind].sprite;
+    return hasOwn(KIND_SPRITE, kind) ? KIND_SPRITE[kind] : 'en_' + kind;
+  }
+
+  // The level's skin for a kind (LEVEL2 4.5): theme.skins[kind] = { sprite, remap }, either part optional;
+  // null when the level has none.
+  function themeSkin(state, kind) {
+    var skins = state.level.theme ? state.level.theme.skins : null;
+    return skins && hasOwn(skins, kind) && skins[kind] ? skins[kind] : null;
+  }
+
+  // The sprite an entity is drawn with (LEVEL2 4.5): its own skin if it has one, else the sprite of the
+  // level's skin for its kind, else the sprite of its kind in KINDS. A skin keeps the frames of the
+  // sprite it replaces.
+  function skinFor(state, e) {
+    if (typeof e.skin === 'string' && e.skin) return e.skin;
+    var skin = themeSkin(state, e.kind);
+    if (skin && typeof skin.sprite === 'string' && skin.sprite) return skin.sprite;
+    return kindSprite(e.kind);
+  }
+
+  // The remap of the level's skin for an entity's kind, or null. An entity with a skin of its own is
+  // drawn in that sprite's colours: the remap is written for the look of the kind.
+  function skinRemap(state, e) {
+    if (typeof e.skin === 'string' && e.skin) return null;
+    var skin = themeSkin(state, e.kind);
+    return skin && typeof skin.remap === 'string' && skin.remap ? skin.remap : null;
   }
 
   function drawEntities(c, state, camX, time) {
@@ -546,65 +637,71 @@
       var sy = Math.floor(num(e.y, G));
       if (!visible(sx, num(e.w, 16))) continue;
       var lab = e.type !== 'attack' ? effectsLabel(e.id) : null;
-      var remap = lab && lab.white ? 'white' : null;
+      // The entity's own sprite takes the skin's remap, under the white flash of a correct key. The
+      // mound of a Digby underground and the power icon of a crate are not skinned: they only flash.
+      var name = skinFor(state, e);
+      var flash = lab && lab.white ? 'white' : null;
+      var remap = flash || skinRemap(state, e);
       if (lab && lab.flinch) sx += (num(e.x, 0) >= px ? 1 : -1) * lab.flinch;
       var at = num(e.animT, 0);
       var t = num(e.t, 0);
       switch (e.kind) {
         case 'boulder':
           var len = e.word ? e.word.length : 1;
-          sprite(c, 'en_boulder', clamp(Math.ceil(3 * num(e.typed, 0) / len), 0, 3), sx, sy, false, remap);
+          sprite(c, name, clamp(Math.ceil(3 * num(e.typed, 0) / len), 0, 3), sx, sy, false, remap);
           break;
         case 'dawdle':
-          sprite(c, 'en_dawdle', Math.floor(at * 4) % 2, sx, sy, false, remap);
+          sprite(c, name, Math.floor(at * 4) % 2, sx, sy, false, remap);
           break;
         case 'hoppet':
-          sprite(c, 'en_hoppet', num(e.elev, 0) > 0.5 && e.phase !== 'hold' ? 'leap' : 'sit', sx, sy, false, remap);
+          sprite(c, name, num(e.elev, 0) > 0.5 && e.phase !== 'hold' ? 'leap' : 'sit', sx, sy, false, remap);
           break;
         case 'buzzle':
-          sprite(c, 'en_buzzle', Math.floor(at * 16) % 2, sx, sy, false, remap);
+          sprite(c, name, Math.floor(at * 16) % 2, sx, sy, false, remap);
           break;
         case 'swoop':
           if (e.phase === 'dive' && p) sprite(c, 'fx_marker', fpsFrame('fx_marker', time), Math.floor(px - camX), G + MARKER_DY, false, null);
-          sprite(c, 'en_swoop', e.phase === 'dive' ? 'dive' : Math.floor(at * 8) % 2, sx, sy, false, remap);
+          sprite(c, name, e.phase === 'dive' ? 'dive' : Math.floor(at * 8) % 2, sx, sy, false, remap);
           break;
         case 'truffle':
-          sprite(c, 'en_truffle', Math.floor(at * 12) % 4, sx, sy, e.flipX !== false, remap);
+          sprite(c, name, Math.floor(at * 12) % 4, sx, sy, e.flipX !== false, remap);
           break;
         case 'digby':
           if (e.phase === 'up') {
             var popT = C.DIGBY_POP_T;
-            spriteClipped(c, 'en_digby', t < popT + 0.05 ? 'peek' : 'up', sx, G - num(e.elev, 0), false, remap, G);
+            spriteClipped(c, name, t < popT + 0.05 ? 'peek' : 'up', sx, G - num(e.elev, 0), false, remap, G);
             sprite(c, 'en_mound', 0, sx, G, false, null);
           } else {
-            sprite(c, 'en_mound', Math.floor(at * (6 + 10 * t)) % 2, sx, G, false, remap);
+            sprite(c, 'en_mound', Math.floor(at * (6 + 10 * t)) % 2, sx, G, false, flash);
           }
           break;
         case 'rock':
           if (e.from === 'above' && p) sprite(c, 'fx_marker', fpsFrame('fx_marker', time), Math.floor(px - camX), G + MARKER_DY, false, null);
-          sprite(c, 'pr_rock', Math.floor(at * 10) % 2, sx, sy, false, remap);
+          sprite(c, name, Math.floor(at * 10) % 2, sx, sy, false, remap);
           break;
         case 'crate':
-          sprite(c, 'crate_balloon', Math.floor(at * 3) % 2, sx, sy, false, remap);
-          if (e.power) sprite(c, 'pw_' + e.power, Math.floor(time * 4) % 2, sx, sy, false, remap);
+          sprite(c, name, Math.floor(at * 3) % 2, sx, sy, false, remap);
+          if (e.power) sprite(c, 'pw_' + e.power, Math.floor(time * 4) % 2, sx, sy, false, flash);
           break;
         case 'shock':
-          sprite(c, 'pr_shock', Math.floor(at * 10) % 2, sx, sy, false, null);
+          sprite(c, name, Math.floor(at * 10) % 2, sx, sy, false, remap);
           chevron(c, true, sx, sy - 20, time, attackWindow(e));
           break;
         case 'pick':
-          sprite(c, 'pr_pickaxe', Math.floor(at * 12) % 4, sx, sy, false, null);
+          sprite(c, name, Math.floor(at * 12) % 4, sx, sy, false, remap);
           chevron(c, false, sx, sy - 28, time, attackWindow(e));
           break;
         default:
-          if (e.kind) sprite(c, 'en_' + e.kind, 0, sx, sy, false, remap);
+          if (e.kind) sprite(c, name, 0, sx, sy, false, remap);
       }
     }
   }
 
+  // The window of an attack is chosen by its action, as TG.Entities.nextAction chooses it: SHOCK_WIN for
+  // an attack to jump, PICK_WIN for one to duck.
   function attackWindow(e) {
     var C = TG.C;
-    var win = e.kind === 'shock' ? C.SHOCK_WIN : C.PICK_WIN;
+    var win = e.action === 'jump' ? C.SHOCK_WIN : C.PICK_WIN;
     return isNum(e.eta) && e.eta >= win[0] && e.eta <= win[1];
   }
 
@@ -991,16 +1088,20 @@
   // 9. draw (CONTRACT 4.19)
   // ---------------------------------------------------------------------------------------------
 
+  // The first band of the dusk sky in boss phases 2 and 3, for a palette named dusk without `phases`.
+  var DUSK_PHASES = { 2: { color: DEEP_BLUE, dither: PLUM }, 3: { color: INK, dither: PLUM } };
+
   function skyFor(state, palName, pal) {
     // The Hourglass changes the top band (DESIGN 14.5); in the arena each boss phase darkens the sky
     // one step (DESIGN 11.6): DEEP_BLUE, DEEP_BLUE with a PLUM dither, INK with a PLUM dither. A plain
-    // PLUM sky would hide the far hills, which the dusk remap turns PLUM.
+    // PLUM sky would hide the far hills, which the dusk remap turns PLUM. A palette may give its own
+    // steps as `phases`, { phase: { color, dither } } (LEVEL2 3.3); a phase it does not list keeps the band.
     var slow = state.power && state.power.slowT > 0;
     if (slow && pal && isNum(pal.slowSky)) return { color: pal.slowSky, dither: null };
-    if (palName === 'dusk' && state.boss) {
-      var ph = num(state.boss.phase, 1);
-      if (ph === 2) return { color: DEEP_BLUE, dither: PLUM };
-      if (ph >= 3) return { color: INK, dither: PLUM };
+    if (state.boss) {
+      var phases = pal && pal.phases ? pal.phases : (palName === 'dusk' ? DUSK_PHASES : null);
+      var step = phases ? phases[Math.min(num(state.boss.phase, 1), 3)] : null;
+      if (step) return step;
     }
     return null;
   }
@@ -1018,7 +1119,7 @@
 
     // 1. Backdrop L0 to L4.
     var sky = skyFor(state, palName, pal);
-    drawSky(c, pal, time, sky ? sky.color : null, sky ? sky.dither : null);
+    drawSky(c, pal, time, sky && isNum(sky.color) ? sky.color : null, sky && isNum(sky.dither) ? sky.dither : null);
     drawLayers(c, bd, pal, camX, time, sectionIndex, false);
     // 2. Tiles, gap fill, plank bridges, decor, signposts, checkpoint flags.
     drawGround(c, state, camX, remap, time);

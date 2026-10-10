@@ -63,7 +63,7 @@
   };
 
   var banners = [];                 // queue; banners[0] is on screen
-  var tip = { text: null, t: 0 };
+  var tip = { key: null, t: 0 };    // key: a key of TIPS; the text is read at draw time (tipText)
   var tutor = { id: null, word: null };
   var missLetter = { ch: '', t: 0 };                 // wrong key with nothing locked
   var repeat = { id: null, index: -1, n: 0 };        // wrong keys in a row on one letter of the lock
@@ -205,6 +205,21 @@
     return kind === 'arch' ? 'hold' : 'duck';
   }
 
+  // The text of a tip. The level's data may give three of them (LEVEL2 3.4, 10.6): the tips for the boss's
+  // two attacks, level.boss.tips = { shock, pick }, written without the "TIP: ", and the name of the
+  // hold-duck hazard, level.theme.hazardNames.arch. Level 1's lines are the defaults.
+  function tipText(level, key) {
+    if (key === 'shock' || key === 'pick') {
+      var tips = level.boss ? level.boss.tips : null;
+      if (tips && typeof tips[key] === 'string' && tips[key]) return 'TIP: ' + tips[key];
+    }
+    if (key === 'hold') {
+      var names = level.theme ? level.theme.hazardNames : null;
+      if (names && typeof names.arch === 'string' && names.arch) return 'TIP: HOLD ENTER UNDER THE ' + names.arch;
+    }
+    return TIPS[key];
+  }
+
   function makeBanner(textStr, seconds, color, sub, subColor, blink, kind) {
     return { text: String(textStr || ''), sub: sub || null, subColor: isNum(subColor) ? subColor : SILVER,
       seconds: seconds > 0 ? seconds : 2, color: isNum(color) ? color : WHITE, blink: !!blink, t: 0,
@@ -282,7 +297,7 @@
       else if (cause.type === 'attack') key = cause.kind === 'pick' ? 'pick' : 'shock';
       else if (cause.type === 'hazard') key = hazardTip(cause.kind);
       if (key) {
-        tip.text = TIPS[key];
+        tip.key = key;
         tip.t = 3.0;
       }
     },
@@ -291,7 +306,7 @@
     // which loses no life: the hold tip is shown for every arch hit.
     'hazard:hit': function (p) {
       if (p.kind !== 'arch') return;
-      tip.text = TIPS.hold;
+      tip.key = 'hold';
       tip.t = 3.0;
     },
 
@@ -356,7 +371,7 @@
       if (banners[0].t >= banners[0].seconds) banners.shift();
     }
     tip.t = Math.max(0, tip.t - dt);
-    if (tip.t === 0) tip.text = null;
+    if (tip.t === 0) tip.key = null;
     missLetter.t = Math.max(0, missLetter.t - dt);
     livesFlash.t = Math.max(0, livesFlash.t - dt);
     comboT = Math.max(0, comboT - dt);
@@ -491,14 +506,19 @@
     sprite(c, 'icon_crown', 0, 356, 16, false);
   }
 
-  // Boss bar (DESIGN 11.6, 13.3): "BARON" at x 232, bar from x 280 to 376, y 24 to 29, one segment per
-  // weak-point word; RED with a CORAL highlight, lost segments SHADOW.
+  // Boss bar (DESIGN 11.6, 13.3): the label, then the bar from x 280 to 376, y 24 to 29, one segment per
+  // weak-point word; RED with a CORAL highlight, lost segments SHADOW. The label is level.boss.label, or
+  // BARON (LEVEL2 10.4). It ends 8 px before the bar, so x = 272 - 8 per letter: 232 for BARON. The INK box
+  // behind it starts 4 px before the label and runs to x 380: from x 228 for BARON.
   function drawBossBar(c, state, time) {
     var C = TG.C;
     var boss = state.boss;
+    var data = state.level ? state.level.boss : null;
+    var label = data && typeof data.label === 'string' && data.label ? data.label : 'BARON';
+    var lx = 280 - 8 - 8 * label.length;
     rect(c, 0, 20, C.W, 3, INK);
-    rect(c, 228, 20, 152, 11, INK);
-    text(c, 'BARON', 232, 23, WHITE);
+    rect(c, lx - 4, 20, 380 - (lx - 4), 11, INK);
+    text(c, label, lx, 23, WHITE);
     var n = Math.max(1, Math.floor(num(boss.maxHealth, 1)));
     var health = clamp(Math.floor(num(boss.health, 0)), 0, n);
     for (var i = 0; i < n; i++) {
@@ -567,7 +587,13 @@
   }
 
   // Speech plate during the boss intro (CONTRACT 4.18): INK with a WHITE border, centred at x 192,
-  // top at y 40, text at 1x, from the second half of the intro. The text appears letter by letter.
+  // top at y 40, text at 1x, from the second half of the intro. The text appears letter by letter, at 30
+  // letters a second, or faster when the line would not be whole before the intro ends at that rate
+  // (LEVEL2 10.1: the short intro after a continue leaves 0.75 s). The faster rate spreads the line and
+  // two letters more over the half intro, and not the line alone as 10.1 writes it: the last frame of the
+  // intro is drawn one step before its end, and the line has to be whole on it. Two letters are enough
+  // for the widest line the screen holds (47), which is typed at just over one letter a step in 0.75 s.
+  // Level 1's 20 letters keep 30 a second on both of its intros.
   function drawSpeech(c, state) {
     if (state.screen !== 'bossIntro' || !state.boss) return;
     var speech = state.level && state.level.boss && state.level.boss.speech ? String(state.level.boss.speech) : '';
@@ -580,7 +606,8 @@
     var x = Math.floor(TG.C.W / 2 - w / 2), y = 40;
     rect(c, x, y, w, h, WHITE);
     rect(c, x + 1, y + 1, w - 2, h - 2, INK);
-    var shown = clamp(Math.floor(since * 30), 0, n);
+    var rate = intro > 0 ? Math.max(30, (n + 2) / (intro / 2)) : 30;
+    var shown = clamp(Math.floor(since * rate), 0, n);
     text(c, speech.slice(0, shown), x + 3, y + 3, WHITE);
   }
 
@@ -657,8 +684,8 @@
     if (tutor.word && state.tutorial && state.tutorial.active !== false) {
       str = 'TYPE: ';
       word = tutor.word.toUpperCase();
-    } else if (tip.text) {
-      str = tip.text;
+    } else if (tip.key) {
+      str = tipText(state.level, tip.key);      // draw() calls this only with a level
     }
     if (!str) return;
     var total = str.length + (word ? word.length : 0);
@@ -813,7 +840,7 @@
 
   function reset() {
     banners = [];
-    tip.text = null;
+    tip.key = null;
     tip.t = 0;
     tutor.id = null;
     tutor.word = null;

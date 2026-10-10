@@ -784,7 +784,7 @@ Parts are clipped at `by` as the Baron's are.
 | 0.5 to 0.7 | 2.0 to 2.8 s | She lifts her goggles and winds her key three clicks. The speech plate starts typing | Near arm `raise` with `boss2_goggles` in the hand; head `normal` although the pose is already `laugh`; `boss2_key` a quarter turn per click; `click` three times |
 | 0.7 to 1 | 2.8 to 4.0 s | She laughs | Head `laugh`, the goggles back on her brow |
 
-After a continue the intro is 1.5 s (`BOSS_INTRO_SHORT`) and plays without the cameo and the goggles: she rises over the first half as `boss.rise` gives it and laughs over the second, as the Baron's short intro does. The speech plate then has 0.75 s. At the HUD's 30 letters per second it would show 22 of the 27 letters, so `drawSpeech` types at `max(30, letters / (introTime / 2))` per second: one line, and both of Level 1's intros stay at 30 (20 letters).
+After a continue the intro is 1.5 s (`BOSS_INTRO_SHORT`) and plays without the cameo and the goggles: she rises over the first half as `boss.rise` gives it and laughs over the second, as the Baron's short intro does. The speech plate then has 0.75 s. At the HUD's 30 letters per second it would show 22 of the 27 letters, so `drawSpeech` types at `max(30, (letters + 2) / (introTime / 2))` per second: one line, and both of Level 1's intros stay at 30 (20 letters). The `+ 2` was added when M0 built it: the last frame of the intro is drawn one step before the intro ends, so without it the last letter was never shown. With it a 27-letter line is whole for the last three frames (about 50 ms); whether it should stand longer is looked at in M4, when her line is written.
 
 ### 10.2 Arena
 
@@ -1252,6 +1252,23 @@ Tier 2, built last and dropped first, each with its fallback:
 | `bg_mist`, `decor_hole`, the watch's AQUA frame | Nothing drawn |
 
 As in DESIGN 19.3, a Tier 2 item left out must leave the game running without errors or warnings, and the record says which were left out.
+
+### 13.8 Build record
+
+What has been built, by milestone, and what each one handed on. Nothing here is committed until the owner asks.
+
+**M0, groundwork: built on 2026-10-10.** Every item of the M0 row is in the code. Level 1 is unchanged: 2,097 frames and event logs of seeded Level 1 runs are byte-for-byte the same as the game at commit `fced1c9`, the audio calls of eight whole runs are identical, and `node test/run-all.js` passes (15 files). M0 added `test/test-level1-pixels.js` with 36 reference frames in `test/fixtures/level1-pixels/` (the 18 of the M0 row and 18 more, so that every Level 1 tile, hazard, creature and boss part but the Digby above ground is on a frame), `test/fixtures/level1-events.json` with the `level1-events` check, and the checks `anchored-kinds`, `attack-windows` and `spawn-skin`. `test/sim.js` and `tools/shot.js` take `--level`.
+
+Handed on from M0:
+
+| To | What |
+|---|---|
+| M2 and M4 | `js/effects.js` still draws a cleared or knocked-away creature with Level 1's sprite. A skin reaches the renderer only. An entity's own skin (the Baronet) needs a `skin` field on the `word:clear` and `threat:hit` payloads, or a lookup by id |
+| M2 | A drawn run stops on the first sprite that is not defined, because the harness treats the warning as a failure. Every Level 2 sprite name the level file uses needs its manifest row and a definition before `tools/shot.js --level 2` can be used |
+| M1 and M4 | Nothing yet tells the `anchored` flag from the name `boulder`, or the boss tables from "always the Baron": each has one entry. The `new-kinds` check and the `ratchet` cases are their first tests |
+| M4 | The speech plate's rate (10.1, corrected above). The plate also times its letters from `state.screenT`, which a pause sets back to 0, so it retypes after a pause during the intro; Level 1 does the same today |
+| M5 | Meadow values the literal search of 13.1 does not find: the `hazard:bridge` burst is wood-coloured, and the `boss:throw` and `boss:phase` bursts are soil-coloured (`js/effects.js`) |
+| M8 | CONTRACT passages the code has moved past: 1 (a row for `test/fixtures/`), 2.2 rule 9, 5.4, 5.5, 5.7, 5.9, 6.5, 6.6, 7.2, 7.3, 8.2, 8.4, 10.3, 10.4, 12.1, 13.2 and 14.1. README: the test table |
 
 ---
 

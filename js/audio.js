@@ -1484,7 +1484,10 @@
 
   var screen = null;
   var trackNames = { level: null, boss: null };        // from the latest level:start
-  var sectionMusic = { transpose: 0, tempo: null };     // from the latest section:enter
+  // The boss track from boss:phase 3 on (CONTRACT 7.2): its tempo, and pulse 2 moved up by p2Octave
+  // semitones. These are the Baron's values. A level's arena.music.phase3 replaces them (LEVEL2 11.2).
+  var PHASE3 = Object.freeze({ tempo: 184, p2Octave: 12 });
+  var sectionMusic = { transpose: 0, tempo: null, phase3: PHASE3 };     // from the latest section:enter
   var subscriptions = [];
 
   function trackKnown(name) {
@@ -1528,8 +1531,8 @@
     try {
       var g = TG.Game;
       if (g && g.state && g.state.boss && g.state.boss.phase === 3) {
-        o.tempo = 184;
-        o.p2Octave = 12;
+        o.tempo = sectionMusic.phase3.tempo;
+        o.p2Octave = sectionMusic.phase3.p2Octave;
       }
     } catch (e) { /* no game state */ }
     return o;
@@ -1538,6 +1541,7 @@
   function resetSection() {
     sectionMusic.transpose = 0;
     sectionMusic.tempo = null;
+    sectionMusic.phase3 = PHASE3;
     keyOk.root = 0;
     keyOk.mode = 'major';
   }
@@ -1619,15 +1623,19 @@
     TG.Audio.setTempoScale(1);
     TG.Audio.setBassOnly(false);
     var m = p && p.music;
+    // The level's own ready jingle when music.ready is the name of a track (LEVEL2 11.1). It is
+    // Tier 2: a level that names none, or names one that was left out, starts with jingle_ready.
+    var ready = 'jingle_ready';
     if (m && typeof m === 'object') {
       trackNames.level = typeof m.level === 'string' ? m.level : null;
       trackNames.boss = typeof m.boss === 'string' ? m.boss : null;
+      if (TRACK_NAMES.indexOf(m.ready) !== -1) ready = m.ready;
     }
     // A fresh run starts from the first section; the section:enter that follows sets the rest.
     if (p && p.continued === false) resetSection();
     if (screen === 'playing') ensureLoop(trackNames.level, sectionOpts());
     if (p && p.continued === false) playSfx('start');
-    TG.Audio.jingle('jingle_ready');
+    TG.Audio.jingle(ready);
   }
 
   function onSectionEnter(p) {
@@ -1643,6 +1651,13 @@
         keyOk.root = 0;
         keyOk.mode = 'major';
       }
+      // The arena's music may carry phase3: { tempo, p2Octave } (LEVEL2 11.2). Where it is missing,
+      // or one of its two values is, the Baron's value stands.
+      var p3 = m.phase3 && typeof m.phase3 === 'object' ? m.phase3 : PHASE3;
+      sectionMusic.phase3 = {
+        tempo: typeof p3.tempo === 'number' && p3.tempo > 0 ? p3.tempo : PHASE3.tempo,
+        p2Octave: typeof p3.p2Octave === 'number' && isFinite(p3.p2Octave) ? p3.p2Octave : PHASE3.p2Octave
+      };
     }
     if (loopSeq.playing && (loopSeq.name === trackNames.level || loopSeq.name === trackNames.boss)) {
       loopSeq.change(sectionOpts());
@@ -1792,7 +1807,7 @@
     'boss:hit': function () { playSfx('boss_hit'); },
     'boss:phase': function (p) {
       if (p && p.phase === 3 && loopSeq.playing && loopSeq.name === trackNames.boss) {
-        loopSeq.change({ tempo: 184, p2Octave: 12 });
+        loopSeq.change(sectionMusic.phase3);
       }
     },
     'boss:finisher': function () { playSfx('boss_stun'); },
