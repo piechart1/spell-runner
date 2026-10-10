@@ -38,11 +38,11 @@
     beehive: { action: 'duck', hold: false },
     arch:    { action: 'duck', hold: true }
   };
-  var POWERS = ['shield', 'hourglass', 'quill', 'blast', 'cap'];
+  var POWERS = ['shield', 'hourglass', 'quill', 'blast', 'cap', 'watch'];
   // Used by validate when entities.js is not loaded.
   var FALLBACK_SPAWN_KINDS = {
     boulder: 'threat', dawdle: 'threat', hoppet: 'threat', buzzle: 'threat', swoop: 'threat',
-    truffle: 'threat', digby: 'threat', rock: 'threat', crate: 'crate'
+    truffle: 'threat', digby: 'threat', dangle: 'threat', flit: 'threat', rock: 'threat', crate: 'crate'
   };
   var ARC_OFFSETS = [-16, -8, 0, 8, 16];     // px from the gap's centre (DESIGN Appendix B)
   var ARC_TAKEOFF = 24;                      // the arc is that of a jump taking off 24 px before the centre

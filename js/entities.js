@@ -19,7 +19,10 @@
 //   player.fallen        the fall has reached FALL_COMMIT and cost its life; cleared by the rescue
 //   threat.contact       HERO_W / 2 + (w - 2 * INSET) / 2, px
 //   threat.closing       closing speed towards Pip, px/ws (dawdle, hoppet, buzzle, truffle); 0 otherwise
-//   threat.anchorX       anchored kinds only (KINDS[kind].anchored: the boulder): its fixed world x; 0 otherwise
+//   threat.anchorX       anchored kinds only (KINDS[kind].anchored: the boulder and the dangle): its fixed
+//                        world x; 0 otherwise
+//   threat.turned        flit only: it has turned behind Pip, and the second threat:warn (from 'behind') has
+//                        been emitted (LEVEL2 4.3). Other kinds do not have the field
 //   threat.skin          only when the spawn spec gave one: the sprite drawn in place of the kind's
 //                        (LEVEL2 4.4 and 4.5). Presentation only; nothing in the simulation reads it
 //   threat.entered       the sprite has intersected the playfield (threat:enter is emitted once)
@@ -39,7 +42,9 @@
   // ---------------------------------------------------------------------------------------------
 
   // `anchored` marks a kind that stands at a fixed point in the world while Pip runs up to it: its x is
-  // its anchorX and its clock follows from the distance left (DESIGN 4.3 "Boulder", LEVEL2 4.3).
+  // its anchorX and its clock follows from the distance left (DESIGN 4.3 "Boulder", LEVEL2 4.3). The
+  // boulder stands on the ground; the dangle hangs from the roof.
+  // dangle and flit are Level 2's kinds (LEVEL2 4.2). The code defines a kind, and a level file cannot.
   var KINDS = TG.Util.deepFreeze({
     //         type       from      sprite box   sprite           sound family      letter stall
     boulder: { type: 'threat', from: 'right',  w: 24, h: 32, sprite: 'en_boulder',    family: 'crunch', stall: false, anchored: true },
@@ -49,6 +54,8 @@
     swoop:   { type: 'threat', from: 'above',  w: 24, h: 16, sprite: 'en_swoop',      family: 'crunch', stall: true  },
     truffle: { type: 'threat', from: 'behind', w: 24, h: 16, sprite: 'en_truffle',    family: 'bonk',   stall: true  },
     digby:   { type: 'threat', from: 'below',  w: 16, h: 16, sprite: 'en_digby',      family: 'bonk',   stall: true  },
+    dangle:  { type: 'threat', from: 'above',  w: 16, h: 16, sprite: 'en_dangle',     family: 'twang',  stall: false, anchored: true },
+    flit:    { type: 'threat', from: 'above',  w: 24, h: 16, sprite: 'en_flit',       family: 'pop',    stall: true  },
     rock:    { type: 'threat', from: 'right',  w: 12, h: 12, sprite: 'pr_rock',       family: 'pop',    stall: true  },  // from is 'above' for a high rock
     crate:   { type: 'crate',  from: 'right',  w: 16, h: 32, sprite: 'crate_balloon', family: 'pop',    stall: false },
     shock:   { type: 'attack', from: 'right',  w: 16, h: 8,  sprite: 'pr_shock',      action: 'jump', elev: 0 },
@@ -331,12 +338,16 @@
   }
 
   // Hazard keep-clear (rule 3): moves the arrival point past every zone it falls in.
-  function keepClear(state, budgetWs) {
+  // A dangle hangs at head height, as a branch, a beehive and an arch do. For it the zone of each of those
+  // hazards is widened so that its anchor, which is `contact` beyond the arrival point, is at least
+  // DANGLE_CLEAR from the hazard's box on either side (LEVEL2 4.3).
+  function keepClear(state, kind, budgetWs) {
     var C = TG.C;
     var config = state.config;
     var p = state.player;
     var hazards = state.level ? state.level.hazards : [];
     var m = config.hazardMargin * config.pace * C.RUN_SPEED;
+    var contact = contactOf(KINDS[kind]);
     var impactX = p.x + C.RUN_SPEED * budgetWs;
     for (var pass = 0; pass < 64; pass++) {
       var moved = false;
@@ -345,6 +356,10 @@
         if (h.bridged) continue;
         var zoneStart = h.winStart - m;
         var zoneEnd = h.x + h.w + m;
+        if (kind === 'dangle' && h.action === 'duck') {
+          zoneStart = Math.min(zoneStart, h.x - C.DANGLE_CLEAR - contact);
+          zoneEnd = Math.max(zoneEnd, h.x + h.w + C.DANGLE_CLEAR - contact);
+        }
         if (impactX >= zoneStart && impactX < zoneEnd) {
           impactX = zoneEnd;
           moved = true;
@@ -387,7 +402,7 @@
     // appearing inside the view (DESIGN 4.3; LEVEL2 4.3 "Minimum budget").
     if (kind === 'boulder') budget = Math.max(budget, C.BOULDER_MIN_BUDGET / config.pace);
     var budgetWs = budget * config.pace;
-    if (def.type === 'threat') budgetWs = keepClear(state, budgetWs);
+    if (def.type === 'threat') budgetWs = keepClear(state, kind, budgetWs);
     return budgetWs;
   }
 
@@ -487,6 +502,7 @@
       urgentSent: false
     };
     if (isCrate) e.power = spec.power || null;
+    if (kind === 'flit') e.turned = false;
     if (spec.skin) e.skin = spec.skin;
 
     state.entities.push(e);
@@ -547,6 +563,16 @@
     return r * r;
   }
 
+  function easeOut(r) {
+    return 1 - (1 - r) * (1 - r);
+  }
+
+  // The elevation at which the swoop, the dangle and the flit come in: the bottom of the sprite is its
+  // own height above the top of the playfield.
+  function roofElev(e) {
+    return TG.C.GROUND_Y - TG.C.PLAY_TOP + e.h;
+  }
+
   // Sets x, y, elev, phase and onScreen of a threat or crate from its t.
   function place(state, e) {
     var C = TG.C;
@@ -560,6 +586,20 @@
     switch (e.kind) {
       case 'boulder':
         dx = e.anchorX - p.x;
+        break;
+
+      case 'dangle':
+        // Anchored, as the boulder is. It drops from the roof on its thread over the first DANGLE_DROP_T
+        // of its time and then hangs still at head height while Pip runs up to it (LEVEL2 4.3).
+        dx = e.anchorX - p.x;
+        if (t < C.DANGLE_DROP_T) {
+          r = easeOut(t / C.DANGLE_DROP_T);
+          elev = roofElev(e) + (C.DANGLE_ELEV - roofElev(e)) * r;
+          phase = 'drop';
+        } else {
+          elev = C.DANGLE_ELEV;
+          phase = 'hang';
+        }
         break;
 
       case 'dawdle':
@@ -588,7 +628,7 @@
         break;
 
       case 'swoop':
-        var startElev = C.GROUND_Y - C.PLAY_TOP + e.h;     // bottom of the sprite at the top of the screen
+        var startElev = roofElev(e);
         if (t < C.SWOOP_ENTER_T) {
           r = t / C.SWOOP_ENTER_T;
           dx = C.SWOOP_HOVER_DX;
@@ -602,6 +642,32 @@
           r = easeIn((t - C.SWOOP_DIVE_T) / (1 - C.SWOOP_DIVE_T));
           dx = C.SWOOP_HOVER_DX * (1 - r);
           elev = C.SWOOP_HOVER_ELEV + (C.FLY_HIT_ELEV - C.SWOOP_HOVER_ELEV) * r;
+          phase = 'dive';
+        }
+        break;
+
+      case 'flit':
+        // LEVEL2 4.3: in from the roof ahead of Pip, across over him to a hover point behind him, a
+        // short settle there, then a dive that ends on him from behind at t = 1.
+        if (t < C.FLIT_ENTER_T) {
+          r = t / C.FLIT_ENTER_T;
+          dx = C.FLIT_FROM_DX;
+          elev = roofElev(e) + (C.FLIT_CROSS_ELEV - roofElev(e)) * r;
+          phase = 'enter';
+        } else if (t < C.FLIT_CROSS_T) {
+          r = (t - C.FLIT_ENTER_T) / (C.FLIT_CROSS_T - C.FLIT_ENTER_T);
+          dx = C.FLIT_FROM_DX + (C.FLIT_BEHIND_DX - C.FLIT_FROM_DX) * r;
+          elev = C.FLIT_CROSS_ELEV;      // level: the 4 px flutter of the crossing is left to the renderer
+          phase = 'cross';
+        } else if (t < C.FLIT_BEHIND_T) {
+          r = (t - C.FLIT_CROSS_T) / (C.FLIT_BEHIND_T - C.FLIT_CROSS_T);
+          dx = C.FLIT_BEHIND_DX;
+          elev = C.FLIT_CROSS_ELEV + (C.FLIT_BEHIND_ELEV - C.FLIT_CROSS_ELEV) * r;
+          phase = 'behind';
+        } else {
+          r = easeIn((t - C.FLIT_BEHIND_T) / (1 - C.FLIT_BEHIND_T));
+          dx = C.FLIT_BEHIND_DX * (1 - r);
+          elev = C.FLIT_BEHIND_ELEV + (C.FLY_HIT_ELEV - C.FLIT_BEHIND_ELEV) * r;
           phase = 'dive';
         }
         break;
@@ -688,6 +754,14 @@
     if (!e.entered && e.onScreen) {
       e.entered = true;
       if (e.type === 'threat') emit('threat:enter', { id: e.id, kind: e.kind, from: e.from });
+    }
+
+    // The flit's turn (LEVEL2 4.3): once it has crossed to its hover point behind Pip it faces right, and
+    // a second warning, heard as the truffle's is, says that it now comes from behind. Once per flit.
+    if (e.kind === 'flit' && !e.turned && e.t >= C.FLIT_CROSS_T) {
+      e.turned = true;
+      e.flipX = true;
+      emit('threat:warn', { id: e.id, kind: e.kind, from: 'behind' });
     }
 
     e.eta = etaOf(state, e);

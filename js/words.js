@@ -3,6 +3,7 @@
 // Defines TG.Words: POOLS, SAMPLES, ADJACENT, createPicker, has, validate.
 //
 // Contract: docs/CONTRACT.md section 4.6. Design: docs/DESIGN.md section 10 and Appendix A.
+// Level 2's word flavour, `clockwork`: docs/LEVEL2.md section 7 and Appendix A.
 //
 // This is a simulation module: no Math.random, no Date, no timers, no DOM. All randomness comes
 // from the generator that is passed to createPicker. Other modules (TG.C, TG.Difficulty) are looked
@@ -10,7 +11,8 @@
 //
 // Rules for every word (DESIGN 10.1): lowercase a to z only, no word in more than one list, no word
 // that is spelled differently in British and American English, nothing rude or upsetting. The words
-// added by WP-A are base forms: no plurals and no verb forms made with -s, -ed or -ing.
+// added by WP-A and the `clockwork` words are base forms: no plurals and no verb forms made with -s,
+// -ed or -ing (`bellows`, `tongs` and `hydraulics` are singular nouns in use, LEVEL2 7.1).
 (function (root) {
   'use strict';
   var TG = root.TG = root.TG || {};
@@ -68,6 +70,12 @@
 
   // The word arrays are frozen. The objects that hold them are not, so that a word flavour can be
   // added: POOLS.easy.flavour.cavern = { 1: [...], 2: [...], 3: [...] }.
+  //
+  // A flavour is one level's own vocabulary: extra words for tiers 1 to 3, added to those tiers by a
+  // picker that is created with the flavour's name (the level's theme.wordFlavour). Level 1's
+  // `meadow` has no lists, because its words are already in the tiers. Level 2's is `clockwork`,
+  // used as LEVEL2 Appendix A prints it. validate() holds a flavour list to the rules of its tier,
+  // but not to the 45-word and 8-first-letter minima, which are for the five pools.
   var POOLS = {
     easy: {
       1: list(
@@ -112,7 +120,22 @@
         'sunrise blossom harvest freedom sparkle golden wonder superb heroic joyous delight',
         'welcome perfect sunbeam'
       ),
-      flavour: {}
+      flavour: {
+        // LEVEL2 Appendix A. Tier 1 has no words: the theme's home-row words are already in tier 1
+        // above (LEVEL2 7.2), so an Easy tier 1 pick in Level 2 is one of Level 1's words.
+        clockwork: {
+          1: list(),
+          2: list(
+            'gear tool rust rail lift dial soot fuse jolt tilt grit fuel sift turf rift rod rig',
+            'ore tar slot silt stir toil grid hose gust leak idle load lead stud'
+          ),
+          3: list(
+            'cog bolt pump pipe bulb wire coal cart mine vent valve crank brass winch anvil torch',
+            'robot clamp spoke motor steam cable pick chain screw spade coil knob bench brick wick',
+            'tick tock zinc onyx opal echo drip beam'
+          )
+        }
+      }
     },
     medium: {
       1: list(
@@ -175,7 +198,26 @@
         'friendship masterpiece outstanding sensational triumphant victorious courageous',
         'unbeatable springtime excitement hummingbird wonderland countryside grasshopper'
       ),
-      flavour: {}
+      flavour: {
+        // LEVEL2 Appendix A
+        clockwork: {
+          1: list(
+            'metal steel drill lever shaft miner ledge forge hinge gauge track crane blade latch',
+            'plank tongs ember rocky rusty wagon gleam glint depth chute press smelt flint geode',
+            'tread pedal shale vault'
+          ),
+          2: list(
+            'piston pulley wrench bucket copper switch clutch socket gasket chisel mallet boiler',
+            'nozzle gadget engine rattle rumble grotto cavern marble gravel nugget widget tinker',
+            'toggle thrust cobble rubble ticker bobbin wedge ridge hoist lathe notch'
+          ),
+          3: list(
+            'gearbox conveyor cogwheel dynamo furnace turbine flywheel bellows windlass mechanic',
+            'quarry fizzle jiggle jangle sizzle ratchet keyhole whistle sprocket spanner minecart',
+            'jostle adjust extract'
+          )
+        }
+      }
     },
     hard: {
       1: list(
@@ -253,7 +295,29 @@
         'unforgettable determination constellation accomplishment interplanetary knowledgeable',
         'mountaineering quadrilateral ventriloquist indescribable straightforward sportsmanship'
       ),
-      flavour: {}
+      flavour: {
+        // LEVEL2 Appendix A. Tier 3's four words of 11 letters are valid and are never picked for a
+        // threat, like the pool's own, because MAX_WORD_LEN is 10.
+        clockwork: {
+          1: list(
+            'flange spigot gantry rivet swivel pivot pumice basalt gypsum cobalt zircon gimbal',
+            'sextant smelter spindle treadle fissure crevice geyser girder trowel pewter chrome',
+            'nickel pyrite ingot solder pinion torque crowbar hopper foundry grommet'
+          ),
+          2: list(
+            'gearwheel mechanism clockwork blowtorch mineshaft crucible generator machinist',
+            'millstone quartzite limestone whirligig excavator periscope monorail funicular',
+            'trapdoor camshaft headlamp lodestone turnstile crankcase sandstone propeller',
+            'stopwatch metronome locksmith cartwheel blueprint'
+          ),
+          3: list(
+            'crankshaft typewriter grindstone waterwheel escapement clockmaker centrifuge',
+            'thermostat mechanical machinery fluorite amethyst malachite magnetite tourmaline',
+            'geothermal horologist mainspring wheelbarrow drawbridge screwdriver locomotive',
+            'ironmonger watchmaker chronometer millwright calibration hydraulics'
+          )
+        }
+      }
     }
   };
 

@@ -44,13 +44,14 @@ Project root: the repository root, the folder that holds `index.html`.
 | 11 | `js/level.js` | WP-E | `TG.Level` |
 | 12 | `js/boss.js` | WP-E | `TG.Boss` |
 | 13 | `js/levels/level1.js` | WP-E | `TG.Levels[1]` |
-| 14 | `js/game.js` | WP-E | `TG.Game` |
-| 15 | `js/effects.js` | WP-F | `TG.Effects` |
-| 16 | `js/hud.js` | WP-F | `TG.Hud` |
-| 17 | `js/render.js` | WP-F | `TG.Render` |
-| 18 | `js/board.js` | Lead | `TG.Board`: world scores, the one file that makes network requests (section 4.22) |
-| 19 | `js/ui.js` | WP-G | `TG.UI` |
-| 20 | `js/main.js` | WP-G | `TG.Main` |
+| 14 | `js/levels/level2.js` | Lead | `TG.Levels[2]` |
+| 15 | `js/game.js` | WP-E | `TG.Game` |
+| 16 | `js/effects.js` | WP-F | `TG.Effects` |
+| 17 | `js/hud.js` | WP-F | `TG.Hud` |
+| 18 | `js/render.js` | WP-F | `TG.Render` |
+| 19 | `js/board.js` | Lead | `TG.Board`: world scores, the one file that makes network requests (section 4.22) |
+| 20 | `js/ui.js` | WP-G | `TG.UI` |
+| 21 | `js/main.js` | WP-G | `TG.Main` |
 | | `test/stubs.js` | WP0 | Node loader with stubs |
 | | `test/test-core.js` | WP0 | Tests for core.js |
 | | `test/test-words.js` | WP-A | |
@@ -76,7 +77,7 @@ Project root: the repository root, the folder that holds `index.html`.
 | | `docs/DESIGN.md`, `docs/CONTRACT.md` | Lead | |
 | | `docs/LEADERBOARD.md` | Lead | The agreement between the world scores service and the game |
 
-**Script load order.** `index.html` loads the 20 JavaScript files with classic `<script src>` tags in the numbered order above, at the end of `<body>`, followed by one inline script:
+**Script load order.** `index.html` loads the 21 JavaScript files with classic `<script src>` tags in the numbered order above, at the end of `<body>`, followed by one inline script:
 
 ```html
 <script src="js/core.js"></script>
@@ -92,6 +93,7 @@ Project root: the repository root, the folder that holds `index.html`.
 <script src="js/level.js"></script>
 <script src="js/boss.js"></script>
 <script src="js/levels/level1.js"></script>
+<script src="js/levels/level2.js"></script>
 <script src="js/game.js"></script>
 <script src="js/effects.js"></script>
 <script src="js/hud.js"></script>
@@ -138,7 +140,7 @@ Every JavaScript file under `js/` is one IIFE that attaches to the single global
 1. **Nothing happens at load time except definitions.** A file may create objects and functions, read `TG.C`, `TG.PAL` and `TG.COLOR`, and register data with `TG.Sprites.define`, `TG.Remaps`, `TG.Backdrops` and `TG.Levels`. It may not touch `document`, `window` properties other than `TG`, canvas, `AudioContext`, `localStorage`, timers, `requestAnimationFrame`, or call any other module's functions.
 2. **DOM, canvas and audio access happens only inside `init` functions** (and functions called after them). `TG.Main.init()` is the only entry point and calls the other `init` functions.
 3. **References to other modules are resolved at call time**, inside functions: write `TG.Events.emit(...)` in a function body. Only `TG.C`, `TG.PAL`, `TG.PAL_KEYS`, `TG.COLOR` and `TG.Util` may be read or copied at load time, and the registries named in rule 1 may be written to. Every other module is looked up inside function bodies, including modules that load earlier in the script order. For example, `hud.js` must not read `TG.Font.SYM.HEART` at load time and `render.js` must not contain `var Gfx = TG.Gfx` at the top of the file, because in the isolated test loads of rule 6 those modules are absent.
-4. **Simulation modules** are `core.js`, `words.js`, `typing.js`, `input.js` (its queue), `entities.js`, `level.js`, `boss.js`, `levels/level1.js` and `game.js`. They:
+4. **Simulation modules** are `core.js`, `words.js`, `typing.js`, `input.js` (its queue), `entities.js`, `level.js`, `boss.js`, `levels/level1.js`, `levels/level2.js` and `game.js`. They:
    - never use `Math.random`, `Date`, `performance.now`, timers or the DOM;
    - take all randomness from `state.rng`;
    - never call `TG.Audio`, `TG.Gfx`, `TG.Font`, `TG.Effects`, `TG.Hud`, `TG.Render`, `TG.UI` or `TG.Main`. They communicate outward only by mutating state and emitting events.
@@ -214,7 +216,13 @@ TG.C = {
   INTRO_FACTOR: 1.5,      // budget factor for intro and tutorial spawns
   SPAWN_RETRY: 0.25,      // ws between retries of a waiting spawn
   SWOOP_HOVER_DX: 120, SWOOP_HOVER_ELEV: 120, SWOOP_ENTER_T: 0.15, SWOOP_DIVE_T: 0.65,
-  FLY_HIT_ELEV: 12,       // elevation at which Swoop ends its dive, px
+  FLY_HIT_ELEV: 12,       // elevation at which Swoop and Flit end their dive, px
+  DANGLE_ELEV: 20,        // elevation at which Dangle hangs, px
+  DANGLE_DROP_T: 0.2,     // t by which Dangle has dropped from the roof to DANGLE_ELEV
+  DANGLE_CLEAR: 128,      // Dangle's anchor is at least this far from the box of a branch, beehive or arch, px
+  FLIT_ENTER_T: 0.15, FLIT_CROSS_T: 0.55, FLIT_BEHIND_T: 0.70,   // t at which Flit's enter, cross and behind phases end; the dive ends at t = 1
+  FLIT_FROM_DX: 150, FLIT_BEHIND_DX: -72,     // dx at which Flit comes in, and of its hover point behind Pip, px
+  FLIT_CROSS_ELEV: 100, FLIT_BEHIND_ELEV: 80, // elevation at which Flit crosses over Pip, and from which it dives, px
   BUZZLE_ELEV: 16, BUZZLE_BOB: 4, BUZZLE_BOB_HZ: 1.5,
   HOP_LEN: 24, HOP_HEIGHT: 10,
   DIGBY_POP_T: 0.85,      // t at which the mole starts to rise
@@ -1237,19 +1245,23 @@ typable = {
 ```js
 TG.Entities.KINDS = {
   //         type       from      sprite box   sprite           sound family      letter stall
-  boulder: { type: 'threat', from: 'right',  w: 24, h: 32, sprite: 'en_boulder',    family: 'crunch', stall: false },
+  boulder: { type: 'threat', from: 'right',  w: 24, h: 32, sprite: 'en_boulder',    family: 'crunch', stall: false, anchored: true },
   dawdle:  { type: 'threat', from: 'right',  w: 16, h: 16, sprite: 'en_dawdle',     family: 'twang',  stall: true  },
   hoppet:  { type: 'threat', from: 'right',  w: 16, h: 16, sprite: 'en_hoppet',     family: 'pop',    stall: true  },
   buzzle:  { type: 'threat', from: 'right',  w: 16, h: 16, sprite: 'en_buzzle',     family: 'pop',    stall: true  },
   swoop:   { type: 'threat', from: 'above',  w: 24, h: 16, sprite: 'en_swoop',      family: 'crunch', stall: true  },
   truffle: { type: 'threat', from: 'behind', w: 24, h: 16, sprite: 'en_truffle',    family: 'bonk',   stall: true  },
   digby:   { type: 'threat', from: 'below',  w: 16, h: 16, sprite: 'en_digby',      family: 'bonk',   stall: true  },
+  dangle:  { type: 'threat', from: 'above',  w: 16, h: 16, sprite: 'en_dangle',     family: 'twang',  stall: false, anchored: true },
+  flit:    { type: 'threat', from: 'above',  w: 24, h: 16, sprite: 'en_flit',       family: 'pop',    stall: true  },
   rock:    { type: 'threat', from: 'right',  w: 12, h: 12, sprite: 'pr_rock',       family: 'pop',    stall: true  },  // from is 'above' for a high rock
   crate:   { type: 'crate',  from: 'right',  w: 16, h: 32, sprite: 'crate_balloon', family: 'pop',    stall: false },
   shock:   { type: 'attack', from: 'right',  w: 16, h: 8,  sprite: 'pr_shock',      action: 'jump', elev: 0 },
   pick:    { type: 'attack', from: 'right',  w: 16, h: 16, sprite: 'pr_pickaxe',    action: 'duck', elev: 14 }
 };
 ```
+
+`anchored: true` marks a kind that stands at a fixed point in the world while Pip runs up to it (the boulder, and Level 2's dangle): its `x` is its `anchorX`, set at the spawn, and its `t` follows from the distance Pip still has to run (`docs/LEVEL2.md` 4.3). `dangle` and `flit` are the kinds Level 2 adds; their paths are in `docs/LEVEL2.md` 4.3.
 
 ### 5.5 Threat and crate entities
 
@@ -1595,7 +1607,8 @@ The field names and the shape are binding. The numbers are starting values: WP0 
 
   wordLen: {                      // [min, max] before the section shift
     boulder: [4, 6], dawdle: [5, 8], hoppet: [4, 6], buzzle: [4, 6],
-    swoop: [5, 6], truffle: [4, 5], digby: [5, 6], crate: [5, 8], rock: [4, 5]
+    swoop: [5, 6], truffle: [4, 5], digby: [5, 6], crate: [5, 8], rock: [4, 5],
+    dangle: [5, 6], flit: [5, 6]
   },
   lenShift: [0, 1, 2],            // added to both ends in sections 0, 1, 2
   tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.4 }, { 1: 0.6, 2: 0.4 } ],   // sections 0, 1, 2, boss arena
@@ -1668,6 +1681,8 @@ Values for all three entries:
 | `wordLen.digby` | `[3, 4]` | `[5, 6]` | `[6, 8]` |
 | `wordLen.crate` | `[3, 5]` | `[5, 8]` | `[7, 10]` |
 | `wordLen.rock` | `[2, 4]` | `[4, 5]` | `[5, 7]` |
+| `wordLen.dangle` | `[3, 4]` | `[5, 6]` | `[6, 8]` |
+| `wordLen.flit` | `[3, 4]` | `[5, 6]` | `[6, 9]` |
 | `lenShift` | `[0, 0, 1]` | `[0, 1, 2]` | `[0, 1, 2]` |
 | `tierMix[0]` | `{1: 1}` | same | same |
 | `tierMix[1]` | `{2: 0.7, 1: 0.3}` | same | same |
@@ -2392,7 +2407,7 @@ All tests are plain Node scripts with no npm packages. They run from the project
 ```js
 const stubs = require('./stubs');
 
-stubs.FILES            // the 20 file paths of section 1, in load order, relative to the project root
+stubs.FILES            // the 21 file paths of section 1, in load order, relative to the project root
 stubs.ROOT             // absolute path of the project root
 
 stubs.plain(value) -> value   // a JSON copy of `value` made in the test's own realm (see "Comparing values" below)
@@ -2968,7 +2983,7 @@ Deliverables: `test/run-all.js`, `test/test-integration.js`, `README.md`, fixes 
 - [ ] `node test/test-integration.js` drives the whole game with key events and the bots, with rendering and sound on, and covers the paths a bot run does not take (section 14.1).
 - [ ] Every test passes against the real files. `test/standins/` is deleted.
 - [ ] If WP-E was delivered at a milestone below 6: the bot runs of the delivered milestones pass with the matching `--until`, and the part that is missing is listed for the lead, who decides how it is completed.
-- [ ] With all 20 files loaded under the stubs, 600 frames driven through `env.runFrame` from `boot` to `playing` (keys injected with `env.dispatch`) complete without a captured `console.error`.
+- [ ] With all 21 files loaded under the stubs, 600 frames driven through `env.runFrame` from `boot` to `playing` (keys injected with `env.dispatch`) complete without a captured `console.error`.
 - [ ] `TG.Sprites.missing()` is empty; no placeholder warning appears during a full bot run with rendering on.
 - [ ] Every name passed to `TG.Audio.sfx` and `TG.Audio.music` anywhere in the code is in the registries.
 - [ ] Tuning changes are written back as section 12.1 describes: into sections 3 and 5.10 of this file, DESIGN 9.1 and 11, and `js/core.js`; the `tune` block of Level 1 and `CONSTANT_OVERRIDES` are empty; `node test/sim.js` passes afterwards.
@@ -3060,7 +3075,7 @@ WP-H integrated the delivered packages of Level 1. This section records what was
 
 ### 14.1 What was checked
 
-`node test/run-all.js` runs the `test/test-*.js` files (thirteen since world scores: the ten of Level 1, `test-server.js`, `test-board.js` and `test-board-server.js`) and `test/sim.js` and passes (about 90 s with several files at a time; `--quick` shortens the two slowest files). `test/test-integration.js` (WP-H) loads all 20 files under the stubs with the software canvas, which throws on any canvas call outside the subset of 13.2, and checks:
+`node test/run-all.js` runs the `test/test-*.js` files (thirteen since world scores: the ten of Level 1, `test-server.js`, `test-board.js` and `test-board-server.js`) and `test/sim.js` and passes (about 90 s with several files at a time; `--quick` shortens the two slowest files). `test/test-integration.js` (WP-H) loads all 21 files under the stubs with the software canvas, which throws on any canvas call outside the subset of 13.2, and checks:
 
 - every file present, no sprite of 6.4 missing, nothing drawn or played at load time;
 - no network API, remote address or external file in `index.html`, `css/style.css` or any script, except in `js/board.js`, which may call the network function it is handed and holds the one remote address, `TG.Board.URL` (rule 10 of 2.2);
@@ -3170,7 +3185,7 @@ Extra test-only views, used by tests and tools and never by the game: `TG.Audio.
 
 **World scores.** A shared leaderboard that the owner asked for after release. The service is a Cloudflare Worker of our own (`server/`); `docs/LEADERBOARD.md` is the agreement between it and the game. The game side is written into the sections named, with checks in the test files given.
 
-- One network module (1, 2.2 rule 10, 4.22). `js/board.js` is the 20th script, loaded after `js/render.js` and before `js/ui.js`. It defines `TG.Board`, the only code in the game that makes network requests, and only to `TG.Board.URL`. The address is the empty string as delivered: world scores are then off, no request is made and every screen is as it was. The lead fills the address in after the service is deployed. The statement of section 1 that the game makes no network requests of any kind now reads: the page loads nothing from the network, and `TG.Board` is the one exception. `test/test-integration.js` (the static rule), `test/test-board.js`.
+- One network module (1, 2.2 rule 10, 4.22). `js/board.js` was the 20th script (`js/levels/level2.js` has since made 21), loaded after `js/render.js` and before `js/ui.js`. It defines `TG.Board`, the only code in the game that makes network requests, and only to `TG.Board.URL`. The address is the empty string as delivered: world scores are then off, no request is made and every screen is as it was. The lead fills the address in after the service is deployed. The statement of section 1 that the game makes no network requests of any kind now reads: the page loads nothing from the network, and `TG.Board` is the one exception. `test/test-integration.js` (the static rule), `test/test-board.js`.
 - The game never depends on the service (4.22). No function of `TG.Board` throws or returns a promise; results arrive in `TG.Board.state`. A request is given up after 6 s. A reply that is late, is not JSON, has the wrong shape or an error status is a failure, and after a failure the game carries on with the scores of this computer. Lists from the service are cleaned before they are kept. `test/test-board.js`.
 - `TG.Main` (4.21) hands `TG.Board` the window's `fetch` and a clock in `init`, and calls `TG.Board.update` once per frame. `test/test-board.js`.
 - Setting `worldScores`, default `true` (4.4, 5.12), with a WORLD SCORES line on the Options panel and the note "SENDS YOUR INITIALS AND SCORE". The line is shown only when an address is set. With the setting off no request is made. `test/test-core.js`, `test/test-ui.js`.

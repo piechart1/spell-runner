@@ -139,7 +139,13 @@
     INTRO_FACTOR: 1.5,      // budget factor for intro and tutorial spawns
     SPAWN_RETRY: 0.25,      // ws between retries of a waiting spawn
     SWOOP_HOVER_DX: 120, SWOOP_HOVER_ELEV: 120, SWOOP_ENTER_T: 0.15, SWOOP_DIVE_T: 0.65,
-    FLY_HIT_ELEV: 12,       // elevation at which Swoop ends its dive, px
+    FLY_HIT_ELEV: 12,       // elevation at which Swoop and Flit end their dive, px
+    DANGLE_ELEV: 20,        // elevation at which Dangle hangs, px
+    DANGLE_DROP_T: 0.2,     // t by which Dangle has dropped from the roof to DANGLE_ELEV
+    DANGLE_CLEAR: 128,      // Dangle's anchor is at least this far from the box of a branch, beehive or arch, px
+    FLIT_ENTER_T: 0.15, FLIT_CROSS_T: 0.55, FLIT_BEHIND_T: 0.70,   // t at which Flit's enter, cross and behind phases end; the dive ends at t = 1
+    FLIT_FROM_DX: 150, FLIT_BEHIND_DX: -72,     // dx at which Flit comes in, and of its hover point behind Pip, px
+    FLIT_CROSS_ELEV: 100, FLIT_BEHIND_ELEV: 80, // elevation at which Flit crosses over Pip, and from which it dives, px
     BUZZLE_ELEV: 16, BUZZLE_BOB: 4, BUZZLE_BOB_HZ: 1.5,
     HOP_LEN: 24, HOP_HEIGHT: 10,
     DIGBY_POP_T: 0.85,      // t at which the mole starts to rise
@@ -596,7 +602,8 @@
 
       wordLen: {                      // [min, max] before the section shift
         boulder: [2, 4], dawdle: [3, 5], hoppet: [2, 4], buzzle: [2, 4],
-        swoop: [3, 4], truffle: [2, 3], digby: [3, 4], crate: [3, 5], rock: [2, 4]
+        swoop: [3, 4], truffle: [2, 3], digby: [3, 4], crate: [3, 5], rock: [2, 4],
+        dangle: [3, 4], flit: [3, 4]
       },
       lenShift: [0, 0, 1],            // added to both ends in sections 0, 1, 2
       tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.3, 1: 0.1 }, { 1: 0.6, 2: 0.4 } ],   // sections 0, 1, 2, boss arena
@@ -665,7 +672,8 @@
 
       wordLen: {
         boulder: [4, 6], dawdle: [5, 8], hoppet: [4, 6], buzzle: [4, 6],
-        swoop: [5, 6], truffle: [4, 5], digby: [5, 6], crate: [5, 8], rock: [4, 5]
+        swoop: [5, 6], truffle: [4, 5], digby: [5, 6], crate: [5, 8], rock: [4, 5],
+        dangle: [5, 6], flit: [5, 6]
       },
       lenShift: [0, 1, 2],
       tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.4 }, { 1: 0.6, 2: 0.4 } ],
@@ -734,7 +742,8 @@
 
       wordLen: {
         boulder: [5, 9], dawdle: [7, 10], hoppet: [5, 8], buzzle: [5, 8],
-        swoop: [6, 9], truffle: [5, 7], digby: [6, 8], crate: [7, 10], rock: [5, 7]
+        swoop: [6, 9], truffle: [5, 7], digby: [6, 8], crate: [7, 10], rock: [5, 7],
+        dangle: [6, 8], flit: [6, 9]
       },
       lenShift: [0, 1, 2],
       tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.4 }, { 1: 0.6, 2: 0.4 } ],

@@ -69,9 +69,10 @@ const CORE = ['js/core.js'];
 // Loading
 // =================================================================================================
 
-check('stubs.FILES lists the 20 files of CONTRACT section 1 in load order', function () {
-  return stubs.FILES.length === 20 && stubs.FILES[0] === 'js/core.js' && stubs.FILES[12] === 'js/levels/level1.js' &&
-    stubs.FILES[17] === 'js/board.js' && stubs.FILES[19] === 'js/main.js' && fs.existsSync(path.join(stubs.ROOT, 'js', 'core.js'));
+check('stubs.FILES lists the 21 files of CONTRACT section 1 in load order', function () {
+  return stubs.FILES.length === 21 && stubs.FILES[0] === 'js/core.js' && stubs.FILES[12] === 'js/levels/level1.js' &&
+    stubs.FILES[13] === 'js/levels/level2.js' &&
+    stubs.FILES[18] === 'js/board.js' && stubs.FILES[20] === 'js/main.js' && fs.existsSync(path.join(stubs.ROOT, 'js', 'core.js'));
 });
 
 check('stubs.load() with the default file list succeeds and reports the files that do not exist as missing', function () {
@@ -79,13 +80,13 @@ check('stubs.load() with the default file list succeeds and reports the files th
   const existing = stubs.FILES.filter(function (f) { return fs.existsSync(path.join(stubs.ROOT, f)); });
   const absent = stubs.FILES.filter(function (f) { return !fs.existsSync(path.join(stubs.ROOT, f)); });
   return same(env.loaded, existing) && same(env.missing, absent) && env.loaded.indexOf('js/core.js') === 0 &&
-    env.loaded.length + env.missing.length === 20;
+    env.loaded.length + env.missing.length === 21;
 });
 
-check('stubs.load with core.js and 19 names that do not exist loads core.js and reports the rest as missing', function () {
+check('stubs.load with core.js and 20 names that do not exist loads core.js and reports the rest as missing', function () {
   const files = stubs.FILES.map(function (f, i) { return i === 0 ? f : 'js/absent/' + path.basename(f); });
   const env = stubs.load({ files: files });
-  return same(env.loaded, ['js/core.js']) && env.missing.length === 19 && typeof env.TG === 'object';
+  return same(env.loaded, ['js/core.js']) && env.missing.length === 20 && typeof env.TG === 'object';
 });
 
 check('stubs.load with allowMissing false throws and names the missing file', function () {
@@ -174,6 +175,16 @@ check('TG.C has the key values of CONTRACT section 3', function () {
     C.SLIDE_TIME === 0.875 && C.MAX_LIVES === 9 && C.MAX_SHIELD === 2 && C.SCORE_SLOTS === 5 &&
     same(C.SIM_SCREENS, ['playing', 'lifeLost', 'bossIntro', 'boss', 'levelComplete']) &&
     same(C.MIN_SPEED, { dawdle: 6, hoppet: 20, buzzle: 28 }) && same(C.MULT_STEPS, [0, 3, 6, 10, 15]);
+});
+
+check('TG.C has the Dangle and Flit constants of LEVEL2 4.3', function () {
+  const C = TG.C;
+  return C.DANGLE_ELEV === 20 && C.DANGLE_DROP_T === 0.2 && C.DANGLE_CLEAR === 128 && C.DANGLE_CLEAR === 8 * C.TILE &&
+    C.FLIT_ENTER_T === 0.15 && C.FLIT_CROSS_T === 0.55 && C.FLIT_BEHIND_T === 0.70 &&
+    C.FLIT_FROM_DX === 150 && C.FLIT_BEHIND_DX === -72 && C.FLIT_CROSS_ELEV === 100 && C.FLIT_BEHIND_ELEV === 80 &&
+    // The phases come in this order, and the hover point behind Pip is inside the view (Pip is at screen x 96).
+    0 < C.FLIT_ENTER_T && C.FLIT_ENTER_T < C.FLIT_CROSS_T && C.FLIT_CROSS_T < C.FLIT_BEHIND_T && C.FLIT_BEHIND_T < 1 &&
+    C.HERO_SCREEN_X + C.FLIT_BEHIND_DX - 12 >= 0;
 });
 
 check('TG.PAL has 32 hex strings, TG.PAL_KEYS has 32 distinct keys, TG.COLOR has 32 names for 0 to 31', function () {
@@ -685,6 +696,19 @@ check('Difficulty.wordRange: the boss arena (index 3) has no shift; the maximum 
     same(D.wordRange(h, 'crate', 1), [8, 10]) && same(D.wordRange(e, 'boulder', 0), [2, 4]) &&
     same(D.wordRange(e, 'boulder', 2), [3, 5]) && same(D.wordRange(e, 'truffle', 1), [2, 3]) &&
     same(D.wordRange(h, 'digby', 2), [8, 10]) && same(D.wordRange(h, 'rock', 3), [5, 7]);
+});
+
+check('Difficulty: wordLen.dangle and wordLen.flit are the rows of LEVEL2 4.2, and wordRange shifts them by section', function () {
+  const e2 = stubs.load({ files: CORE });
+  const D = e2.TG.Difficulty;
+  const e = D.get('easy'), m = D.get('medium'), h = D.get('hard');
+  // A kind with a row does not get the "no word length" warning.
+  return same(e.wordLen.dangle, [3, 4]) && same(m.wordLen.dangle, [5, 6]) && same(h.wordLen.dangle, [6, 8]) &&
+    same(e.wordLen.flit, [3, 4]) && same(m.wordLen.flit, [5, 6]) && same(h.wordLen.flit, [6, 9]) &&
+    same(D.wordRange(e, 'dangle', 0), [3, 4]) && same(D.wordRange(e, 'flit', 2), [4, 5]) &&
+    same(D.wordRange(m, 'dangle', 1), [6, 7]) && same(D.wordRange(m, 'flit', 2), [7, 8]) &&
+    same(D.wordRange(h, 'dangle', 1), [7, 9]) && same(D.wordRange(h, 'flit', 2), [8, 10]) &&
+    e2.warnings.length === 0;
 });
 
 check('Difficulty.wordRange returns a new array each time and follows the constants option', function () {
@@ -1529,7 +1553,7 @@ if (contract === null || design === null) {
     const re = /<script src="([^"]+)"><\/script>/g;
     let m;
     while ((m = re.exec(sec)) !== null) tags.push(m[1]);
-    return numbered.length === 20 && same(numbered, stubs.FILES) && same(tags, stubs.FILES);
+    return numbered.length === 21 && same(numbered, stubs.FILES) && same(tags, stubs.FILES);
   });
 
   check('doc: TG.Difficulty.TUNABLE equals the list in CONTRACT 4.5', function () {

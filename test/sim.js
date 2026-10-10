@@ -3,12 +3,18 @@
 //
 //   node test/sim.js                       the acceptance matrix (36 runs a level) and every extra check
 //   node test/sim.js --level N             the same for one level (LEVELS below lists the levels built)
+//   node test/sim.js --quick               the same for the first level only (as node test/run-all.js --quick runs it)
 //   node test/sim.js --milestone N         the runs and checks of WP-E milestone N (CONTRACT 12)
 //   node test/sim.js --check NAME          one extra check, no matrix runs
+//   node test/sim.js --measure             also a MEASURE line after each RUN line (LEVEL2 13.5: window use,
+//                                          the fight, the arena flag, the watch crates, lives, the dangles)
 //   node test/sim.js --difficulty medium --profile target --seed 1 --until boss --verbose
 //   node test/sim.js --difficulty easy --wpm 12 --accuracy 0.9 --react 1.2   (one custom run, INFO)
+//   node test/sim.js --help                the options
 //
 // As a module:  const { runBot } = require('./sim');  runBot({ difficulty, wpm, accuracy, react, ... })
+//               levelId picks the level (1 without it) and startAssist the assist the run starts at (1
+//               without it); the Session class in part 4 lists every option
 //
 // File layout:
 //   1. tuning tables (CONSTANT_OVERRIDES, EXPECTED_COUNTS and the other tables keyed by level) and settings
@@ -38,23 +44,76 @@ const CONSTANT_OVERRIDES = {};
 // The levels the harness plays, in order. `--level N` picks one; with no option every level here is
 // played. A level joins the list when its file is built and it has a row in each table below
 // (LEVEL2 13.1 and 13.5).
-const LEVELS = [1];
+const LEVELS = [1, 2];
 
 // The tables below are keyed by level id.
-// Threat words per section (DESIGN 11.2) as amended by the "Tuning changes" list of the level's file.
-const EXPECTED_COUNTS = { 1: { easy: [11, 14, 14], medium: [12, 16, 19], hard: [18, 22, 20] } };
+// Threat words per section (DESIGN 11.2, LEVEL2 8.4) as amended by the "Tuning changes" list of the level's file.
+const EXPECTED_COUNTS = {
+  1: { easy: [11, 14, 14], medium: [12, 16, 19], hard: [18, 22, 20] },
+  2: { easy: [13, 16, 15], medium: [15, 19, 19], hard: [21, 23, 22] }
+};
 
-// The design's counts as written (DESIGN 11.2 for Level 1). Never changed: the `counts` check compares
-// EXPECTED_COUNTS with it.
-const DESIGN_COUNTS = { 1: { easy: [11, 14, 14], medium: [12, 16, 19], hard: [18, 22, 20] } };
-// The powers of the level's crates, sorted by name (the `counts` check).
-const DESIGN_CRATES = { 1: ['blast', 'cap', 'cap', 'hourglass', 'quill', 'shield', 'shield'] };
-// Ink drops laid out on each difficulty (the `items-shape` check).
-const INK_COUNTS = { 1: { easy: 150, medium: 153, hard: 153 } };
+// The design's counts as written (DESIGN 11.2 for Level 1, LEVEL2 8.4 for Level 2). Never changed: the
+// `counts` check compares EXPECTED_COUNTS with it.
+const DESIGN_COUNTS = {
+  1: { easy: [11, 14, 14], medium: [12, 16, 19], hard: [18, 22, 20] },
+  2: { easy: [13, 16, 15], medium: [15, 19, 19], hard: [21, 23, 22] }
+};
+// The threat entries of each kind on Easy / Medium / Hard, as the level's file has them (the `counts`
+// check). The timelines are DESIGN 11.2 for Level 1 and LEVEL2 9.3 to 9.5 for Level 2; LEVEL2 8.6 gives the
+// Dangle's 6 / 8 / 11 and the Flit's 5 / 8 / 10. A kind that is not named has no entry in the level. A
+// change of kind is a tuning change: it goes in the "Tuning changes" list of the level's file and here.
+const EXPECTED_KINDS = {
+  1: { boulder: [8, 8, 8], dawdle: [3, 4, 7], hoppet: [9, 10, 14], buzzle: [9, 10, 13], swoop: [3, 6, 9], truffle: [4, 6, 6], digby: [3, 3, 3] },
+  2: { boulder: [8, 8, 9], dawdle: [4, 5, 6], hoppet: [6, 6, 8], buzzle: [7, 8, 11], truffle: [5, 6, 7], digby: [3, 4, 4], dangle: [6, 8, 11], flit: [5, 8, 10] }
+};
+// The powers of the level's crates in the order they are met (the `counts` check; LEVEL2 6.2 for Level 2).
+const DESIGN_CRATES = {
+  1: ['shield', 'hourglass', 'cap', 'quill', 'blast', 'cap', 'shield'],
+  2: ['shield', 'watch', 'hourglass', 'cap', 'quill', 'watch', 'blast', 'cap', 'shield']
+};
+// The word flavour whose lists the level's runs draw from, or null for a level that adds no words to the
+// tiers (the `words-by-difficulty` check). Level 1's theme names `meadow`, which has no lists (js/words.js);
+// Level 2's is `clockwork` (LEVEL2 section 7 and Appendix A).
+const WORD_FLAVOUR = { 1: null, 2: 'clockwork' };
+// Ink drops laid out on each difficulty (the `items-shape` check; LEVEL2 6.1 for Level 2).
+const INK_COUNTS = { 1: { easy: 150, medium: 153, hard: 153 }, 2: { easy: 184, medium: 187, hard: 187 } };
 // The tile of the first gap that is open on Easy (the `no-jump-bridge` check).
-const FIRST_EASY_GAP = { 1: 106 };
-// The target bot's run length in seconds, from and to (the `length` check).
-const LENGTH_BOUNDS = { 1: [240, 420] };
+const FIRST_EASY_GAP = { 1: 106, 2: 72 };
+// The target bot's run length in seconds, from and to (the `length` check; LEVEL2 8.4 for Level 2).
+const LENGTH_BOUNDS = { 1: [240, 420], 2: [260, 440] };
+// The boss of the level (the `boss-fight` check): its kind, its health and whether the phase 3 volley ends
+// with the minion on each difficulty, and the sprite the minion is drawn with (none: the kind's own).
+// DESIGN 11.6 and the tune block of js/levels/level1.js for Level 1; LEVEL2 8.2, 10.6 and 10.7 for Level 2.
+const BOSS_EXPECTED = {
+  1: { kind: 'baron', health: { easy: 3, medium: 5, hard: 7 }, minion: { easy: false, medium: true, hard: true }, minionSkin: null },
+  2: { kind: 'ratchet', health: { easy: 3, medium: 6, hard: 7 }, minion: { easy: true, medium: true, hard: true }, minionSkin: 'en_baronet' }
+};
+// What a level is tuned to beyond the fixed pass conditions of CONTRACT 10.4 (the `targets` check and the
+// watch row of `counts`). Level 2's are the table of LEVEL2 13.5; each bound applies to every seed. Level 1
+// has none.
+//   floorContinues  the floor bot's continues, at most, started at assist 1.0 and started at the assist a
+//                   floor run of level `savedFrom` on the same difficulty and seed leaves saved
+//   u               the target bot's mean window use, from and to. `uNoted` names a difficulty whose value
+//                   under the band is reported and not failed: Easy, which the owner keeps at the plan's
+//                   timing for M1 as the noted exception until the real creatures are measured (decision 1).
+//                   `uNotedFrom` is how far under it may be. It is the harness's guard and not a decided
+//                   target: M1 measured Easy at 0.52 to 0.59 on seeds 1 to 20 with the real creatures, and
+//                   a later change that takes it under 0.50 fails the row. What Easy should be is still
+//                   the owner's to say
+//   fight           the target bot's fight in seconds, boss:enter to boss:defeat, from and to
+//   liveAtFlag      threats still live at the arena flag, target and floor bots (the floor bot from both
+//                   starts), at most
+//   watchLive       threat words live at each watch crate's word:clear, target and floor bots, at least
+const LEVEL_TARGETS = {
+  2: {
+    floorContinues: { easy: 1, medium: 2, hard: 2 }, savedFrom: 1,
+    u: [0.55, 0.75], uNoted: 'easy', uNotedFrom: 0.50,
+    fight: [60, 120],
+    liveAtFlag: 0,
+    watchLive: 1
+  }
+};
 
 // The run and the file of the `level1-events` check (LEVEL2 13.4 M0 and 13.5).
 const LEVEL1_EVENTS_FILE = 'test/fixtures/level1-events.json';
@@ -71,9 +130,11 @@ const MILESTONES_BUILT = 6;
 
 const SIM_FILES = [
   'js/core.js', 'js/words.js', 'js/typing.js', 'js/input.js', 'js/entities.js', 'js/level.js',
-  'js/boss.js', 'js/levels/level1.js', 'js/game.js'
+  'js/boss.js', 'js/levels/level1.js', 'js/levels/level2.js', 'js/game.js'
 ];
-const WPE_FILES = ['js/input.js', 'js/entities.js', 'js/level.js', 'js/boss.js', 'js/levels/level1.js', 'js/game.js'];
+const WPE_FILES = ['js/input.js', 'js/entities.js', 'js/level.js', 'js/boss.js', 'js/levels/level1.js', 'js/levels/level2.js', 'js/game.js'];
+// The hazards Pip ducks under. A dangle keeps its distance from them (LEVEL2 4.3).
+const DUCK_HAZARDS = { branch: true, beehive: true, arch: true };
 
 const DIFFICULTIES = ['easy', 'medium', 'hard'];
 const PROFILES = ['floor', 'target', 'fast', 'exact'];
@@ -111,7 +172,8 @@ function loadEnv(files) {
 //   budget         every new word's budget is max(base, queue, spacing) (and the boulder minimum),
 //                  recomputed independently from the state at the moment of the spawn; a longer
 //                  budget is allowed only when the keep-clear rule moved the arrival to a zone's end
-//   keep-clear     no threat is scheduled to arrive inside a hazard's input window or its margin
+//   keep-clear     no threat is scheduled to arrive inside a hazard's input window or its margin; and no
+//                  dangle hangs within DANGLE_CLEAR of the box of a hazard to duck (LEVEL2 4.3)
 //   scoring        every word:clear scores DESIGN 8.3 (clean, quick, multiplier, quill, assist), and so
 //                  do the weak-point, finisher and defeat scores of the boss
 //   console        nothing is written to console.error or console.warn during the run
@@ -139,6 +201,16 @@ class Checker {
     this.announced = [];               // boss:attack for shock and pick not yet followed by attack:spawn
     this.volleyHits = 0;               // volley entries typed since the volley began
     this.volleySize = 0;
+    // Measurements for the run's report (LEVEL2 8.6 and 13.5). They assert nothing.
+    this.measure = {
+      uSum: 0, uCount: 0,              // window use of each threat word typed or missed
+      bossEnterAt: null, fightTime: null,
+      liveAtFlag: 0, cratesAtFlag: 0,  // threats and crates that never came to anything before the arena flag
+      pastFlag: 0,                     // threats that were due at or past the arena flag when they appeared
+      watch: [],                       // { id, tile, live } for each watch crate that appeared; live null: not cleared
+      minLives: null,
+      dangles: 0, dangleNearest: null  // dangles spawned; the least distance from an anchor to a duck hazard, px
+    };
     const TG = this.TG;
     this.names = new Set(TG.Events.NAMES);
     this.fields = TG.Events.FIELDS || null;
@@ -201,6 +273,7 @@ class Checker {
       this.stepFled.add(payload.id);
     }
     this.checkBoss(payload, name);
+    this.note(payload, name);
 
     if (name === 'checkpoint' && STOP_INDEX[session.until] === payload.index) this.stopReached = true;
 
@@ -266,9 +339,26 @@ class Checker {
     const impactX = TG.Entities.KINDS[e.kind].anchored ? e.anchorX - e.contact : p.x + C.RUN_SPEED * e.budget;
     const m = config.hazardMargin * config.pace * C.RUN_SPEED;
     let atZoneEnd = false;
+    if (e.kind === 'dangle') this.measure.dangles++;
+    // A threat of the level that is due at or past the arena flag cannot reach Pip: it is typed, or it
+    // flees at the flag (LEVEL2 decision 20 asks that the last wave is not like that).
+    if (!s.boss && impactX >= s.level.arenaX) this.measure.pastFlag++;
     for (const h of s.level.hazards) {
       if (h.bridged) continue;
-      const zs = h.winStart - m, ze = h.x + h.w + m;
+      let zs = h.winStart - m, ze = h.x + h.w + m;
+      if (e.kind === 'dangle' && DUCK_HAZARDS[h.kind]) {
+        // LEVEL2 4.3: a dangle hangs at head height, as these hazards do, so its anchor keeps DANGLE_CLEAR
+        // from the hazard's box on either side. The anchor is `contact` beyond the arrival point, which
+        // makes the zone of arrival points this much wider.
+        const gap = Math.max(h.x - e.anchorX, e.anchorX - (h.x + h.w));
+        if (gap < C.DANGLE_CLEAR - 1e-6) {
+          this.fail('keep-clear', 'dangle "' + e.word + '" hangs at x=' + fmt(e.anchorX, 1) + ', ' + fmt(gap, 1) + ' px from ' + h.kind + ' ' + h.id + ' (at least ' + C.DANGLE_CLEAR + ')');
+          return;
+        }
+        this.measure.dangleNearest = this.measure.dangleNearest === null ? gap : Math.min(this.measure.dangleNearest, gap);
+        zs = Math.min(zs, h.x - C.DANGLE_CLEAR - e.contact);
+        ze = Math.max(ze, h.x + h.w + C.DANGLE_CLEAR - e.contact);
+      }
       if (impactX >= zs + 1e-6 && impactX < ze - 1e-6) {
         this.fail('keep-clear', e.kind + ' "' + e.word + '" arrives at x=' + fmt(impactX, 1) + ', inside the zone of ' + h.kind + ' ' + h.id + ' [' + fmt(zs, 1) + ', ' + fmt(ze, 1) + ')');
         return;
@@ -277,6 +367,40 @@ class Checker {
     }
     if (nominal > need + 1e-6 && !atZoneEnd) {
       this.fail('budget', e.kind + ' "' + e.word + '" budget ' + fmt(nominal, 3) + ' is longer than the rules give (' + fmt(need, 3) + ')');
+    }
+  }
+
+  // The measurements of LEVEL2 8.6 ("How the figures are taken"), kept for the run's report.
+  note(p, name) {
+    const TG = this.TG;
+    const s = TG.Game.state;
+    const m = this.measure;
+    if (name === 'word:clear' && p.type === 'threat' && p.cause === 'typed') {
+      // Window use, as adaptive pacing measures it (noteResolved in js/entities.js): age / budget for a
+      // threat word that was typed, the boss's rocks and minion included, U_MISS for one that reached Pip.
+      const e = this.entities.get(p.id);
+      if (e && e.budget > 0) {
+        m.uSum += e.age / e.budget;
+        m.uCount++;
+      }
+    } else if (name === 'threat:hit' || name === 'threat:bounce') {
+      m.uSum += TG.C.U_MISS;
+      m.uCount++;
+    } else if (name === 'boss:enter') {
+      m.bossEnterAt = s.time;
+      // The arena flag: what fled in this step, and the entries of the level that never appeared.
+      const types = [];
+      for (const id of this.stepFled) if (this.entities.has(id)) types.push(this.entities.get(id).type);
+      for (const sp of s.level.spawns) if (!sp.done) types.push(TG.Entities.KINDS[sp.kind].type);
+      m.liveAtFlag += types.filter((t) => t === 'threat').length;
+      m.cratesAtFlag += types.filter((t) => t === 'crate').length;
+    } else if (name === 'boss:defeat' && m.bossEnterAt !== null) {
+      m.fightTime = s.time - m.bossEnterAt;
+    } else if (name === 'threat:spawn' && p.entity && p.entity.type === 'crate' && p.entity.power === 'watch') {
+      m.watch.push({ id: p.id, tile: Math.floor(s.player.x / TG.C.TILE), live: null });
+    } else if (name === 'word:clear' && p.power === 'watch') {
+      const w = m.watch.find((x) => x.id === p.id);
+      if (w) w.live = TG.Entities.activeThreats(s);
     }
   }
 
@@ -352,6 +476,8 @@ class Checker {
 
   afterStep(state) {
     const TG = this.TG;
+    const m = this.measure;
+    if (state.player && (m.minLives === null || state.player.lives < m.minLives)) m.minLives = state.player.lives;
     if (this.error) return;
     // first-letters
     const seen = new Map();
@@ -549,12 +675,14 @@ function profileName(opts) {
 
 class Session {
   // opts: CONTRACT 10.3 (difficulty, wpm, accuracy, react, seed, adaptive, until, noType, noJump, noDuck,
-  // files, maxSeconds, verbose), plus profile (floor | target | fast | exact | custom), levelId and
-  // setup (a function called with TG before newRun, used by the checks).
+  // files, maxSeconds, verbose), plus profile (floor | target | fast | exact | custom), levelId,
+  // startAssist (the assist the run starts at; 1 without it, which is a player with nothing saved; LEVEL2
+  // 8.6 and 13.5) and setup (a function called with TG before newRun, used by the checks).
   constructor(opts) {
     this.opts = opts;
     this.difficulty = opts.difficulty || 'medium';
     this.levelId = opts.levelId !== undefined ? opts.levelId : 1;
+    this.startAssist = typeof opts.startAssist === 'number' ? opts.startAssist : 1;
     this.seed = typeof opts.seed === 'number' ? opts.seed : 1;
     this.until = opts.until || 'results';
     this.verbose = !!opts.verbose;
@@ -568,7 +696,10 @@ class Session {
       wpm: opts.wpm, accuracy: opts.accuracy, react: opts.react, adaptive: null,
       until: this.until, finished: false, words: [], time: 0, steps: 0, score: 0,
       lives: 0, livesLost: 0, continues: 0, damageTypable: 0, damageOther: 0,
-      reportedWpm: 0, reportedAccuracy: 0, assistEnd: 0, rank: null, error: null, fatal: false
+      reportedWpm: 0, reportedAccuracy: 0, assistEnd: 0, rank: null, error: null, fatal: false,
+      // The measurements of LEVEL2 8.6 and 13.5 (Checker.note); measureLine below says what each is.
+      startAssist: this.startAssist, meanU: null, fightTime: null, liveAtFlag: 0, cratesAtFlag: 0, pastFlag: 0,
+      watch: [], minLives: null, dangles: 0, dangleNearest: null
     };
     try {
       this.env = loadEnv(opts.files);
@@ -595,7 +726,9 @@ class Session {
       const config = TG.Difficulty.resolve(this.difficulty, TG.Levels[levelId].tune);
       const profileKey = this.profile === 'exact' || this.profile === 'custom' ? 'target' : this.profile;
       const adaptive = typeof opts.adaptive === 'boolean' ? opts.adaptive : !!PROFILE_ADAPTIVE[this.profile];
-      TG.Game.newRun({ difficulty: this.difficulty, seed: this.seed, levelId: levelId, adaptive: adaptive, assist: 1, tutorial: config.tutorialAlways });
+      TG.Game.newRun({ difficulty: this.difficulty, seed: this.seed, levelId: levelId, adaptive: adaptive, assist: this.startAssist, tutorial: config.tutorialAlways });
+      // Reported from the run and not from the option, so that a check can tell the run started there.
+      this.report.startAssist = TG.Game.state.assist;
       // The profile is read from the run's config, so that the level's tune block applies.
       const botConfig = TG.Game.state.config.bot[profileKey] || TG.Game.state.config.bot.target;
       const profile = {
@@ -692,7 +825,19 @@ class Session {
 
   finish() {
     const r = this.report;
-    if (this.checker) r.words = this.checker.words.slice();
+    if (this.checker) {
+      const m = this.checker.measure;
+      r.words = this.checker.words.slice();
+      r.meanU = m.uCount > 0 ? m.uSum / m.uCount : null;
+      r.fightTime = m.fightTime;
+      r.liveAtFlag = m.liveAtFlag;
+      r.cratesAtFlag = m.cratesAtFlag;
+      r.pastFlag = m.pastFlag;
+      r.watch = m.watch.map((w) => ({ tile: w.tile, live: w.live }));
+      r.minLives = m.minLives;
+      r.dangles = m.dangles;
+      r.dangleNearest = m.dangleNearest;
+    }
     const TG = this.TG;
     const s = TG && TG.Game ? TG.Game.state : null;
     if (s && s.player) {
@@ -725,8 +870,10 @@ function runBot(opts) {
 // 5. Extra checks
 // ===============================================================================================
 // Each check returns { pass: boolean, detail: string, skip?: boolean }. It is called with ctx:
-// { until, levelId, targetRuns }. The checks marked perLevel in CHECK_LIST are about one level, the
-// one in ctx.levelId, and read their expected values from the tables keyed by level in part 1.
+// { until, levelId, runs, all } (profileRuns and ctxFor below read the last two). The checks marked
+// perLevel in CHECK_LIST are about one level, the one in ctx.levelId, and read their expected values from
+// the tables keyed by level in part 1. A perLevel check returns null for a level it has nothing to say
+// about, and no line is printed.
 
 function result(pass, detail) {
   return { pass: !!pass, detail: detail || '' };
@@ -847,25 +994,29 @@ const CHECKS = {};
 // --- level-valid ------------------------------------------------------------------------------
 CHECKS['level-valid'] = function (ctx) {
   const env = simEnv();
-  const problems = env.TG.Level.validate(env.TG.Levels[ctx.levelId]);
-  // Each rule must also be able to fail: a few broken copies of Level 1.
   const TG = env.TG;
+  const data = TG.Levels[ctx.levelId];
+  const problems = TG.Level.validate(data);
+  // Each rule must also be able to fail: a few broken copies of the level. Each change is placed from
+  // the level's own data: its first gap, its second checkpoint, its length, whether it has the tutorial.
+  const gap = data.gaps[0];
   const broken = [
-    ['V2', (d) => { d.gaps.push({ x: 108, w: 1 }); }],
-    ['V3', (d) => { d.hazards.push({ x: 110, kind: 'branch' }); }],
-    ['V4', (d) => { d.gaps.push({ x: 260, w: 1 }); }],
+    ['V2', (d) => { d.gaps.push({ x: gap.x + gap.w + 1, w: 1 }); }],
+    ['V3', (d) => { d.hazards.push({ x: gap.x + 4, kind: 'branch' }); }],
+    ['V4', (d) => { d.gaps.push({ x: d.checkpoints[1] + 4, w: 1 }); }],
     ['V5', (d) => { d.spawns.push({ x: 30, kind: 'dragon' }); }],
-    ['V6', (d) => { d.spawns[2].tutorial = false; }],
-    ['V7', (d) => { d.spawns.push({ x: 860, kind: 'hoppet' }); }],
-    ['V8', (d) => { d.ink.push({ x: 104, shape: 'row', n: 4, step: 1 }); }],
+    // A level with the tutorial tags its first three threats; a level without it tags none.
+    ['V6', (d) => { if (d.tutorial) d.spawns[2].tutorial = false; else d.spawns[0].tutorial = true; }],
+    ['V7', (d) => { d.spawns.push({ x: d.lengthTiles - 20, kind: 'hoppet' }); }],
+    ['V8', (d) => { d.ink.push({ x: gap.x - 2, shape: 'row', n: 4, step: 1 }); }],
     ['V9', (d) => { d.hazards.find((h) => h.kind === 'arch').w = 2; }],
     ['V10', (d) => { d.tune = { all: { lives: 9 } }; }],
     ['V11', (d) => { delete d.sections[1].music.tempo; }],
-    ['V1', (d) => { d.checkpoints = [0, 256, 880]; }]
+    ['V1', (d) => { d.checkpoints.splice(2, 1); }]
   ];
   const missed = [];
   for (const [code, change] of broken) {
-    const copy = JSON.parse(JSON.stringify(TG.Levels[1]));
+    const copy = JSON.parse(JSON.stringify(data));
     change(copy);
     const found = TG.Level.validate(copy);
     if (!found.some((p) => p.indexOf(code + ':') === 0)) missed.push(code);
@@ -873,8 +1024,8 @@ CHECKS['level-valid'] = function (ctx) {
   if (problems.length > 0) return result(false, problems.join('; '));
   if (missed.length > 0) return result(false, 'a broken level passed rule ' + missed.join(', '));
   // The optional keys a level may carry for its look and sound (LEVEL2 10.6 and Appendix B) are no
-  // business of the rules: a copy of Level 1 with all of them is valid, and build hands them on as they are.
-  const extra = JSON.parse(JSON.stringify(TG.Levels[1]));
+  // business of the rules: a copy of the level with all of them is valid, and build hands them on as they are.
+  const extra = JSON.parse(JSON.stringify(data));
   extra.theme.hazardNames = { arch: 'TUNNEL' };
   extra.theme.hazardFx = { bramble: [11, 26, 4] };
   extra.theme.skins = { hoppet: { remap: 'tin' }, rock: { sprite: 'pr_cog' } };
@@ -898,18 +1049,26 @@ CHECKS['counts'] = function (ctx) {
   const expected = EXPECTED_COUNTS[ctx.levelId];
   const design = DESIGN_COUNTS[ctx.levelId];
   const designCrates = DESIGN_CRATES[ctx.levelId];
+  const expectedKinds = EXPECTED_KINDS[ctx.levelId];
   const problems = [];
   const threatKinds = Object.keys(TG.Entities.KINDS).filter((k) => TG.Entities.KINDS[k].type === 'threat');
   for (const d of DIFFICULTIES) {
     const counts = [0, 0, 0];
+    const kinds = {};
     for (const sp of data.spawns) {
       if (threatKinds.indexOf(sp.kind) === -1 || !TG.Difficulty.includes(d, sp.min)) continue;
+      kinds[sp.kind] = (kinds[sp.kind] || 0) + 1;
       for (let i = 0; i < data.sections.length; i++) {
         if (sp.x >= data.sections[i].from && sp.x < data.sections[i].to) counts[i]++;
       }
     }
     if (JSON.stringify(counts) !== JSON.stringify(expected[d])) {
       problems.push(d + ' has ' + counts.join('/') + ', EXPECTED_COUNTS ' + expected[d].join('/'));
+    }
+    // Which kinds they are: the same counts with a dangle swapped for a frog would be another level.
+    for (const k of threatKinds) {
+      const want = expectedKinds[k] ? expectedKinds[k][DIFFICULTIES.indexOf(d)] : 0;
+      if ((kinds[k] || 0) !== want) problems.push(d + ' has ' + (kinds[k] || 0) + ' ' + k + ', EXPECTED_KINDS ' + want);
     }
     for (let i = 0; i < 3; i++) {
       const limit = Math.ceil(0.25 * design[d][i]);
@@ -918,13 +1077,39 @@ CHECKS['counts'] = function (ctx) {
       }
     }
   }
-  const crates = data.spawns.filter((sp) => sp.kind === 'crate');
+  const crates = data.spawns.filter((sp) => sp.kind === 'crate').sort((a, b) => a.x - b.x);
   if (crates.length !== designCrates.length) problems.push(crates.length + ' crates, expected ' + designCrates.length);
-  const powers = crates.map((c) => c.power).sort().join(',');
+  const powers = crates.map((c) => c.power).join(',');
   const expectedPowers = designCrates.join(',');
-  if (powers !== expectedPowers) problems.push('crate powers ' + powers + ', expected ' + expectedPowers);
+  if (powers !== expectedPowers) problems.push('crate powers in the order met ' + powers + ', expected ' + expectedPowers);
   if (crates.some((c) => !TG.Difficulty.includes('easy', c.min))) problems.push('a crate is not on every difficulty');
-  return problems.length ? result(false, problems.join('; ')) : result(true, 'threats ' + DIFFICULTIES.map((d) => d + ' ' + expected[d].join('/')).join(', ') + '; ' + designCrates.length + ' crates');
+  // The watch row of LEVEL2 13.5 (6.2), for a level with watch crates: when the target or the floor bot
+  // clears one, a threat word is live for the watch to stop. A crate that drifts off untyped has no
+  // word:clear to count at: it is reported as a missed watch and is not a failure.
+  let watchText = '';
+  const targets = LEVEL_TARGETS[ctx.levelId];
+  if (targets && designCrates.indexOf('watch') !== -1) {
+    const fewest = {};
+    const missed = [];
+    let cleared = 0;
+    for (const r of profileRuns(ctx, 'target').concat(profileRuns(ctx, 'floor'))) {
+      for (const w of r.watch) {
+        const where = r.difficulty + ' ' + r.profile + ' seed ' + r.seed + ' at tile ' + w.tile;
+        if (w.live === null) {
+          missed.push(where);
+          continue;
+        }
+        cleared++;
+        if (w.live < targets.watchLive) problems.push('a watch crate was cleared with ' + w.live + ' threat words live (' + where + '), at least ' + targets.watchLive);
+        if (fewest[r.difficulty] === undefined || w.live < fewest[r.difficulty]) fewest[r.difficulty] = w.live;
+      }
+    }
+    if (cleared === 0) problems.push('the target and floor bots cleared no watch crate');
+    watchText = '; the target and floor bots cleared ' + cleared + ' watch crates with at least ' + DIFFICULTIES.map((d) => fewest[d]).join(' / ') +
+      ' threat words live' + (missed.length ? ', and missed ' + missed.length + ' (' + missed.join(', ') + ')' : '');
+  }
+  return problems.length ? result(false, problems.join('; ')) : result(true, 'threats ' + DIFFICULTIES.map((d) => d + ' ' + expected[d].join('/')).join(', ') +
+    ', of the kinds expected; ' + designCrates.length + ' crates with the powers expected, in order' + watchText);
 };
 
 // --- jump-geometry ------------------------------------------------------------------------------
@@ -1234,7 +1419,8 @@ CHECKS['no-dodge-actions'] = function () {
   const TG = env.TG;
   const C = TG.C;
   const bad = [];
-  const kinds = ['dawdle', 'buzzle', 'hoppet', 'boulder', 'swoop', 'truffle', 'digby'];
+  // Every threat kind the code defines, so that a kind added later is tried without being added here.
+  const kinds = Object.keys(TG.Entities.KINDS).filter((k) => TG.Entities.KINDS[k].type === 'threat');
   let trials = 0;
   for (const kind of kinds) {
     for (const action of ['jump', 'duck']) {
@@ -1274,12 +1460,35 @@ CHECKS['spawn-onscreen'] = function () {
   const C = TG.C;
   const bad = [];
   for (const B of [2, 6, 12]) {
-    for (const kind of ['dawdle', 'hoppet', 'buzzle', 'truffle', 'digby']) {
+    for (const kind of ['dawdle', 'hoppet', 'buzzle', 'truffle', 'digby', 'dangle', 'flit']) {
       // pace 1 and perChar 0: the budget is exactly `react` world seconds.
       const s = startTestRun(TG, SCALES[1], { empty: true, tune: { medium: { react: B, perChar: 0 } } });
       const e = TG.Entities.spawn(s, { kind: kind });
       if (!e) { bad.push(kind + ' B=' + B + ': spawn failed'); continue; }
       if (Math.abs(e.budget - B) > 1e-9) { bad.push(kind + ': budget ' + e.budget + ', expected ' + B); continue; }
+      if (kind === 'dangle' || kind === 'flit') {
+        // From above (LEVEL2 4.3): spawned above the playfield, never inside it. It comes into view through
+        // the top edge, or for a dangle hanging beyond the view through the right edge, and stays in view.
+        if (e.onScreen || e.y > C.PLAY_TOP) bad.push(kind + ' B=' + B + ' is spawned inside the playfield (y ' + fmt(e.y, 1) + ')');
+        let entered = false;
+        for (let i = 0; i < 5000; i++) {
+          const bottom = e.y, left = e.x - e.w / 2 - TG.Game.state.camera.x;
+          TG.Game.step(C.DT);
+          if (e.dead) break;
+          if (e.onScreen && !entered) {
+            entered = true;
+            // 2 px of allowance at the right edge: in a step onScreen is worked out before the camera
+            // follows Pip, so the camera it is told from is one step of running (about 1 px) behind.
+            const fromTop = bottom <= C.PLAY_TOP, fromRight = left >= C.W - 2;
+            if (!fromTop && !(fromRight && kind === 'dangle')) bad.push(kind + ' B=' + B + ' appeared inside the view at t=' + fmt(e.t, 3));
+          } else if (!e.onScreen && entered) {
+            bad.push(kind + ' B=' + B + ' left the view at t=' + fmt(e.t, 3));
+            break;
+          }
+        }
+        if (!entered) bad.push(kind + ' B=' + B + ' never came into view');
+        continue;
+      }
       if (kind !== 'digby') {
         if (!e.onScreen) bad.push(kind + ' B=' + B + ' is not on screen when spawned (x ' + fmt(e.x - s.camera.x, 1) + ')');
         TG.Game.step(C.DT);
@@ -1301,7 +1510,8 @@ CHECKS['spawn-onscreen'] = function () {
       if (!popped) bad.push('digby B=' + B + ' never rose');
     }
   }
-  return bad.length ? result(false, bad.join('; ')) : result(true, 'dawdle, hoppet, buzzle, truffle on screen at spawn for 2, 6 and 12 ws; digby underground until t = 0.85');
+  return bad.length ? result(false, bad.join('; ')) : result(true, 'dawdle, hoppet, buzzle, truffle on screen at spawn for 2, 6 and 12 ws; digby underground until t = 0.85; ' +
+    'dangle and flit spawned above the playfield, in through its top or (a far dangle) its right edge, and in view from then on');
 };
 
 // --- anchored-kinds -----------------------------------------------------------------------------
@@ -1355,6 +1565,332 @@ CHECKS['anchored-kinds'] = function () {
     }
   }
   return bad.length ? result(false, bad.slice(0, 6).join('; ')) : result(true, 'anchored: ' + anchored.join(', ') + '; at scales 0.45, 1.0 and 1.25 x stays its anchorX and t follows the distance left through ' + falls + ' falls and rescues, contact on the step Pip reaches it');
+};
+
+// --- new-kinds ----------------------------------------------------------------------------------
+// Level 2's two kinds, the dangle and the flit, against LEVEL2 4.3 (the check of LEVEL2 13.5). Each is
+// followed from the spawn to its end at budgets of 2, 6 and 12 ws on the three time scales of the geometry
+// checks, with Pip running, jumping and sliding at the contact, and once more with its word typed:
+//   dangle  x is its anchorX on every step; it drops from the roof to DANGLE_ELEV by t = DANGLE_DROP_T,
+//           slowing as it goes, and hangs there; one warning, from above, at the spawn
+//   flit    enter, cross, behind and dive in that order with the path of the table; a second warning,
+//           from behind, once, on the step it reaches FLIT_CROSS_T, and flipX from that step on
+//   both    spawned above the playfield with a top tag, and no tag once in view (a dangle hanging beyond
+//           the right edge has a right tag until it scrolls in); contact on the step t reaches 1 is
+//           threat:hit whatever Pip is doing; the typed word gives word:clear
+//   stall   a typed letter holds the flit's clock for the letter stall and leaves the dangle's alone
+// The tag is the one TG.Render.layoutLabels gives the entity (CONTRACT 5.13), which is why this check
+// loads js/render.js. Then the keep-clear rule near a pool and a pipe, the dangle's distance from each
+// hazard to duck, and the Checker's own assertion of that distance, which every run of the matrix makes.
+
+// A tune block for the test level that makes every base budget exactly B world seconds on the difficulty
+// of sc, whatever the word.
+function fixedBudget(TG, sc, B) {
+  const tune = {};
+  tune[sc.difficulty] = { react: B / TG.Difficulty.resolve(sc.difficulty, {}).pace, perChar: 0 };
+  return tune;
+}
+
+// One trial: the kind spawned on the empty test level with a budget of B world seconds, followed until it
+// is gone. `act` is 'run', 'jump', 'duck' or 'type'; typing starts once it is in view and t has reached
+// `typeFrom`.
+function followKind(TG, kind, sc, B, act, typeFrom) {
+  const C = TG.C;
+  TG.Events.clear();
+  const s = startTestRun(TG, sc, { empty: true, tune: fixedBudget(TG, sc, B) });
+  const events = recordEvents(TG);
+  const lives = s.player.lives;
+  const pipX = s.player.x;
+  const e = TG.Entities.spawn(s, { kind: kind });
+  if (!e) return null;
+  const rows = [];
+  const look = () => {
+    const st = TG.Game.state;
+    const label = TG.Render.layoutLabels(st).find((l) => l.id === e.id);
+    rows.push({
+      t: e.t, x: e.x, dx: e.x - st.player.x, elev: e.elev, y: e.y, phase: e.phase, onScreen: e.onScreen, flipX: e.flipX,
+      turned: e.turned, anchorX: e.anchorX, screenX: e.x - st.camera.x, edge: label ? label.edge : undefined,
+      warns: events.filter((x) => x.name === 'threat:warn' && x.payload.id === e.id).length
+    });
+  };
+  look();
+  const lead = act === 'jump' ? C.JUMP_TIME / 2 : C.SLIDE_TIME / 2;
+  let pressed = false;
+  let pipAtEnd = null;
+  let typed = 0;
+  TG.Events.on('threat:hit', () => { pipAtEnd = TG.Game.state.player.state; });
+  for (let i = 0; i < 20000 && !e.dead; i++) {
+    if (act === 'jump' || act === 'duck') {
+      // As in no-dodge-actions: Pip is at the top of his jump, or mid-slide, when the clock runs out.
+      if (!pressed && e.budget - e.age <= lead + 1e-9) {
+        TG.Input.keyDown(act);
+        pressed = true;
+      } else if (pressed && act === 'jump' && TG.Input.isDown(act)) {
+        TG.Input.keyUp(act);
+      }
+    } else if (act === 'type' && e.onScreen && e.t >= typeFrom && typed < e.word.length) {
+      TG.Input.typeChar(e.word[typed++]);
+    }
+    TG.Game.step(C.DT);
+    if (!e.dead) look();
+  }
+  TG.Input.clear();
+  const mine = (name) => events.filter((x) => x.name === name && x.payload.id === e.id);
+  return {
+    e: e, rows: rows, budget: e.budget, pipX: pipX, spawnScreenX: rows[0].screenX,
+    pipAtEnd: pipAtEnd, livesLost: lives - TG.Game.state.player.lives,
+    warns: mine('threat:warn').map((x) => x.payload.from), enters: mine('threat:enter').length,
+    hits: mine('threat:hit').length, bounces: mine('threat:bounce').length, clears: mine('word:clear').map((x) => x.payload.cause)
+  };
+}
+
+// The tags of a followed entity in the order they were shown, without repeats: 'top', 'right' and so on,
+// and 'none' while it has a plate in view.
+function tagOrder(rows) {
+  const out = [];
+  for (const r of rows) {
+    const tag = r.edge === null ? 'none' : String(r.edge);
+    if (out[out.length - 1] !== tag) out.push(tag);
+  }
+  return out;
+}
+
+CHECKS['new-kinds'] = function () {
+  const env = simEnv(SIM_FILES.concat(['js/render.js']));
+  const TG = env.TG;
+  const C = TG.C;
+  const bad = [];
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  const roof = C.GROUND_Y - C.PLAY_TOP + 16;         // both sprites are 16 px high: 176
+  let trials = 0;
+
+  // The dangle's path (LEVEL2 4.3, "Dangle"). Returns the first thing that is wrong, or null.
+  const danglePath = (f) => {
+    const anchorX = f.rows[0].anchorX;
+    if (f.rows[0].elev !== roof || f.rows[0].onScreen) return 'spawned at elev ' + f.rows[0].elev + ', on screen ' + f.rows[0].onScreen;
+    let fell = Infinity;                             // the drop of the step before, per unit of t
+    for (let i = 0; i < f.rows.length; i++) {
+      const r = f.rows[i];
+      if (r.x !== anchorX || r.anchorX !== anchorX) return 'moved at t=' + fmt(r.t, 3) + ': x ' + r.x + ', anchorX ' + r.anchorX + ', spawned at ' + anchorX;
+      if (r.y !== C.GROUND_Y - r.elev) return 'y ' + r.y + ' with elev ' + r.elev;
+      if (r.t >= C.DANGLE_DROP_T) {
+        if (r.elev !== C.DANGLE_ELEV || r.phase !== 'hang') return 'at t=' + fmt(r.t, 3) + ' it is at elev ' + r.elev + ' in phase ' + r.phase;
+        continue;
+      }
+      if (r.phase !== 'drop' || !(r.elev >= C.DANGLE_ELEV && r.elev <= roof)) return 'at t=' + fmt(r.t, 3) + ' it is at elev ' + r.elev + ' in phase ' + r.phase;
+      if (i > 0) {
+        const rate = (f.rows[i - 1].elev - r.elev) / (r.t - f.rows[i - 1].t);
+        if (!(rate >= 0 && rate < fell)) return 'the drop does not slow at t=' + fmt(r.t, 3) + ' (' + fmt(rate, 1) + ' px per unit of t after ' + fmt(fell, 1) + ')';
+        fell = rate;
+      }
+    }
+    if (f.warns.join() !== 'above') return 'warnings ' + f.warns.join(',');
+    return null;
+  };
+
+  // The flit's path (the table of LEVEL2 4.3, "Flit").
+  const flitPath = (f, cleared) => {
+    const T1 = C.FLIT_ENTER_T, T2 = C.FLIT_CROSS_T, T3 = C.FLIT_BEHIND_T;
+    const phases = [];
+    let turnAt = null;
+    for (let i = 0; i < f.rows.length; i++) {
+      const r = f.rows[i];
+      const at = ' at t=' + fmt(r.t, 3);
+      const want = r.t < T1 ? 'enter' : r.t < T2 ? 'cross' : r.t < T3 ? 'behind' : 'dive';
+      if (r.phase !== want) return 'phase ' + r.phase + at + ', expected ' + want;
+      if (phases[phases.length - 1] !== want) phases.push(want);
+      // It comes lower as t goes on; t stands still during a letter stall, and the flit with it.
+      const lower = (before) => !before || before.phase !== want || (r.t > before.t ? r.elev < before.elev : r.elev === before.elev);
+      if (want === 'enter') {
+        if (!near(r.dx, C.FLIT_FROM_DX) || !(r.elev <= roof && r.elev > C.FLIT_CROSS_ELEV) || !lower(f.rows[i - 1])) return 'enter' + at + ': dx ' + fmt(r.dx, 2) + ', elev ' + fmt(r.elev, 2);
+      } else if (want === 'cross') {
+        const dx = C.FLIT_FROM_DX + (C.FLIT_BEHIND_DX - C.FLIT_FROM_DX) * (r.t - T1) / (T2 - T1);
+        // 4 px either way: the table gives the crossing a flutter, and LEVEL2 leaves open whose it is.
+        if (!near(r.dx, dx) || Math.abs(r.elev - C.FLIT_CROSS_ELEV) > 4) return 'cross' + at + ': dx ' + fmt(r.dx, 2) + ' (expected ' + fmt(dx, 2) + '), elev ' + fmt(r.elev, 2);
+      } else if (want === 'behind') {
+        if (!near(r.dx, C.FLIT_BEHIND_DX) || !(r.elev >= C.FLIT_BEHIND_ELEV && r.elev <= C.FLIT_CROSS_ELEV + 4) || !lower(f.rows[i - 1])) {
+          return 'behind' + at + ': dx ' + fmt(r.dx, 2) + ', elev ' + fmt(r.elev, 2);
+        }
+      } else {
+        const q = (r.t - T3) / (1 - T3);
+        const dx = C.FLIT_BEHIND_DX * (1 - q * q), elev = C.FLIT_BEHIND_ELEV + (C.FLY_HIT_ELEV - C.FLIT_BEHIND_ELEV) * q * q;
+        if (!near(r.dx, dx) || !near(r.elev, elev)) return 'dive' + at + ': dx ' + fmt(r.dx, 2) + ' (expected ' + fmt(dx, 2) + '), elev ' + fmt(r.elev, 2) + ' (expected ' + fmt(elev, 2) + ')';
+      }
+      // The turn: flipX, the flag and the second warning all change on the first step at or past T2.
+      const turned = r.t >= T2;
+      if (r.flipX !== turned || r.turned !== turned || r.warns !== (turned ? 2 : 1)) return (turned ? 'after' : 'before') + ' the turn' + at + ': flipX ' + r.flipX + ', turned ' + r.turned + ', ' + r.warns + ' warnings';
+      if (turned && turnAt === null) turnAt = r.t;
+    }
+    // All four in order; a flit that was typed away is gone before the end of the list.
+    const order = 'enter,cross,behind,dive';
+    if (cleared ? order.indexOf(phases.join()) !== 0 : phases.join() !== order) return 'phases ' + phases.join(',');
+    if (f.warns.join() !== (turnAt === null ? 'above' : 'above,behind')) return 'warnings ' + f.warns.join(',');
+    return null;
+  };
+
+  for (const sc of SCALES) {
+    for (const B of [2, 6, 12]) {
+      for (const kind of ['dangle', 'flit']) {
+        for (const act of ['run', 'jump', 'duck', 'type']) {
+          trials++;
+          const where = kind + ' B=' + B + ' at scale ' + sc.scale + ' (' + act + ')';
+          // The dangle is typed while it hangs; the flit after its turn.
+          const f = followKind(TG, kind, sc, B, act, kind === 'dangle' ? 0.5 : 0.6);
+          if (!f) { bad.push(where + ': spawn failed'); continue; }
+          if (!near(f.budget, B)) { bad.push(where + ': budget ' + f.budget); continue; }
+          const wrong = kind === 'dangle' ? danglePath(f) : flitPath(f, act === 'type');
+          if (wrong) { bad.push(where + ': ' + wrong); continue; }
+          // The tag, from the spawn on.
+          const tags = tagOrder(f.rows);
+          const far = kind === 'dangle' && f.spawnScreenX - 8 >= C.W;        // it hangs beyond the right edge
+          const wantTags = far ? 'right,none' : 'top,none';
+          // A far dangle is above the playfield for its first steps as well as beyond the edge, and
+          // layoutLabels then gives it the top tag: either tag is taken there.
+          if (tags.join() !== wantTags && !(far && tags.join() === 'top,right,none')) bad.push(where + ': tags ' + tags.join(',') + ', expected ' + wantTags);
+          if (f.enters !== 1) bad.push(where + ': ' + f.enters + ' threat:enter');
+          if (kind === 'dangle') {
+            const e = f.e;
+            if (e.anchorX !== f.pipX + e.contact + C.RUN_SPEED * f.budget) bad.push(where + ': anchored at ' + e.anchorX + ' with Pip at ' + f.pipX);
+            if (B === 2 && !(f.spawnScreenX + 8 < C.W)) bad.push(where + ': the anchor is not inside the view at spawn (screen x ' + fmt(f.spawnScreenX, 1) + ')');
+          }
+          // The end: contact on the step t reaches 1, or the typed word.
+          const last = f.rows[f.rows.length - 1];
+          if (act === 'type') {
+            if (f.clears.join() !== 'typed' || f.e.reason !== 'cleared' || f.hits + f.bounces !== 0 || f.livesLost !== 0) {
+              bad.push(where + ': typed, and word:clear ' + f.clears.join(',') + ', reason ' + f.e.reason + ', ' + f.hits + ' hits, ' + f.livesLost + ' lives lost');
+            }
+          } else {
+            const wantPip = act === 'jump' ? 'jump' : act === 'duck' ? 'slide' : 'run';
+            if (f.hits !== 1 || f.bounces !== 0 || f.e.reason !== 'hit' || f.livesLost !== 1 || f.clears.length !== 0) bad.push(where + ': ' + f.hits + ' threat:hit, reason ' + f.e.reason + ', ' + f.livesLost + ' lives lost');
+            else if (!(last.t < 1 && f.e.t >= 1)) bad.push(where + ': contact with t ' + fmt(last.t, 4) + ' a step before and ' + fmt(f.e.t, 4) + ' at it');
+            else if (f.pipAtEnd !== wantPip) bad.push(where + ': Pip was ' + f.pipAtEnd + ' at contact, not ' + wantPip);
+          }
+        }
+      }
+    }
+  }
+
+  // The letter stall (LEVEL2 4.2 and 4.3). A correct letter holds the flit's clock for config.letterStall,
+  // as it holds every moving kind's. The dangle has none: its clock is the distance Pip has left to run,
+  // which a letter does not change, so a stall given to it would be owed and never spent. One letter is
+  // typed at each kind once it is in view. Over the steps that follow, the flit's age falls behind the
+  // world clock by exactly the stall and the dangle's does not, and neither is left owing any.
+  for (const sc of SCALES) {
+    for (const kind of ['dangle', 'flit']) {
+      trials++;
+      const where = kind + ' at scale ' + sc.scale + ' (letter stall)';
+      const s = startTestRun(TG, sc, { empty: true, tune: fixedBudget(TG, sc, 6) });
+      const e = TG.Entities.spawn(s, { kind: kind });
+      if (!e) { bad.push(where + ': spawn failed'); continue; }
+      for (let i = 0; i < 5000 && !(e.onScreen && e.t >= 0.3); i++) TG.Game.step(C.DT);
+      let before = e.age;
+      TG.Game.step(C.DT);
+      const wdt = e.age - before;                        // the world time of one step
+      const stall = TG.Difficulty.toWs(s.config, s.config.letterStall);
+      const steps = Math.ceil(stall / wdt) + 2;
+      before = e.age;
+      let owed = 0;                                      // the most stall still to come after any step
+      TG.Input.typeChar(e.word[0]);
+      for (let i = 0; i < steps; i++) {
+        TG.Game.step(C.DT);
+        owed = Math.max(owed, e.stallT);
+      }
+      const held = before + steps * wdt - e.age;         // how far the letter set its clock back
+      const want = kind === 'flit' ? stall : 0;
+      if (e.dead || e.typed !== 1) {
+        bad.push(where + ': the letter was not taken (typed ' + e.typed + ', reason ' + e.reason + ')');
+      } else if (Math.abs(held - want) > 1e-9 || e.stallT !== 0 || (kind === 'dangle' && owed !== 0)) {
+        bad.push(where + ': one letter held its clock ' + fmt(held, 4) + ' ws, expected ' + fmt(want, 4) + '; ' + fmt(e.stallT, 4) + ' ws still owed at the end, ' + fmt(owed, 4) + ' at most');
+      }
+    }
+  }
+  TG.Input.clear();
+
+  // Keep-clear (CONTRACT 5.5 step 7). The arrival point at the base budget is put in the middle of a
+  // pool (the narrow gap h0) and of a pipe (the branch h3) of the test level: it moves to the end of the
+  // hazard's zone. For the dangle at the pipe that end is where its anchor is DANGLE_CLEAR past the pipe.
+  const arrive = (kind, sc, x) => {
+    const B = 2;
+    const s = startTestRun(TG, sc, { tune: fixedBudget(TG, sc, B) });
+    teleport(TG, x - C.RUN_SPEED * B);
+    const e = TG.Entities.spawn(s, { kind: kind });
+    return e ? { e: e, s: s, x: s.player.x + C.RUN_SPEED * e.budget } : null;
+  };
+  for (const sc of SCALES) {
+    for (const kind of ['dangle', 'flit']) {
+      for (const id of ['h0', 'h3']) {
+        trials++;
+        const where = kind + ' at scale ' + sc.scale + ' aimed at ' + id;
+        const probe = startTestRun(TG, sc);
+        const h = probe.level.hazards.find((z) => z.id === id);
+        const m = probe.config.hazardMargin * probe.config.pace * C.RUN_SPEED;
+        const a = arrive(kind, sc, h.x + h.w / 2);
+        if (!a) { bad.push(where + ': spawn failed'); continue; }
+        const plain = h.x + h.w + m;
+        const want = kind === 'dangle' && id === 'h3' ? Math.max(plain, h.x + h.w + C.DANGLE_CLEAR - a.e.contact) : plain;
+        if (Math.abs(a.x - want) > 1e-6) bad.push(where + ' (' + h.kind + '): arrives at ' + fmt(a.x, 2) + ', the end of the zone is ' + fmt(want, 2));
+        if (kind === 'dangle' && Math.abs(a.e.anchorX - (a.x + a.e.contact)) > 1e-6) bad.push(where + ': anchor ' + fmt(a.e.anchorX, 2) + ' is not contact beyond the arrival at ' + fmt(a.x, 2));
+      }
+    }
+  }
+
+  // The dangle near each kind of hazard to duck (h3 branch, h4 beehive, h5 arch): wherever the base budget
+  // would put it, from 12 tiles before the hazard to 12 tiles past it, its anchor is at least DANGLE_CLEAR
+  // from the box of every such hazard. The flit, aimed at the same points, shows that the plain zones
+  // alone would leave an anchor nearer than that.
+  let nearest = Infinity, plainNearest = Infinity, spawns = 0;
+  // The hazard to duck that is nearest to x, and how far its box is.
+  const nearestTo = (level, x) => {
+    let best = { gap: Infinity, kind: null };
+    for (const h of level.hazards) {
+      const gap = Math.max(h.x - x, x - (h.x + h.w));
+      if (DUCK_HAZARDS[h.kind] && gap < best.gap) best = { gap: gap, kind: h.kind };
+    }
+    return best;
+  };
+  for (const sc of SCALES) {
+    for (const id of ['h3', 'h4', 'h5']) {
+      const h = startTestRun(TG, sc).level.hazards.find((z) => z.id === id);
+      for (let x = h.x - 12 * C.TILE; x <= h.x + h.w + 12 * C.TILE; x += 4) {
+        const d = arrive('dangle', sc, x), f = arrive('flit', sc, x);
+        if (!d || !f) { bad.push('scan at ' + x + ': spawn failed'); break; }
+        spawns++;
+        const hung = nearestTo(d.s.level, d.e.anchorX);
+        if (hung.gap < C.DANGLE_CLEAR - 1e-6) { bad.push('a dangle aimed at x ' + x + ' at scale ' + sc.scale + ' hangs ' + fmt(hung.gap, 2) + ' px from the ' + hung.kind); break; }
+        nearest = Math.min(nearest, hung.gap);
+        plainNearest = Math.min(plainNearest, nearestTo(f.s.level, f.x + d.e.contact).gap);
+      }
+    }
+  }
+  if (Math.abs(nearest - C.DANGLE_CLEAR) > 1e-6) bad.push('the nearest dangle hangs ' + fmt(nearest, 3) + ' px from a hazard to duck, so the rule was never the reason');
+  if (!(plainNearest < C.DANGLE_CLEAR - 1)) bad.push('the plain zones already keep ' + fmt(plainNearest, 1) + ' px, so the scan shows nothing');
+
+  // The same distance is asserted by the Checker for every dangle of every bot run (`keep-clear`). Here it
+  // takes a dangle the engine placed beside the pipe as it is, and refuses one hung 28 px nearer.
+  const session = new Session({
+    levelId: 'test', difficulty: 'medium', profile: 'target',
+    setup: (T) => { T.Levels.test = testLevel(T); }
+  });
+  if (session.done) {
+    bad.push('the Checker could not be tried: ' + session.report.error);
+  } else {
+    const T = session.TG;
+    const h = T.Game.state.level.hazards.find((z) => z.id === 'h3');
+    teleport(T, h.x - 200);
+    const e = T.Entities.spawn(T.Game.state, { kind: 'dangle' });
+    if (!e || session.checker.error) {
+      bad.push('the Checker refused a dangle the engine placed: ' + session.checker.error);
+    } else {
+      e.anchorX = h.x + h.w + C.DANGLE_CLEAR - 28;
+      session.checker.checkSpawn(e);
+      const refused = session.checker.error;
+      if (!refused || refused.indexOf('keep-clear') === -1) bad.push('the Checker took a dangle 100 px from a pipe: ' + refused);
+    }
+  }
+
+  return bad.length ? result(false, bad.length + ' wrong: ' + bad.slice(0, 5).join('; ')) : result(true, trials + ' trials of dangle and flit at 2, 6 and 12 ws and scales 0.45, 1.0 and 1.25: ' +
+    'path, tags, warnings, contact at t = 1 running, jumping and sliding, word:clear when typed, the letter stall on the flit alone, keep-clear at a pool and a pipe; ' +
+    spawns + ' dangles aimed around a branch, a beehive and an arch hang ' + fmt(nearest, 1) + ' px away or more (' + fmt(plainNearest, 1) + ' by the plain zones); the Checker refuses one at 100 px');
 };
 
 // --- attack-windows -----------------------------------------------------------------------------
@@ -1852,22 +2388,30 @@ CHECKS['pause-deferred'] = function () {
 
 // --- checks that need full runs (milestone 4) ---------------------------------------------------
 
-function targetRuns(ctx) {
-  // Reuses the target runs of the matrix when they were run with the same stop point.
-  if (!ctx.targetRuns) {
-    ctx.targetRuns = [];
+// The runs of one profile of the matrix on the level of ctx: every difficulty, seeds 1 to 3. The matrix's own
+// runs are reused when it played them to the same stop point; otherwise they are played here, once.
+function profileRuns(ctx, profile) {
+  if (!ctx.runs[profile]) {
+    ctx.runs[profile] = [];
     for (const d of DIFFICULTIES) {
       for (const seed of SEEDS) {
-        ctx.targetRuns.push(runBot({ levelId: ctx.levelId, difficulty: d, profile: 'target', seed: seed, until: ctx.until, adaptive: false }));
+        ctx.runs[profile].push(runBot({ levelId: ctx.levelId, difficulty: d, profile: profile, seed: seed, until: ctx.until, adaptive: PROFILE_ADAPTIVE[profile] }));
       }
     }
   }
-  return ctx.targetRuns;
+  return ctx.runs[profile];
+}
+
+// The ctx of another level in the same invocation, for a check that needs its runs. One is made when that
+// level is not among the levels played.
+function ctxFor(ctx, levelId) {
+  if (!ctx.all[levelId]) ctx.all[levelId] = { until: ctx.until, levelId: levelId, runs: {}, all: ctx.all };
+  return ctx.all[levelId];
 }
 
 CHECKS['deterministic'] = function (ctx) {
-  const a = runBot({ difficulty: 'medium', profile: 'target', seed: 1, until: ctx.until, adaptive: false });
-  const b = runBot({ difficulty: 'medium', profile: 'target', seed: 1, until: ctx.until, adaptive: false });
+  const a = runBot({ levelId: ctx.levelId, difficulty: 'medium', profile: 'target', seed: 1, until: ctx.until, adaptive: false });
+  const b = runBot({ levelId: ctx.levelId, difficulty: 'medium', profile: 'target', seed: 1, until: ctx.until, adaptive: false });
   if (a.error || b.error) return result(false, a.error || b.error);
   const same = a.steps === b.steps && a.score === b.score && a.time === b.time && a.words.join() === b.words.join();
   return same ? result(true, 'steps ' + a.steps + ', score ' + a.score + ', time ' + fmt(a.time, 3))
@@ -1875,12 +2419,12 @@ CHECKS['deterministic'] = function (ctx) {
 };
 
 CHECKS['no-presentation'] = function (ctx) {
-  const r = runBot({ difficulty: 'medium', profile: 'target', seed: 1, until: ctx.until, adaptive: false, files: SIM_FILES });
+  const r = runBot({ levelId: ctx.levelId, difficulty: 'medium', profile: 'target', seed: 1, until: ctx.until, adaptive: false, files: SIM_FILES });
   return r.finished && !r.error ? result(true, 'finished with ' + SIM_FILES.length + ' files') : result(false, r.error || 'not finished');
 };
 
 CHECKS['words-by-difficulty'] = function (ctx) {
-  const runs = targetRuns(ctx);
+  const runs = profileRuns(ctx, 'target');
   const sets = {};
   for (const d of DIFFICULTIES) sets[d] = new Set();
   const bad = [];
@@ -1894,7 +2438,27 @@ CHECKS['words-by-difficulty'] = function (ctx) {
       if (common.length) bad.push(DIFFICULTIES[i] + ' and ' + DIFFICULTIES[j] + ' share ' + common.slice(0, 5).join(', '));
     }
   }
-  return bad.length ? result(false, bad.join('; ')) : result(true, DIFFICULTIES.map((d) => d + ' ' + sets[d].size).join(', ') + ' distinct words, none shared');
+  // The level's flavour (WORD_FLAVOUR): its words are among those seen on every difficulty, and no word
+  // comes from a flavour that is not the level's. The word-pool assertion cannot tell, since it takes a
+  // word of any list. No word is in two lists (TG.Words.validate), so a word in a flavour list was drawn
+  // from that list.
+  if (!(ctx.levelId in WORD_FLAVOUR)) return result(false, 'WORD_FLAVOUR has no row for level ' + ctx.levelId);
+  const own = WORD_FLAVOUR[ctx.levelId];
+  const POOLS = simEnv().TG.Words.POOLS;
+  const drawn = [];
+  for (const d of DIFFICULTIES) {
+    let mine = 0;
+    for (const name of Object.keys(POOLS[d].flavour)) {
+      const listed = new Set([].concat(...Object.values(POOLS[d].flavour[name])));
+      const seen = [...sets[d]].filter((w) => listed.has(w));
+      if (name === own) mine = seen.length;
+      else if (seen.length) bad.push(d + ' drew ' + seen.slice(0, 3).join(', ') + ' from the flavour ' + name + ', which is not the level\'s');
+    }
+    if (own && mine === 0) bad.push(d + ' drew no word of the ' + own + ' flavour');
+    drawn.push(mine);
+  }
+  return bad.length ? result(false, bad.join('; ')) : result(true, DIFFICULTIES.map((d) => d + ' ' + sets[d].size).join(', ') + ' distinct words, none shared; ' +
+    (own ? drawn.join(' / ') + ' of them from the ' + own + ' flavour' : 'none from a flavour'));
 };
 
 CHECKS['length'] = function (ctx) {
@@ -1902,11 +2466,80 @@ CHECKS['length'] = function (ctx) {
   const bounds = LENGTH_BOUNDS[ctx.levelId];
   const bad = [];
   const times = [];
-  for (const r of targetRuns(ctx)) {
+  for (const r of profileRuns(ctx, 'target')) {
     times.push(r.difficulty + ' ' + fmt(r.time, 0));
     if (!r.finished || r.time < bounds[0] || r.time > bounds[1]) bad.push(r.difficulty + ' seed ' + r.seed + ' ' + fmt(r.time, 1) + ' s' + (r.finished ? '' : ' (not finished)'));
   }
   return bad.length ? result(false, bad.join('; ')) : result(true, times.join(', '));
+};
+
+// --- targets ------------------------------------------------------------------------------------
+// What the level is tuned to beyond the fixed pass conditions of CONTRACT 10.4: the rows of LEVEL_TARGETS
+// (the table of LEVEL2 13.5 for Level 2), each on every seed. The run length is the `length` check and the
+// watch crates are in `counts`. The floor row is taken twice: from the matrix's floor runs, which start at
+// assist 1.0, and from nine more that start at the assist a floor run of the level before leaves saved on
+// the same difficulty and seed (the startAssist option), as a player who has just cleared that level starts.
+// The flag row takes those nine as well.
+function span(values, digits) {
+  const lo = Math.min.apply(null, values), hi = Math.max.apply(null, values);
+  return fmt(lo, digits) === fmt(hi, digits) ? fmt(lo, digits) : fmt(lo, digits) + ' to ' + fmt(hi, digits);
+}
+
+CHECKS['targets'] = function (ctx) {
+  const t = LEVEL_TARGETS[ctx.levelId];
+  if (!t) return null;
+  if (ctx.until !== 'results') return { pass: true, skip: true, detail: 'skipped with --until' };
+  const floor = profileRuns(ctx, 'floor');
+  const target = profileRuns(ctx, 'target');
+  const saved = profileRuns(ctxFor(ctx, t.savedFrom), 'floor');
+  const bad = [];
+  const who = (r) => r.difficulty + ' ' + r.profile + ' seed ' + r.seed;
+  const of = (runs, d) => runs.filter((r) => r.difficulty === d);
+  const perDifficulty = (fn) => DIFFICULTIES.map(fn).join(' / ');
+
+  // Floor continues, from both starts.
+  const fromSaved = floor.map((r) => {
+    const before = saved.find((x) => x.difficulty === r.difficulty && x.seed === r.seed);
+    if (!before.finished) bad.push('the level ' + t.savedFrom + ' floor run on ' + r.difficulty + ' seed ' + r.seed + ' did not finish, so it saved no assist');
+    const run = runBot({ levelId: ctx.levelId, difficulty: r.difficulty, profile: 'floor', seed: r.seed, until: ctx.until, adaptive: true, startAssist: before.assistEnd });
+    // The row says nothing unless the run did start where the run before it ended.
+    if (run.startAssist !== before.assistEnd) bad.push(who(run) + ' started at assist ' + fmt(run.startAssist, 2) + ', not at the ' + fmt(before.assistEnd, 2) + ' its level ' + t.savedFrom + ' run left saved');
+    return run;
+  });
+  for (const [runs, start] of [[floor, 'assist 1.0'], [fromSaved, 'the saved assist']]) {
+    for (const r of runs) {
+      const from = start === 'assist 1.0' ? start : 'assist ' + fmt(r.startAssist, 2) + ', saved';
+      if (r.error || !r.finished) bad.push(who(r) + ' from ' + from + ' did not finish' + (r.error ? ': ' + r.error : ''));
+      else if (r.continues > t.floorContinues[r.difficulty]) bad.push(who(r) + ' from ' + from + ': ' + r.continues + ' continues (at most ' + t.floorContinues[r.difficulty] + ')');
+    }
+  }
+  // The target bot's window use and fight.
+  let noted = 0;
+  for (const r of target) {
+    if (r.error || !r.finished) { bad.push(who(r) + ' did not finish' + (r.error ? ': ' + r.error : '')); continue; }
+    // A run with no value is under the band too. The noted difficulty may be under it, down to uNotedFrom.
+    const under = typeof r.meanU !== 'number' || r.meanU < t.u[0];
+    if (under && r.difficulty === t.uNoted && r.meanU >= t.uNotedFrom) noted++;
+    else if (under || r.meanU > t.u[1]) {
+      bad.push(who(r) + ': window use ' + fmt(r.meanU, 3) + ' (' + t.u.join(' to ') + (r.difficulty === t.uNoted ? '; the noted exception goes down to ' + fmt(t.uNotedFrom, 2) : '') + ')');
+    }
+    if (r.fightTime < t.fight[0] || r.fightTime > t.fight[1]) bad.push(who(r) + ': fight ' + fmt(r.fightTime, 1) + ' s (' + t.fight.join(' to ') + ')');
+  }
+  // Threats still live at the arena flag: the target bot, and the floor bot from both starts.
+  const flagRuns = target.concat(floor, fromSaved);
+  const atFlag = flagRuns.filter((r) => r.liveAtFlag > t.liveAtFlag);
+  for (const r of atFlag) {
+    bad.push(who(r) + (fromSaved.indexOf(r) !== -1 ? ' from the saved assist' : '') + ': ' + r.liveAtFlag + ' threats live at the arena flag (at most ' + t.liveAtFlag + ')');
+  }
+
+  const done = (runs) => runs.filter((r) => r.finished);
+  const measured = 'floor continues ' + perDifficulty((d) => span(of(floor, d).map((r) => r.continues), 0)) + ' from assist 1.0, ' +
+    perDifficulty((d) => span(of(fromSaved, d).map((r) => r.continues), 0)) + ' from the saved ' + perDifficulty((d) => span(of(fromSaved, d).map((r) => r.startAssist), 2)) +
+    ' (at most ' + perDifficulty((d) => t.floorContinues[d]) + '); window use ' + perDifficulty((d) => (of(done(target), d).length ? span(of(done(target), d).map((r) => r.meanU), 2) : '-')) +
+    ' (' + t.u.join(' to ') + (noted ? '; ' + t.uNoted + ' under it on ' + noted + ' of ' + of(target, t.uNoted).length + ' seeds: the noted exception' : '') + '); fight ' +
+    perDifficulty((d) => (of(done(target), d).length ? span(of(done(target), d).map((r) => r.fightTime), 0) : '-')) + ' s (' + t.fight.join(' to ') + '); ' +
+    'a threat live at the arena flag in ' + atFlag.length + ' of ' + flagRuns.length + ' runs';
+  return bad.length ? result(false, bad.length + ' not met: ' + bad.slice(0, 3).join('; ') + ' | ' + measured) : result(true, measured);
 };
 
 // --- boss-fight ---------------------------------------------------------------------------------
@@ -1914,6 +2547,10 @@ CHECKS['length'] = function (ctx) {
 // states (CONTRACT 5.7), volley contents per phase (the minion in phase 3 is Tier 2), attacks per phase
 // (the double attack is Tier 2), the launch gap, rocks in flight, health and phases, scores, the
 // finisher at a quarter of the speed with nothing live, the defeat, levelComplete and the result.
+// Whose fight it is comes from BOSS_EXPECTED for the level: the boss kind, the health and the minion on
+// each difficulty, and the sprite every minion carries (LEVEL2 13.5 for Level 2: kind `ratchet`, health
+// 3 / 6 / 7, the minion on every difficulty with skin en_baronet). The round machine is the same code for
+// every boss (LEVEL2 10.5), so the rest of the trace is the same for every level.
 const BOSS_NEXT = {
   intro: ['volley'], volley: ['telegraph'], telegraph: ['attack'], attack: ['taunt'],
   taunt: ['recoil', 'laugh'], recoil: ['volley', 'transition', 'finisher'], laugh: ['volley'],
@@ -1933,18 +2570,24 @@ function traceBossFight(levelId, difficulty, profile, seed) {
     const C = TG.C;
     const cfg = TG.Game.state.config;
     const b = cfg.boss;
+    const expected = BOSS_EXPECTED[levelId];
     const errs = [];
     const rounds = [];
     const hits = [];
     const phases = [];
+    const minionSkins = [];
     let round = null;
     let prevState = null;
     let lastLaunch = null;
     let defeats = 0, clears = 0, finisherWord = null, arenaAt = null;
+    if (b.health !== expected.health[difficulty] || b.minion !== expected.minion[difficulty]) {
+      errs.push('health ' + b.health + ' and minion ' + b.minion + ', expected ' + expected.health[difficulty] + ' and ' + expected.minion[difficulty]);
+    }
     TG.Events.on('*', (p, name) => {
       const s = TG.Game.state;
       if (name === 'boss:enter') arenaAt = s.time;
       if (!s.boss) return;
+      if (name === 'threat:spawn' && p.kind === 'digby') minionSkins.push('skin' in p.entity ? p.entity.skin : null);
       if (name === 'boss:state') {
         if (prevState && BOSS_NEXT[prevState].indexOf(p.state) === -1) errs.push('state ' + prevState + ' -> ' + p.state);
         prevState = p.state;
@@ -2019,12 +2662,18 @@ function traceBossFight(levelId, difficulty, profile, seed) {
     const wantHits = [];
     for (let h = b.health - 1; h >= 0; h--) wantHits.push(h);
     if (hits.join() !== wantHits.join()) errs.push('health went ' + hits.join(',') + ', expected ' + wantHits.join(','));
-    if (phases.join() !== '2,3') errs.push('phases ' + phases.join(','));
+    // One boss:phase for each phase after the first. Every boss has three phases (CONTRACT 5.7; the round
+    // machine of js/boss.js), whatever the level's coreWords say.
+    if (phases.join() !== '2,3') errs.push('phases ' + phases.join(',') + ', expected 2,3');
     if (!finisherWord || finisherWord.length < b.finisherLen[0] || finisherWord.length > b.finisherLen[1]) errs.push('finisher word ' + finisherWord);
     if (defeats !== 1 || clears !== 1) errs.push(defeats + ' boss:defeat and ' + clears + ' level:clear');
-    if (riseStart !== 0 || !(riseEnd > 39)) errs.push('the Baron did not sink: rise ' + riseStart + ' -> ' + riseEnd);
+    if (riseStart !== 0 || !(riseEnd > 39)) errs.push('the boss did not leave: rise ' + riseStart + ' -> ' + riseEnd);
     if (s.screen !== 'results' || !s.result || s.result.cleared !== true || s.run.cleared !== true) errs.push('no cleared result');
+    else if (s.result.levelId !== levelId) errs.push('result.levelId ' + s.result.levelId);
+    if (!s.boss || s.boss.kind !== expected.kind || s.level.boss.kind !== expected.kind) errs.push('the boss is ' + (s.boss && s.boss.kind) + ', expected ' + expected.kind);
     const minions = rounds.filter((r) => r.volley.indexOf('minion') !== -1).length;
+    if (minionSkins.length !== minions || (minions > 0) !== expected.minion[difficulty]) errs.push(minions + ' volleys with a minion and ' + minionSkins.length + ' minions spawned');
+    if (minionSkins.some((skin) => skin !== expected.minionSkin)) errs.push('a minion has the skin ' + minionSkins.join(',') + ', expected ' + expected.minionSkin);
     return {
       pass: errs.length === 0,
       detail: errs.length ? difficulty + ': ' + errs.slice(0, 4).join('; ')
@@ -2445,8 +3094,10 @@ CHECKS['level1-events'] = function () {
 // list with `length`, `deterministic`, `no-presentation` and `words-by-difficulty`); the others are the
 // WP-E acceptance items of CONTRACT 12 written as checks; `anchored-kinds`, `attack-windows` and `spawn-skin`
 // are the groundwork of LEVEL2 13.1 in js/entities.js and js/boss.js, and `level1-events` is the regression
-// check of LEVEL2 13.5. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
-// level"); the others are run once.
+// check of LEVEL2 13.5; `new-kinds` is the check of that name in LEVEL2 13.5, and `targets` holds the rows of
+// its target table. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
+// level"); the others are run once. `deterministic` and `no-presentation` are marked as well, though 13.5
+// does not list them: each plays a whole run, and a level's own kinds are only met on that level.
 const CHECK_LIST = [
   { name: 'level-valid', milestone: 1, perLevel: true },
   { name: 'counts', milestone: 1, perLevel: true },
@@ -2461,6 +3112,7 @@ const CHECK_LIST = [
   { name: 'no-dodge-actions', milestone: 2 },
   { name: 'spawn-onscreen', milestone: 2 },
   { name: 'anchored-kinds', milestone: 2 },
+  { name: 'new-kinds', milestone: 2 },
   { name: 'typing-results', milestone: 2 },
   { name: 'crate-queue', milestone: 3 },
   { name: 'items-shape', milestone: 3, perLevel: true },
@@ -2468,8 +3120,8 @@ const CHECK_LIST = [
   { name: 'no-type', milestone: 3 },
   { name: 'no-jump-bridge', milestone: 3, perLevel: true },
   { name: 'pause-deferred', milestone: 3 },
-  { name: 'deterministic', milestone: 4 },
-  { name: 'no-presentation', milestone: 4 },
+  { name: 'deterministic', milestone: 4, perLevel: true },
+  { name: 'no-presentation', milestone: 4, perLevel: true },
   { name: 'words-by-difficulty', milestone: 4, perLevel: true },
   { name: 'length', milestone: 4, perLevel: true },
   { name: 'boss-fight', milestone: 4, perLevel: true },
@@ -2479,7 +3131,8 @@ const CHECK_LIST = [
   { name: 'spawn-skin', milestone: 4 },
   { name: 'tutorial-slowdown', milestone: 5 },
   { name: 'adaptive-pacing', milestone: 5 },
-  { name: 'level1-events', milestone: 6 }
+  { name: 'level1-events', milestone: 6 },
+  { name: 'targets', milestone: 6, perLevel: true }
 ];
 
 const MILESTONES = {
@@ -2519,6 +3172,24 @@ function runLine(r, status) {
     ' repAcc=' + fmt(r.reportedAccuracy, 3) + ' assist=' + fmt(r.assistEnd, 2);
 }
 
+// The line --measure prints after a RUN line: what the target table of LEVEL2 13.5 is measured from.
+//   u               mean window use: age / budget of each threat word typed, U_MISS for each that reached Pip
+//   fight           seconds from boss:enter to boss:defeat
+//   livesLost, minLives   lives lost in the run; the fewest held at any moment
+//   liveAtFlag, cratesAtFlag   threats, and crates, still live or never spawned when Pip reached the arena flag
+//   pastFlag        threats of the level that were due at or past the arena flag when they appeared
+//   watch           for each watch crate that appeared, its trigger tile and the threat words live when its
+//                   word was cleared, or `missed` when it drifted off
+//   dangles, dangleNearest   dangles spawned; the least distance from an anchor to a hazard to duck, px
+//   startAssist     the assist the run started at (assist at the end is on the RUN line)
+function measureLine(r) {
+  const watch = r.watch.map((w) => w.tile + ':' + (w.live === null ? 'missed' : w.live)).join(',');
+  return 'MEASURE level=' + r.levelId + ' difficulty=' + r.difficulty + ' profile=' + r.profile + ' seed=' + r.seed +
+    ' u=' + fmt(r.meanU, 3) + ' fight=' + fmt(r.fightTime, 1) + ' livesLost=' + r.livesLost + ' minLives=' + r.minLives +
+    ' liveAtFlag=' + r.liveAtFlag + ' cratesAtFlag=' + r.cratesAtFlag + ' pastFlag=' + r.pastFlag + ' watch=' + (watch || '-') +
+    ' dangles=' + r.dangles + ' dangleNearest=' + fmt(r.dangleNearest, 1) + ' startAssist=' + fmt(r.startAssist, 2);
+}
+
 function parseArgs(argv) {
   const o = {};
   const bad = [];
@@ -2537,6 +3208,9 @@ function parseArgs(argv) {
     else if (a === '--check') o.check = next();
     else if (a === '--milestone') o.milestone = Number(next());
     else if (a === '--verbose') o.verbose = true;
+    else if (a === '--quick') o.quick = true;
+    else if (a === '--measure') o.measure = true;
+    else if (a === '--help') o.help = true;
     else bad.push(a);
   }
   if (o.difficulty !== undefined && DIFFICULTIES.indexOf(o.difficulty) === -1) bad.push('--difficulty ' + o.difficulty);
@@ -2555,12 +3229,18 @@ function parseArgs(argv) {
   return { opts: o, bad: bad };
 }
 
+const OPTIONS_LINE = 'Options: --difficulty easy|medium|hard --profile floor|target|fast|exact --wpm N --accuracy A --react R ' +
+  '--seed N --level N --quick --adaptive on|off --until checkpoint1|checkpoint2|boss|results --check NAME --milestone N --measure --verbose --help';
+
 function main(argv) {
   const { opts, bad } = parseArgs(argv);
+  if (opts.help) {
+    console.log(OPTIONS_LINE);
+    return 0;
+  }
   if (bad.length) {
     console.log('ERROR unknown or invalid options: ' + bad.join(', '));
-    console.log('Options: --difficulty easy|medium|hard --profile floor|target|fast|exact --wpm N --accuracy A --react R ' +
-      '--seed N --level N --adaptive on|off --until checkpoint1|checkpoint2|boss|results --check NAME --milestone N --verbose');
+    console.log(OPTIONS_LINE);
     return 2;
   }
   if (opts.level !== undefined && LEVELS.indexOf(opts.level) === -1) {
@@ -2568,7 +3248,8 @@ function main(argv) {
     console.log('SUMMARY runs=0 passed=0 checks=0 checksPassed=0 result=NOT_BUILT');
     return 1;
   }
-  const levels = opts.level !== undefined ? [opts.level] : LEVELS;
+  // One level with --level, the first with --quick, every level otherwise.
+  const levels = opts.level !== undefined ? [opts.level] : (opts.quick ? LEVELS.slice(0, 1) : LEVELS);
 
   // What to run.
   let profiles = PROFILES;
@@ -2602,19 +3283,21 @@ function main(argv) {
 
   let runs = 0, runsPassed = 0, checksRun = 0, checksPassed = 0, fatal = false;
   // One ctx for each level played; a check that is not about one level gets the first.
-  const ctxs = levels.map((levelId) => ({ until: until, levelId: levelId, targetRuns: null }));
+  const all = {};
+  const ctxs = levels.map((levelId) => (all[levelId] = { until: until, levelId: levelId, runs: {}, all: all }));
 
   if (opts.custom) {
     const r = runBot({ levelId: levels[0], difficulty: opts.difficulty, wpm: opts.wpm, accuracy: opts.accuracy, react: opts.react,
       seed: opts.seed !== undefined ? opts.seed : 1, until: until, profile: 'custom',
       adaptive: opts.adaptive ? opts.adaptive === 'on' : false, verbose: opts.verbose, printLog: opts.verbose });
     console.log(runLine(r, 'INFO') + (r.error ? ' error="' + clip(r.error) + '"' : ''));
+    if (opts.measure) console.log(measureLine(r));
     console.log('SUMMARY runs=1 passed=0 checks=0 checksPassed=0 result=INFO');
     return r.fatal ? 2 : 0;
   }
 
   for (const ctx of runsWanted ? ctxs : []) {
-    const targets = [];
+    const played = {};
     for (const d of difficulties) {
       for (const profile of profiles) {
         for (const seed of seeds) {
@@ -2625,12 +3308,15 @@ function main(argv) {
           if (pass) runsPassed++;
           if (r.fatal) fatal = true;
           console.log(runLine(r, pass ? 'PASS' : 'FAIL') + (pass ? '' : ' reason="' + clip(failReason(profile, r)) + '"'));
+          if (opts.measure) console.log(measureLine(r));
           if (opts.verbose) for (const line of r.log) console.log(line);
-          if (profile === 'target' && !opts.adaptive) targets.push(r);
+          (played[profile] = played[profile] || []).push(r);
         }
       }
     }
-    if (!filtered && targets.length === DIFFICULTIES.length * SEEDS.length) ctx.targetRuns = targets;
+    // The checks that read whole runs of a profile take the matrix's own (profileRuns), when it played all
+    // of them as the profile has them.
+    if (!filtered && !opts.adaptive) for (const profile of Object.keys(played)) ctx.runs[profile] = played[profile];
   }
 
   for (const name of checks) {
@@ -2643,6 +3329,7 @@ function main(argv) {
       } catch (e) {
         r = result(false, 'exception: ' + (e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : e));
       }
+      if (r === null) continue;
       if (r.skip) {
         console.log(label + ' result=SKIP detail="' + clip(r.detail) + '"');
         continue;

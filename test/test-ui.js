@@ -261,7 +261,7 @@ const css = exists('css/style.css') ? read('css/style.css') : '';
 const ANALYTICS_SRC = 'https://static.cloudflareinsights.com/beacon.min.js';
 const ANALYTICS_TAG = /<script type="module" src="https:\/\/static\.cloudflareinsights\.com\/beacon\.min\.js" data-cf-beacon='\{"token": "[0-9a-f]{32}"\}'><\/script>/;
 
-check('index.html: the script tags are the 20 files of CONTRACT 1 in order, then the inline TG.Main.init(), then the analytics script', function () {
+check('index.html: the script tags are the 21 files of CONTRACT 1 in order, then the inline TG.Main.init(), then the analytics script', function () {
   const all = [];
   const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
   let m;

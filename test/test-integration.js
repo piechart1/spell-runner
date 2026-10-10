@@ -6,7 +6,7 @@
 //
 // Prints one line per check (ok / FAIL / skip) and exits with 0 when every check passed.
 //
-// Every check loads all 20 game files under test/stubs.js with the software canvas
+// Every check loads all 21 game files under test/stubs.js with the software canvas
 // (tools/softcanvas.js), which throws on any canvas call outside the subset of CONTRACT 13.2. The
 // game is driven the way a player drives it: keydown and keyup events through env.dispatch, frames
 // through env.runFrame and the real TG.Main loop. Long stretches of play use TG.Main.tick with the
@@ -168,7 +168,7 @@ function leaveResults(s, initials) {
 // 1. Static checks
 // ---------------------------------------------------------------------------------------------
 
-check('all 20 files load under the stubs with the software canvas; no sprite of CONTRACT 6.4 is missing', function () {
+check('all 21 files load under the stubs with the software canvas; no sprite of CONTRACT 6.4 is missing', function () {
   const env = stubs.load({ canvas: 'soft' });
   assert(env.missing.length === 0, 'missing: ' + env.missing.join(', '));
   assert(env.loaded.length === stubs.FILES.length, 'loaded ' + env.loaded.length);

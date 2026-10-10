@@ -1270,6 +1270,41 @@ Handed on from M0:
 | M5 | Meadow values the literal search of 13.1 does not find: the `hazard:bridge` burst is wood-coloured, and the `boss:throw` and `boss:phase` bursts are soil-coloured (`js/effects.js`) |
 | M8 | CONTRACT passages the code has moved past: 1 (a row for `test/fixtures/`), 2.2 rule 9, 5.4, 5.5, 5.7, 5.9, 6.5, 6.6, 7.2, 7.3, 8.2, 8.4, 10.3, 10.4, 12.1, 13.2 and 14.1. README: the test table |
 
+**M1, the level playable: built on 2026-10-11.** `KINDS.dangle` and `KINDS.flit` move as 4.3 says, the `clockwork` flavour holds the 251 words of Appendix A, `js/levels/level2.js` equals Appendix B in every value (only its header comment differs: it records the measurement), the file is the 21st script, and `watch` is a crate power with no effect yet. `node test/sim.js` plays both levels (72 runs, 44 checks) and takes `--level`, `--quick`, `--measure` and a `startAssist` option; its new checks are `new-kinds` and `targets`. Level 1 is unchanged (2,097 frames and event logs identical; its 36 matrix lines identical). Nothing was tuned.
+
+Measured with the real kinds, seeds 1 to 5 (Easy / Medium / Hard):
+
+| Target of 13.5 | Measured | Met |
+|---|---|---|
+| The fixed conditions of CONTRACT 10.4, 36 runs | 36 pass | yes |
+| Floor bot continues, from `assist` 1.0 and from the saved value | 0 on every seed, and on seeds 1 to 20 | yes |
+| Target bot window use `u`, 0.55 to 0.75 | 0.52 to 0.58 / 0.60 to 0.64 / 0.68 to 0.72 | Medium and Hard yes; Easy is under 0.55 on 3 seeds of 5, the exception of decision 1 |
+| Target bot fight, 60 to 120 s | 69 to 74 / 100 to 103 / 110 to 112 | yes |
+| Target bot run length, 260 to 440 s | 384 to 388 / 338 to 340 / 301 to 303 | yes |
+| Threats live at the arena flag | 0 in 30 target and floor runs. On seeds 1 to 20 the Dangle of 886 is left in 5 of 180 runs, all floor runs | yes on the seeds the check uses; not on every seed |
+| Threat words live at each watch crate cleared | at least 2 / 2 / 3 | yes |
+
+Floor bot lives lost over five seeds: 9 / 14 / 8, the figures of run B in 8.6. The fewest lives held: 4 / 2 / 1 (Hard at 1 life on 2 seeds of 5, and on 6 of 20).
+
+What the measurement says about the three decisions that waited for it (14.3). They are the owner's to settle and none blocks a milestone:
+
+- Decision 34, the last crate (890). Untyped at the flag in 0 / 5 / 6 of 10 target and floor runs. Moving it earlier within 6 tiles does not help: at 886 to 889 little changes, and at 884 or 885 the crate is typed but the Dangle of 886 is left at the flag in its place (5 and 6 of 10). It costs no life where it is. By the same script Level 1's own last crate is untyped at its flag in 0 / 9 / 9 of 10.
+- Decision 18, the floor player's headroom. No continue on any of 20 seeds. None of the four single changes of 8.6 is better on both Medium and Hard.
+- Decision 1, Easy's timing. As the table. At the edge of the 25% band (1.35 / 0.75 / 2.65) `u` is 0.54 to 0.61, still under on one seed of five, and the floor bot loses 12 lives over five seeds where it loses 9.
+
+New, and for the owner before M6: with ADAPTIVE PACE switched off, the floor bot does not finish Level 2 on Medium or Hard on any of seeds 1 to 5 (24 to 31 and 36 to 42 continues in 1,500 s). Level 1 by the same script finishes on every difficulty, Hard with 8 to 20 continues. No rule in the contract or this plan covers a floor-speed player with the setting off.
+
+Corrections to the text above, found in M1: in 4.3 "12 to 17 tiles ahead" is the Dangle's anchor and the intro's is 18 to 23; the Flit's 4 px flutter in the crossing is drawn by the renderer and the simulation keeps `elev` at 100; in 8.4 a threat word can also be cleared by the Ink blast (15 of 265 Medium and 19 of 330 Hard threat words of five target runs), which is neither typed nor reaching Pip.
+
+Handed on from M1:
+
+| To | What |
+|---|---|
+| M2 | The Flit's flutter (then make `new-kinds` exact in the crossing); after the turn a Flit's `from` is still `above`, so an effect that needs the side of a hit reads `turned`; a Dangle beyond the right edge shows a top tag for its first 4 to 8 steps (the order of two tests in `wanted()` of `js/render.js`); whether a Flit is drawn in front of or behind a pipe, a lantern and the tunnel; look at both creatures at budgets of 8 to 20 ws as well as 3 ws, since in play their budgets are well above the base |
+| M3 | The Hard floor bot on seed 2 does not clear the second watch crate, so that player gets no freeze before the peak; where presentation meets the power `watch` before it has an effect, nothing throws |
+| M6 | A continue inside Level 2's sections is exercised by the suite only in the arena; the four-checkpoint cases belong to `test/test-integration.js` |
+| M8 | CONTRACT passages no test pins: 4.16 and 5.5 lack `watch`; 5.5 (`age`, `flipX`, `phase`, the `turned` field, step 7's wider zone for the Dangle); 8.3 (the Flit's second `threat:warn`); 10.3, 10.4 and 14.1. A document check for the KINDS block of 5.4. README "Adding a level" still says to copy `level1.js` to `level2.js`, which now exists |
+
 ---
 
 ## 14. Decisions
