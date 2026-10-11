@@ -5131,6 +5131,449 @@ if (!LEVEL2_PRESENT) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 11. The last engine pieces for the cavern (LEVEL2 3.1, 3.4, 6.3 and 13.8; milestone M5 of 13.4)
+// ---------------------------------------------------------------------------------------------
+//
+// Four things. Three are read from level data that Level 1 does not have: the remap of the ink drops
+// (theme.inkRemap), the colours of the burst when a gap is bridged (theme.hazardFx.bridge) and the rim of a
+// plate's RED border in a boss phase (boss.urgentRim). The fourth is the scene clock, state.sceneTime,
+// which a Pocket Watch holds: the world's picture is animated from it, and what prompts the player or
+// answers a key from state.time. In a run with no watch the two clocks are equal, which test/sim.js asserts
+// on every step of every run; a hand-built state without sceneTime is animated from state.time.
+
+// A scratch backdrop of one flat PLUM band and no pieces, so that a sprite's own pixels can be counted.
+function plainBackdrop(TG, s) {
+  TG.Backdrops.scratch = { palettes: { day: { sky: [{ y: 0, h: 184, color: 28 }], remap: null } }, layers: [] };
+  s.level.theme.backdrop = 'scratch';
+  s.power.slowT = 0;
+}
+
+check('the ink drops are drawn under the remap of theme.inkRemap, in the frames and places they have without it: paleink turns the ROYAL body SKY and the DEEP_BLUE shade ROYAL. A theme that names none draws them in their own colours', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const DEEP_BLUE = 5, ROYAL = 6, SKY = 7;
+  if (!TG.Remaps.paleink) return 'the remap paleink is not defined';
+  // The drops alone on a flat band. Returns the calls of item_ink and, for each colour, how many pixels of
+  // the three 8 x 8 boxes have it (a drop's anchor is the middle of its bottom row).
+  const drops = function (theme) {
+    const s = handState(TG, 'playing');
+    plainBackdrop(TG, s);
+    s.entities = [];
+    s.level.hazards = [];
+    s.level.decor = [];
+    Object.assign(s.level.theme, theme);
+    const calls = named(drawCalls(TG, function () { TG.Render.draw(s); }), 'item_ink');
+    const rgba = env.canvas.toRGBA();
+    const count = {};
+    s.items.forEach(function (it) {
+      const x0 = Math.floor(it.x - s.camera.x) - 4, y0 = it.y - 8;
+      for (let y = y0; y < y0 + 8; y++) for (let x = x0; x < x0 + 8; x++) {
+        const c = pal.indexOf(pixel(rgba, 384, x, y));
+        count[c] = (count[c] || 0) + 1;
+      }
+    });
+    return { calls: calls, count: count };
+  };
+  const plain = drops({});
+  if (plain.calls.length !== 3 || plain.calls.some(function (c) { return c.remap !== null; })) return 'without the key: ' + JSON.stringify(plain.calls);
+  if (!plain.count[ROYAL] || !plain.count[DEEP_BLUE] || plain.count[SKY]) return 'the drops without the key: ' + JSON.stringify(plain.count);
+  const pale = drops({ inkRemap: 'paleink' });
+  const want = plain.calls.map(function (c) { return Object.assign({}, c, { remap: 'paleink' }); });
+  if (JSON.stringify(pale.calls) !== JSON.stringify(want)) return 'with inkRemap paleink: ' + JSON.stringify(pale.calls);
+  if (pale.count[SKY] !== plain.count[ROYAL] || pale.count[ROYAL] !== plain.count[DEEP_BLUE] || pale.count[DEEP_BLUE]) {
+    return 'the pixels with paleink ' + JSON.stringify(pale.count) + ', without ' + JSON.stringify(plain.count);
+  }
+  // The outline, the highlight and the band are as they were.
+  for (const c of [0, 4, 28]) if (pale.count[c] !== plain.count[c]) return 'colour ' + c + ': ' + pale.count[c] + ' pixels with paleink, ' + plain.count[c] + ' without';
+  // Any other remap by its name; a key that is no name gives none.
+  const dim = drops({ inkRemap: 'dim' }).calls;
+  if (dim.length !== 3 || dim.some(function (c) { return c.remap !== 'dim'; })) return 'with inkRemap dim: ' + JSON.stringify(dim);
+  for (const value of ['', null, 5]) {
+    const calls = drops({ inkRemap: value }).calls;
+    if (calls.length !== 3 || calls.some(function (c) { return c.remap !== null; })) return 'with inkRemap ' + JSON.stringify(value) + ': ' + JSON.stringify(calls);
+  }
+  if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
+});
+
+check('hazard:bridge bursts in the colours of theme.hazardFx.bridge, and in the wood of Level 1\'s plank without it; the bursts of hazard:hit do not take them', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const WOOD = [23, 22, 21];                               // SAND, CLAY, SOIL
+  const IMPACT = [4, 18, 25];                              // the hit star's own burst: WHITE, GOLD, RED
+  const burst = function (name, hazardFx) {
+    const s = handState(TG, 'playing');
+    if (hazardFx) s.level.theme.hazardFx = hazardFx;
+    withGame(TG, s);
+    TG.Effects.reset();
+    const gap = s.level.hazards[0];
+    if (name === 'hazard:bridge') TG.Events.emit(name, { id: gap.id, x: gap.x, w: gap.w });
+    else TG.Events.emit(name, { id: 'h2', kind: 'bramble', x: s.player.x, y: s.player.y });
+    TG.Effects.update(1 / 60);
+    return particleColors(TG, env, s);
+  };
+  const only = function (colors, allowed) { return colors.length === 8 && colors.every(function (c) { return allowed.indexOf(c) !== -1; }); };
+  let c = burst('hazard:bridge', null);
+  if (!only(c, WOOD)) return 'without hazardFx: ' + c.join(' ');
+  // Scratch colours that the wood does not have.
+  c = burst('hazard:bridge', { bridge: [11, 9, 30] });
+  if (!only(c, [11, 9, 30])) return 'with hazardFx.bridge 11 9 30: ' + c.join(' ');
+  c = burst('hazard:bridge', { bridge: [3] });
+  if (!only(c, [3])) return 'with hazardFx.bridge 3: ' + c.join(' ');
+  // A theme with colours for the hazards it has and none for the bridge, and an empty list: the wood.
+  c = burst('hazard:bridge', { bramble: [11, 9, 30], branch: [16, 2, 1] });
+  if (!only(c, WOOD)) return 'with hazardFx for the bramble and the branch only: ' + c.join(' ');
+  c = burst('hazard:bridge', { bridge: [] });
+  if (!only(c, WOOD)) return 'with an empty list: ' + c.join(' ');
+  // The bridge's colours are its own: a bramble that is struck keeps its leaves.
+  c = burst('hazard:hit', { bridge: [11, 9, 30] }).filter(function (x) { return IMPACT.indexOf(x) === -1; });
+  if (!only(c, [14, 26, 15])) return 'a bramble hit with hazardFx for the bridge only: ' + c.join(' ');
+  if (env.errors.length) return env.errors[0];
+});
+
+check('boss.urgentRim: in a boss phase it names, a plate\'s RED border has 1 px of that colour outside it, for the urgent blink and for a wrong key, the plate\'s tail still joins the border, and nothing else in the picture changes; in another phase, on another border and outside a fight there is none. Without the key nothing is drawn outside a RED border, in any phase or in a section', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const ON = 12.5, OFF = 12.625;                           // the urgent border blinks at 4 Hz: an eighth of a second on, then off
+  const scene = function (rims, edit) {
+    const s = handState(TG, 'boss');
+    s.boss.word = null;
+    s.entities = [entity(TG, s, 'rock', 'glow', 140, 60, { urgent: true }), entity(TG, s, 'rock', 'cog', 60, 100)];
+    s.time = ON;
+    if (rims !== undefined) s.level.boss.urgentRim = rims;
+    if (edit) edit(s);
+    return s;
+  };
+  const picture = function (s) { TG.Render.draw(s); return env.canvas.toRGBA(); };
+  // The pixels d px outside the plate box, moved dx to the side: d 2 is the border, d 3 the rim.
+  const around = function (L, d, dx) {
+    const out = [];
+    for (let x = L.x - d; x <= L.x + L.w + d - 1; x++) out.push([x + dx, L.y - d], [x + dx, L.y + L.h + d - 1]);
+    for (let y = L.y - d + 1; y <= L.y + L.h + d - 2; y++) out.push([L.x - d + dx, y], [L.x + L.w + d - 1 + dx, y]);
+    return out;
+  };
+  const all = function (rgba, pixels, color) {
+    const bad = pixels.filter(function (p) { return pixel(rgba, 384, p[0], p[1]) !== pal[color]; });
+    return bad.length ? bad.length + ' of ' + pixels.length + ' are not colour ' + color + ', the first at ' + bad[0].join(',') + ' is ' + pixel(rgba, 384, bad[0][0], bad[0][1]) : null;
+  };
+  const same = function (a, b) { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
+
+  const s0 = scene(undefined);
+  const L = TG.Render.layoutLabels(s0).filter(function (l) { return l.text === 'GLOW'; })[0];
+  if (!L || !L.urgent || L.edge) return 'the urgent plate: ' + JSON.stringify(L);
+  // The plate's SILVER tail runs down to its cog. Its first pixel is in the bottom row of the rim, and the
+  // tail is drawn over the rim: with a rim it still joins the border. The tail does not shake with the plate.
+  if (L.tailX === null || L.tailY < L.y + L.h + 4) return 'the urgent plate has no tail to cross a rim: ' + JSON.stringify(L);
+  const tail = [Math.max(L.x + 1, Math.min(L.tailX, L.x + L.w - 2)), L.y + L.h + 2];
+  const offTail = function (p) { return p[0] !== tail[0] || p[1] !== tail[1]; };
+  const border = around(L, 2, 0), ring = around(L, 3, 0), rim = ring.filter(offTail);
+  if (rim.length !== ring.length - 1) return 'the tail at ' + tail.join(',') + ' is not in the row under the border';
+  const onRim = {};
+  rim.forEach(function (p) { onRim[p[0] + ',' + p[1]] = true; });
+  const plain = picture(s0);
+  let bad = all(plain, border, 25) || all(plain, [tail], 3);
+  if (bad) return 'the RED border and then the first pixel of the tail, without the key: ' + bad;
+
+  // Without the key nothing is drawn outside a RED border: the pixels round it are those of the picture in
+  // which the plate is not urgent and has no border at all. In each boss phase, and in a section.
+  const ringOf = function (s, text) {
+    const l = TG.Render.layoutLabels(s).filter(function (x) { return x.text === text; })[0];
+    const rgba = picture(s);
+    return { box: l ? [l.x, l.y, l.w, l.h, l.urgent].join(' ') : 'none', px: l ? around(l, 3, 0).map(function (p) { return pixel(rgba, 384, p[0], p[1]); }).join(' ') : '',
+      red: l ? all(rgba, around(l, 2, 0), 25) : 'no plate' };
+  };
+  const calm = function (s) { s.entities[0].urgent = false; };
+  for (const phase of [1, 2, 3]) {
+    const urgent = ringOf(scene(undefined, function (s) { s.boss.phase = phase; }), 'GLOW');
+    const quiet = ringOf(scene(undefined, function (s) { s.boss.phase = phase; calm(s); }), 'GLOW');
+    if (urgent.red || !quiet.red) return 'without the key, phase ' + phase + ': the border of the urgent plate is ' + (urgent.red ? 'not RED (' + urgent.red + ')' : 'RED') + ', and that of the same plate when it is not urgent is ' + (quiet.red ? 'not RED' : 'RED');
+    if (urgent.box !== [L.x, L.y, L.w, L.h, true].join(' ') || quiet.box !== [L.x, L.y, L.w, L.h, false].join(' ')) return 'without the key, phase ' + phase + ': the plates ' + urgent.box + ' and ' + quiet.box;
+    if (urgent.px !== quiet.px) return 'without the key, phase ' + phase + ': the pixels outside the RED border are not those of the plate with no border';
+  }
+  const inSection = function (urgent, rims) {
+    const s = handState(TG, 'playing');
+    s.time = ON;
+    s.entities[2].urgent = urgent;
+    if (rims) s.level.boss.urgentRim = rims;
+    return s;
+  };
+  const sectionText = inSection(true).entities[2].word.toUpperCase();
+  const sUrgent = ringOf(inSection(true), sectionText), sQuiet = ringOf(inSection(false), sectionText);
+  if (sUrgent.red || sUrgent.box === 'none' || sUrgent.box.replace(/true$/, 'false') !== sQuiet.box) return 'without the key, in a section: the urgent plate ' + sUrgent.box + ' (' + sUrgent.red + '), the same plate not urgent ' + sQuiet.box;
+  if (sUrgent.px !== sQuiet.px) return 'without the key, in a section: the pixels outside the RED border are not those of the plate with no RED border';
+
+  // A rim in WHITE, which nothing else puts there, and in INK, as Level 2 has it.
+  for (const color of [4, 0]) {
+    const rgba = picture(scene({ 2: color }));
+    bad = all(rgba, rim, color) || all(rgba, border, 25);
+    if (bad) return 'urgentRim { 2: ' + color + ' }, the rim and then the border: ' + bad;
+    // The tail's first pixel is not in `rim`, so it is among the pixels that must not change.
+    for (let y = 0; y < 216; y++) {
+      for (let x = 0; x < 384; x++) {
+        if (!onRim[x + ',' + y] && pixel(rgba, 384, x, y) !== pixel(plain, 384, x, y)) return 'urgentRim { 2: ' + color + ' }: the picture changed at ' + x + ',' + y;
+      }
+    }
+  }
+  // No rim: in the dark eighth of the blink; in phases 1 and 3; round the GOLD border of the locked plate;
+  // for a rim that is not a palette index.
+  const off = function (s) { s.time = OFF; };
+  const locked = function (s) { s.entities[0].urgent = false; s.typing.target = s.entities[0]; };
+  const cases = [['the blink is off', { 2: 4 }, off], ['phase 1', { 2: 4 }, function (s) { s.boss.phase = 1; }], ['phase 3', { 2: 4 }, function (s) { s.boss.phase = 3; }],
+    ['a GOLD border', { 2: 4 }, locked], ['a rim that is no colour', { 2: 'ink' }, null]];
+  for (const c of cases) {
+    if (!same(picture(scene(c[1], c[2])), picture(scene(undefined, c[2])))) return c[0] + ': the picture is not the one without the key';
+  }
+  // Each phase has its own entry.
+  const third = picture(scene({ 2: 0, 3: 4 }, function (s) { s.boss.phase = 3; }));
+  bad = all(third, rim, 4);
+  if (bad) return 'urgentRim { 2: 0, 3: 4 } in phase 3: ' + bad;
+  // The RED border of a wrong key (TG.Effects), which shakes the plate 2 px to the side.
+  const missed = scene({ 2: 4 }, function (s) { s.entities[0].urgent = false; s.time = OFF; });
+  TG.Events.emit('type:miss', { id: missed.entities[0].id, key: 'x', expected: 'g' });
+  const lab = TG.Effects.label(missed.entities[0].id);
+  if (!lab || lab.border !== 25 || Math.abs(lab.shakeX) !== 2) return 'the label of a wrong key: ' + JSON.stringify(lab);
+  const shaken = picture(missed);
+  TG.Effects.reset();
+  bad = all(shaken, around(L, 3, lab.shakeX).filter(offTail), 4) || all(shaken, around(L, 2, lab.shakeX), 25) || all(shaken, [tail], 3);
+  if (bad) return 'the border of a wrong key, the rim, then the border, then the first pixel of the tail: ' + bad;
+  // Outside a fight the key is not read: an urgent plate in a section.
+  if (!same(picture(inSection(true, { 1: 4, 2: 4, 3: 4 })), picture(inSection(true)))) return 'a rim on the playing screen, where there is no boss phase';
+  if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
+});
+
+if (!fs.existsSync(path.join(stubs.ROOT, 'js/levels/level2.js')) || !fs.existsSync(path.join(stubs.ROOT, 'js/levels/level1.js'))) {
+  skip('Level 2 names paleink, its bridge colours and its urgent rim; Level 1 names none of them', 'the level files are not both present');
+} else {
+  check('Level 2 names paleink for its ink drops, colours of its girder for the bridge\'s burst that show on its bands, and an INK rim for phase 2, whose band is the one dithered MAROON; Level 1 names none of the three', function () {
+    const TG = stubs.load({ files: ['js/core.js'].concat(ART_FILES, ['js/levels/level1.js', 'js/levels/level2.js']) }).TG;
+    const C = TG.COLOR;
+    const one = TG.Levels[1], two = TG.Levels[2];
+    if (two.theme.inkRemap !== 'paleink' || !TG.Remaps.paleink) return 'Level 2\'s inkRemap is ' + two.theme.inkRemap;
+    const bridge = two.theme.hazardFx.bridge;
+    if (!Array.isArray(bridge) || bridge.length !== 3 || bridge.some(function (c) { return !(Number.isInteger(c) && c >= 0 && c < TG.PAL.length); })) return 'Level 2\'s bridge colours: ' + JSON.stringify(bridge);
+    if (bridge.some(function (c) { return [C.SAND, C.CLAY, C.SOIL].indexOf(c) !== -1; })) return 'the girder bursts in a colour of the plank: ' + bridge.join(' ');
+    // The band colours of LEVEL2 3.1, and INK: a particle in one of them is lost on the band behind it.
+    if (bridge.some(function (c) { return [C.INK, C.SHADOW, C.PLUM, C.DEEP_BLUE, C.MAROON, C.DEEP_TEAL].indexOf(c) !== -1; })) return 'a bridge colour is as dark as a band: ' + bridge.join(' ');
+    // Two of the three are the girder's own: the STONE of its iron and the GOLD of its rivets.
+    const girder = {};
+    TG.Sprites.get(two.theme.tiles.plank).frames.forEach(function (rows) {
+      rows.forEach(function (row) { row.split('').forEach(function (ch) { if (ch !== '.') girder[parseInt(ch, 32)] = true; }); });
+    });
+    if (bridge.filter(function (c) { return girder[c]; }).length < 2) return 'the bridge colours ' + bridge.join(' ') + ' and the girder\'s ' + Object.keys(girder).join(' ');
+    if (JSON.stringify(two.boss.urgentRim) !== JSON.stringify({ 2: C.INK })) return 'Level 2\'s urgentRim is ' + JSON.stringify(two.boss.urgentRim);
+    // The rim answers the band of that phase. If the band changes, the rim is to be looked at again.
+    const arena = TG.Backdrops[two.theme.backdrop].palettes[two.arena.palette];
+    if (!arena.phases || arena.phases[2].dither !== C.MAROON) return 'the arena\'s phase 2 band is ' + JSON.stringify(arena.phases && arena.phases[2]) + ': the rim was chosen for a MAROON dither';
+    if (one.theme.inkRemap !== undefined) return 'Level 1 has theme.inkRemap ' + one.theme.inkRemap;
+    if (one.theme.hazardFx && one.theme.hazardFx.bridge !== undefined) return 'Level 1 has theme.hazardFx.bridge';
+    if (one.boss.urgentRim !== undefined) return 'Level 1 has boss.urgentRim';
+  });
+}
+
+// What TG.Render.draw draws of a state, with the HUD left out: every sprite (TG.Gfx.draw, and TG.Gfx.get for
+// the clipped parts) as 'name frame x y remap flip', every glyph of TG.Font.drawGlyph as 'ch x y colour' and
+// every rect of TG.Gfx.rect as 'x y w h colour'.
+function worldDrawn(TG, s) {
+  const out = { sprites: [], glyphs: [], rects: [] };
+  const hud = TG.Hud.draw, glyph = TG.Font.drawGlyph, rect = TG.Gfx.rect;
+  TG.Hud.draw = function () {};
+  TG.Font.drawGlyph = function (ctx, ch, x, y, color) { out.glyphs.push([ch, x, y, color].join(' ')); return glyph.apply(TG.Font, arguments); };
+  TG.Gfx.rect = function (ctx, x, y, w, h, c) { out.rects.push([x, y, w, h, c].join(' ')); return rect.apply(TG.Gfx, arguments); };
+  try {
+    out.sprites = drawCalls(TG, function () { TG.Render.draw(s); }).map(function (c) { return [c.name, c.frame, c.x, c.y, c.remap, c.flipX].join(' '); });
+  } finally {
+    TG.Hud.draw = hud;
+    TG.Font.drawGlyph = glyph;
+    TG.Gfx.rect = rect;
+  }
+  return out;
+}
+
+check('the two clocks of the picture (LEVEL2 6.3). With state.sceneTime standing still everything of the world holds while state.time runs: the backdrop\'s frames and drift, the water, a flag, the swing of a hive, the ink drops, the ground markers of a swoop, a flit and a rock, a crate\'s icon, the frame of the shield ring, the boss, the bubble Pip waits in. The chevrons, HOLD, the edge tag, the urgent border, the lock brackets, the ink spark and the bubble of the lifeLost screen run on state.time. A state without sceneTime is animated from state.time', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const SYM = TG.Font.SYM;
+  const GOLD = 18, RED = 25, CORAL = 26;
+  const HIVE_CHEVRON_Y = TG.C.GROUND_Y - TG.C.HANG_CLEAR - 35;
+  // The sprites that answer a key: they run on state.time.
+  const KEYED = ['ink_spark', 'fx_bracket'];
+  const world = function (f) { return f.sprites.filter(function (c) { return KEYED.indexOf(c.split(' ')[0]) === -1; }); };
+  const of = function (name) { return function (f) { return f.sprites.filter(function (c) { return c.split(' ')[0] === name; }); }; };
+  const distinct = function (frames, pick) {
+    const seen = {};
+    frames.forEach(function (f) { seen[JSON.stringify(pick(f))] = true; });
+    return Object.keys(seen).length;
+  };
+  // The pictures over a stretch of one clock with the other standing at 12.5: n values, `step` apart.
+  const sweep = function (s, clock, n, step) {
+    const out = [];
+    s.time = 12.5;
+    s.sceneTime = 12.5;
+    for (let k = 0; k < n; k++) {
+      s[clock] = 12.5 + k * step;
+      out.push(worldDrawn(TG, s));
+    }
+    s[clock] = 12.5;
+    return out;
+  };
+  // What must move with the scene clock and what with state.time, for a scene; and nothing else may.
+  // carried(glyph): the glyph is of a prompt that is placed on something of the world, and goes with it.
+  const problems = function (what, s, moves, keyed, carried) {
+    const byScene = sweep(s, 'sceneTime', 60, 1 / 15), byTime = sweep(s, 'time', 60, 1 / 60);
+    for (const name of moves) {
+      if (!of(name)(byScene[0]).length) return what + ': the scene draws no ' + name;
+      if (distinct(byScene, of(name)) < 2) return what + ': ' + name + ' is the same at every value of state.sceneTime';
+    }
+    for (const k of Object.keys(keyed)) {
+      if (distinct(byTime, keyed[k]) < 2) return what + ': ' + k + ': the same at every value of state.time';
+      if (distinct(byScene, keyed[k]) !== 1) return what + ': ' + k + ': not the same at every value of state.sceneTime';
+    }
+    // The whole of it: with the scene clock still, no sprite of the world changes; with state.time still,
+    // no glyph, no rect and no sprite of a key does.
+    for (let i = 1; i < byTime.length; i++) {
+      const a = world(byTime[0]), b = world(byTime[i]);
+      if (JSON.stringify(a) === JSON.stringify(b)) continue;
+      const k = a.findIndex(function (c, j) { return c !== b[j]; });
+      return what + ': with sceneTime still, ' + i + ' steps of state.time changed ' + JSON.stringify(a[k]) + ' to ' + JSON.stringify(b[k]);
+    }
+    const fixed = function (f) {
+      return [f.glyphs.filter(function (g) { return !(carried && carried(g)); }), f.rects, f.sprites.filter(function (c) { return KEYED.indexOf(c.split(' ')[0]) !== -1; })];
+    };
+    if (distinct(byScene, fixed) !== 1) return what + ': with state.time still, a glyph, a rect or a sprite of a key moved with sceneTime';
+    return null;
+  };
+  const glyphs = function (test) { return function (f) { return f.glyphs.filter(test).length; }; };
+  const chevrons = glyphs(function (g) { const p = g.split(' '); return (p[0] === SYM.CHEV_UP || p[0] === SYM.CHEV_DOWN) && Number(p[3]) === GOLD; });
+
+  // 1. A section: every hazard with its chevron, a raised flag, a swoop and a flit in their dives, a crate,
+  // an urgent plate, an edge tag, a locked word with a key just pressed, and two shield charges.
+  const s = handState(TG, 'playing');
+  withGame(TG, s);
+  TG.Effects.reset();
+  s.level.checkpoints[1].flagX = s.camera.x + 300;
+  s.level.checkpoints[1].raised = true;
+  s.entities[4].phase = 'dive';
+  // The flit's ground marker is the one a Pocket Watch can meet in Level 2 (LEVEL2 4.3): it lies under Pip,
+  // as the swoop's does, so the scene draws the marker twice.
+  s.entities.push(entity(TG, s, 'flit', 'bat', -72, 90, { from: 'above', w: 24, phase: 'dive', t: 0.9, turned: true, flipX: true }));
+  const markers = of('fx_marker')(worldDrawn(TG, s));
+  if (markers.length !== 2 || markers[0] !== markers[1]) return 'the ground markers of a diving swoop and a diving flit: ' + JSON.stringify(markers);
+  s.entities[2].urgent = true;
+  s.typing.target = s.entities[1];
+  s.entities[1].typed = 2;
+  s.entities[1].firstKeyAt = 0;
+  TG.Events.emit('type:hit', { id: s.entities[1].id, index: 1, kind: 'dawdle', complete: false });
+  if (!TG.Effects.casting()) return 'the scene has no cast';
+  let bad = problems('a section', s,
+    ['bg_cloud_m', 'bg_sails', 'tile_water', 'flag_pole', 'haz_beehive', 'haz_rope', 'item_ink', 'fx_marker', 'pw_hourglass', 'fx_shield'], {
+      'the chevrons': chevrons,
+      'HOLD': glyphs(function (g) { const p = g.split(' '); return p[0] === 'H' && Number(p[3]) === GOLD; }),
+      'the edge tag\'s chevron': glyphs(function (g) { const p = g.split(' '); return p[0] === SYM.RIGHT && Number(p[3]) === CORAL; }),
+      'the urgent border': function (f) { return f.rects.filter(function (r) { return Number(r.split(' ')[4]) === RED; }).length; },
+      'the ink spark': of('ink_spark'),
+      'the lock brackets': of('fx_bracket')
+    }, function (g) { const p = g.split(' '); return p[0] === SYM.CHEV_DOWN && (Number(p[2]) === HIVE_CHEVRON_Y || Number(p[2]) === HIVE_CHEVRON_Y + 1); });
+  if (bad) return bad;
+  // The hive's chevron is the one prompt whose place is the world's: it hangs over the hive and swings with
+  // it on the scene clock, 4 px right of the sprite's corner, while its blink is on state.time.
+  for (const f of sweep(s, 'sceneTime', 60, 1 / 15)) {
+    const hive = of('haz_beehive')(f)[0].split(' ');
+    if (f.glyphs.indexOf([SYM.CHEV_DOWN, Number(hive[2]) + 4, HIVE_CHEVRON_Y, GOLD].join(' ')) === -1) return 'the hive at x ' + hive[2] + ' has no chevron over it';
+  }
+  TG.Effects.reset();
+
+  // 2. The arena: the Baron, the stars of dusk, a rock from above with its marker, both attacks out of
+  // their windows.
+  const a = handState(TG, 'boss');
+  withGame(TG, a);
+  a.entities.forEach(function (e) { if (e.type === 'attack') e.eta = 2; });
+  bad = problems('the arena', a, ['bg_star', 'boss_body', 'fx_marker'], { 'the chevrons of the attacks': chevrons });
+  if (bad) return bad;
+
+  // 3. Pip's bubble. On the lifeLost screen it carries him to the rescue point and runs on state.time, as
+  // everything of that screen does; in the bubble he waits in until the world moves, he holds with it.
+  const bubble = function (f) { return [of('hero_idle')(f), of('fx_bubble')(f)]; };
+  const flight = handState(TG, 'lifeLost');
+  flight.player.state = 'fall';
+  flight.lifeLost = { cause: 'fall', t: 0.8, duration: 1, gapId: 'h1', last: false };
+  const waiting = handState(TG, 'playing');
+  waiting.player.state = 'rescue';
+  for (const c of [['the bubble of the lifeLost screen', flight, 'time', 'sceneTime'], ['the bubble Pip waits in', waiting, 'sceneTime', 'time']]) {
+    if (!of('fx_bubble')(worldDrawn(TG, c[1])).length) return c[0] + ' is not drawn';
+    if (distinct(sweep(c[1], c[2], 60, 1 / 15), bubble) < 2) return c[0] + ' is the same at every value of state.' + c[2];
+    if (distinct(sweep(c[1], c[3], 60, 1 / 15), bubble) !== 1) return c[0] + ' changes with state.' + c[3];
+  }
+
+  // 4. A state without sceneTime, as every hand-built state of this file is: one clock, state.time.
+  for (const t of [12.5, 12.9, 13.37, 20]) {
+    s.time = t;
+    s.sceneTime = t;
+    const both = JSON.stringify(worldDrawn(TG, s));
+    delete s.sceneTime;
+    if (JSON.stringify(worldDrawn(TG, s)) !== both) return 'at ' + t + ' s a state without sceneTime is not drawn as one whose two clocks are equal';
+  }
+  if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
+});
+
+if (!LEVEL2_PRESENT) {
+  skip('in the game, Level 2\'s first Pocket Watch holds the scenery', 'the simulation files are not all present');
+} else {
+  check('in the game, Level 2\'s first Pocket Watch holds the scenery: from the step its crate is typed on to the step of power:end, 180 pictures, every tile, backdrop piece, hazard, sign, flag and ink drop is drawn in the same frame at the same place and state.sceneTime stands still, while state.time runs 179 steps on; the pool, the ink drops, the lanterns and the far wall change frame before it and after it', function () {
+    const SCENERY = /^(bg_|fg_|tile_|haz_|item_|flag_|sign_|decor_)/;
+    const ANIMATED = ['tile_pool', 'item_ink', 'bg_lantern', 'bg_cave_far', 'bg_mist'];
+    const SPAN = 90;                                       // pictures kept before the watch and taken after it
+    const before = [], held = [], after = [];
+    let started = false, ended = false, hooked = false, DT = 0;
+    const res = simulate({ levelId: 2, difficulty: 'medium', profile: 'target', until: 'checkpoint1', seed: 1 }, function (TG, s) {
+      if (!hooked) {
+        hooked = true;
+        DT = TG.C.DT;
+        TG.Events.on('power:start', function (p) { if (p.power === 'watch') started = true; });
+        TG.Events.on('power:end', function (p) { if (p.power === 'watch') ended = true; });
+      }
+      // Nothing is drawn until Pip is near the crate (tile 206), nor once the pictures are taken.
+      if (s.player.x < 196 * 16 || after.length >= SPAN) return null;
+      const calls = drawCalls(TG, function () { TG.Render.draw(s); }).filter(function (c) { return SCENERY.test(c.name); });
+      const rec = { calls: calls, text: JSON.stringify(calls), scene: s.sceneTime, time: s.time, watchT: s.power.watchT };
+      if (!started) {
+        before.push(rec);
+        if (before.length > SPAN) before.shift();
+      } else if (held.length === 0 || held[held.length - 1].watchT > 0) {
+        held.push(rec);                                    // the step of the pickup, and on to the step of power:end
+      } else {
+        after.push(rec);
+      }
+      return null;
+    });
+    if (res.problem) return res.problem;
+    if (res.report.error) return res.report.error;
+    if (!started || !ended) return 'the bot did not ' + (started ? 'reach the end of' : 'start') + ' the first watch of Level 2';
+    if (before.length < SPAN || after.length < SPAN) return before.length + ' pictures before the watch and ' + after.length + ' after it';
+    if (held.length !== 180 || held[179].watchT !== 0) return held.length + ' pictures from the pickup to power:end';
+    for (let i = 1; i < held.length; i++) {
+      if (held[i].scene !== held[0].scene) return 'held step ' + i + ': sceneTime moved by ' + (held[i].scene - held[0].scene) + ' s';
+      if (held[i].text === held[0].text) continue;
+      const k = held[0].calls.findIndex(function (c, j) { return JSON.stringify(c) !== JSON.stringify(held[i].calls[j]); });
+      return 'held step ' + i + ': ' + JSON.stringify(held[0].calls[k]) + ' became ' + JSON.stringify(held[i].calls[k]);
+    }
+    if (Math.abs(held[179].time - held[0].time - 179 * DT) > 1e-6) return 'state.time ran ' + (held[179].time - held[0].time).toFixed(3) + ' s through the watch';
+    if (after[0].scene !== held[0].scene + DT) return 'on the step after the watch sceneTime moved by ' + (after[0].scene - held[0].scene) + ' s';
+    // Each of these is on screen and changes frame when no watch runs, so the freeze above was of something.
+    const framesOf = function (list, name) {
+      const seen = {};
+      list.forEach(function (r) { r.calls.forEach(function (c) { if (c.name === name) seen[c.frame] = true; }); });
+      return Object.keys(seen).length;
+    };
+    for (const name of ANIMATED) {
+      if (framesOf(held, name) !== 1) return name + ' has ' + framesOf(held, name) + ' frames through the watch';
+      if (framesOf(before, name) < 2 || framesOf(after, name) < 2) return name + ' has ' + framesOf(before, name) + ' frames in the ' + SPAN + ' steps before the watch and ' + framesOf(after, name) + ' in those after it';
+    }
+    if (res.env.errors.length || res.env.warnings.length) return 'console: ' + res.env.errors.concat(res.env.warnings)[0];
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 
 console.log('SUMMARY passed=' + passed + ' failed=' + failed + ' skipped=' + skipped);
 process.exit(failed > 0 ? 1 : 0);

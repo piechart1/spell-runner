@@ -1408,6 +1408,31 @@ Handed on from M4:
 | M6 | Her presentation is chosen from `state.level.boss.kind` (HUD, sound) and `state.boss.kind` (renderer, effects), and `TG.Effects` is reset on `level:start`: `nextStage` has to leave Level 2's data in `state.level` and emit `level:start`. The fight's motion has been judged from frame sheets only and needs a look in a browser |
 | M8 | The text of 2, 4.4 and 10 as above. CONTRACT 4.8, 4.17, 4.18, 6.4 and 7.1's notes that no test pins |
 
+**M5, the world: built on 2026-10-12.** The art was already in, so M5 was the last engine pieces for it and the legibility pass of 13.6 on the real level. Both rules of 3.1 hold in every palette and boss phase on Easy, Medium and Hard: two independent counts of the plate band (4,699 and 8,357 frames) found every backdrop pixel between y 24 and y 149 either SHADOW or a named exception, and the clock face clear of every plate and of the boss. Level 1 is unchanged (2,097 frames and event logs identical; the 72 RUN lines the same).
+
+What was built, each read from level data with Level 1's behaviour as the default:
+
+- The ink drops: `drawItems` draws `item_ink` under the remap `theme.inkRemap` names. Level 2 names `paleink` for the whole level; the drops then match the HUD's counter icon.
+- The scene clock: `state.sceneTime` advances as `state.time` does and stands still while `power.watchT > 0`. The renderer animates the world's picture from it: the backdrop's frames and drift, the pool, the flags, a lantern's swing, the ink drops' spin, the ground markers, a crate's icon, the boss. Left on `state.time`, because they prompt a key or answer one: the hazard and attack chevrons and HOLD, the plates' blink, brackets and tags, the ink spark of a key. Particles and popups keep their own clock, as 6.3 says. With no watch the two clocks are bit for bit the same.
+- The bridge burst: colours from `theme.hazardFx.bridge` (Level 2: STONE, SILVER, GOLD), wood as the default.
+- The urgent border in the boss's phase 2: `boss.urgentRim` names, by boss phase, a colour drawn 1 px outside a plate's RED border. Level 2 has INK in phase 2, so the red line has INK on both sides (3.9 to 1 where the dither gave 2.5 to 2.9 to 1).
+
+Appendix B is behind the level file by these three keys (`theme.inkRemap`, `theme.hazardFx.bridge`, `boss.urgentRim`); every other value is still equal.
+
+For the owner, none of it blocking, and best judged in a browser at M6:
+
+- What still moves under a Pocket Watch, as built: the chevrons and HOLD, the plates, the shield ring's flicker, Pip's blink after a hit, the watch's own frame, the HUD, popups and particles. The scenery, the creatures, the crates and Pip's pose hold.
+- The urgent border in Crystal Deep has no rim: RED on the DEEP_TEAL floor strip reads by hue (1.3 to 1 in lightness), so a player who does not tell red from green well has less to go on there; the blink and the urgent sound still mark it. A rim there needs a key per section.
+- The plate rule beside a crate (recorded under M2) stands as it was; nothing was changed.
+- Under the Hourglass the floor strip keeps its colour and shows as a purple strip under the blue in the Gear Hall's open bays, as 3.1 plans it.
+
+Handed on from M5:
+
+| To | What |
+|---|---|
+| M6 | The How To Play row for the watch (the row `{ sprite: 'pw_watch', name: 'POCKET WATCH', text: 'STOPS TIME' }` in `POWERS` of `js/ui.js`, the row pitch 21 to 18, the test-ui case, and new howToPlay reference frames for the Level 1 pixel set). `nextStage` must treat `state.sceneTime` exactly as it treats `state.time`, and clear `watchT` and `power.last` with the other timed powers: the sim asserts on every step that the two clocks are equal until a run's first watch. The look in a browser at the level at real size |
+| M8 | CONTRACT 4.16, 4.19, 5.1 (`state.sceneTime`) and 5.9 (the three keys); 3.1, 3.4, 6.3 and Appendix B of this plan as above. After a watch the scene clock is behind `state.time` by the held time, so a shot at a given `state.time` after the first watch shows other backdrop frames than before M5 |
+
 ---
 
 ## 14. Decisions

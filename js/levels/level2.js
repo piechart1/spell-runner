@@ -75,14 +75,17 @@
                      trunk: 'haz_pipe_riser', rope: 'haz_chain', canopy: 'haz_ceiling', archTrunk: 'haz_column' },
       hazardNames: { arch: 'TUNNEL' },
       // Particle colours on hazard:hit: AQUA CORAL WHITE; BRONZE GOLD STONE; GOLD CREAM BRONZE; STONE SILVER SHADOW.
-      hazardFx: { bramble: [11, 26, 4], branch: [16, 18, 2], beehive: [18, 19, 16], arch: [2, 3, 1] },
+      // And on hazard:bridge, when the girder comes down over a gap: STONE SILVER GOLD, its iron and its rivets.
+      hazardFx: { bramble: [11, 26, 4], branch: [16, 18, 2], beehive: [18, 19, 16], arch: [2, 3, 1], bridge: [2, 3, 18] },
       skins: {
         hoppet: { remap: 'tin' },
         buzzle: { sprite: 'en_glimmer', fx: { fx_flower: 'fx_star' } },
         rock:   { sprite: 'pr_cog' },
         shock:  { sprite: 'pr_rollgear' },
         pick:   { sprite: 'pr_pendulum' }
-      }
+      },
+      // The ink drops are drawn paler in every section (LEVEL2 3.1, rule 2): ROYAL is lost on the dark bands.
+      inkRemap: 'paleink'
     },
     lengthTiles: 928,
     sections: [
@@ -256,7 +259,10 @@
       label: 'RATCHET',
       speech: 'TICK TOCK! WORDS INTO COGS!',
       tips: { shock: 'JUMP THE GEAR', pick: 'DUCK THE PENDULUM' },
-      minionSkin: 'en_baronet'
+      minionSkin: 'en_baronet',
+      // In phase 2 the band is PLUM dithered MAROON, and the RED border of an urgent plate is faint on it:
+      // there it has 1 px of INK outside it.
+      urgentRim: { 2: 0 }
     }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

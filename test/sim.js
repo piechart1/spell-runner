@@ -210,6 +210,8 @@ class Checker {
     this.stepSpawned = new Set();
     this.stopReached = false;
     this.heldWorld = null;             // worldTime before a step that a Pocket Watch holds; null on any other step and between steps
+    this.heldScene = null;             // sceneTime before such a step
+    this.watched = false;              // a Pocket Watch has held a step of this run
     this.announced = [];               // boss:attack for shock and pick not yet followed by attack:spawn
     this.volleyHits = 0;               // volley entries typed since the volley began
     this.volleySize = 0;
@@ -493,6 +495,8 @@ class Checker {
 
   beforeStep(state) {
     this.heldWorld = state.power.watchT > 0 ? state.worldTime : null;
+    this.heldScene = state.power.watchT > 0 ? state.sceneTime : null;
+    if (state.power.watchT > 0) this.watched = true;
     this.prevThreats.clear();
     for (const e of state.entities) {
       if (!e.dead && e.type === 'threat') this.prevThreats.set(e.id, e);
@@ -508,12 +512,22 @@ class Checker {
     const m = this.measure;
     if (state.player && (m.minLives === null || state.player.lives < m.minLives)) m.minLives = state.player.lives;
     // The step is over. A continue comes between steps and emits section:enter, which is not a held step's.
-    const heldWorld = this.heldWorld;
+    const heldWorld = this.heldWorld, heldScene = this.heldScene;
     this.heldWorld = null;
+    this.heldScene = null;
     if (this.error) return;
     // watch
     if (heldWorld !== null && state.worldTime !== heldWorld) {
       this.fail('watch', 'the world clock moved by ' + (state.worldTime - heldWorld) + ' ws on a step a Pocket Watch holds');
+    }
+    // The scene clock, which the world's picture is animated from (LEVEL2 6.3): a Pocket Watch holds it
+    // with the world, and until one has run it is state.time itself, bit for bit, also on a lifeLost
+    // screen. So a run with no watch, every run of Level 1 among them, is drawn as it was before the clock.
+    if (heldScene !== null && state.sceneTime !== heldScene) {
+      this.fail('watch', 'the scene clock moved by ' + (state.sceneTime - heldScene) + ' s on a step a Pocket Watch holds');
+    }
+    if (!this.watched && state.sceneTime !== state.time) {
+      this.fail('watch', 'the scene clock is ' + state.sceneTime + ' and state.time ' + state.time + ' on ' + state.screen + ', and no Pocket Watch has run');
     }
     // first-letters
     const seen = new Map();
@@ -1067,11 +1081,13 @@ CHECKS['level-valid'] = function (ctx) {
   // business of the rules: a copy of the level with all of them is valid, and build hands them on as they are.
   const extra = JSON.parse(JSON.stringify(data));
   extra.theme.hazardNames = { arch: 'TUNNEL' };
-  extra.theme.hazardFx = { bramble: [11, 26, 4] };
+  extra.theme.hazardFx = { bramble: [11, 26, 4], bridge: [2, 3, 18] };
   extra.theme.skins = { hoppet: { remap: 'tin' }, rock: { sprite: 'pr_cog' } };
+  extra.theme.inkRemap = 'paleink';
   extra.theme.music.ready = 'jingle_ready2';
   extra.arena.music.phase3 = { tempo: 176, p2Octave: 12 };
-  extra.boss = { kind: 'ratchet', label: 'RATCHET', speech: 'TICK TOCK!', tips: { shock: 'JUMP THE GEAR', pick: 'DUCK THE PENDULUM' }, minionSkin: 'en_baronet' };
+  extra.boss = { kind: 'ratchet', label: 'RATCHET', speech: 'TICK TOCK!', tips: { shock: 'JUMP THE GEAR', pick: 'DUCK THE PENDULUM' }, minionSkin: 'en_baronet',
+    urgentRim: { 2: 0 } };
   const extraProblems = TG.Level.validate(extra);
   if (extraProblems.length > 0) return result(false, 'the optional keys are refused: ' + extraProblems.join('; '));
   const built = TG.Level.build(extra, TG.Difficulty.resolve('medium', extra.tune));
@@ -2033,7 +2049,8 @@ CHECKS['spawn-skin'] = function () {
 //   each has the size, the frame names, the fps and the anchor of the sprite it stands for: SKIN_ORIGINALS
 //   for a tile or a hazard, the sprite of the kind in TG.Entities.KINDS for a creature or an attack;
 //   a key of theme.tiles or theme.hazardSkins is one the renderer reads, a kind of theme.skins is a kind,
-//   and a remap of theme.skins is a defined remap;
+//   and a remap of theme.skins is a defined remap, as is theme.inkRemap, the remap of the ink drops
+//   (LEVEL2 3.1);
 //   a sprite that the effects leave in the place of another (skin.fx) has its size and its anchor. Its
 //   frames and its frame rate are its own, because the effects play it as it is: Level 2's fx_star, for
 //   the bee's fx_flower, has other frame names and twice the frame rate;
@@ -2096,6 +2113,10 @@ function skinProblems(TG, data) {
       else alike(where + '.fx.' + from, skin.fx[from], from, false);
     }
   }
+  if (theme.inkRemap !== undefined) {
+    names++;
+    if (!TG.Remaps[theme.inkRemap]) problems.push('theme.inkRemap: ' + theme.inkRemap + ' is not a remap');
+  }
   if (data.boss && data.boss.minionSkin !== undefined) alike('boss.minionSkin', data.boss.minionSkin, K.digby.sprite, true);
   return { problems: problems, names: names };
 }
@@ -2117,6 +2138,7 @@ CHECKS['skins'] = function (ctx) {
     ['en_dangle has the frames hang0 hang1 zip', (d) => { skin(d, 'hoppet', { sprite: 'en_dangle' }); }],
     ['en_dangle has fps 4', (d) => { skin(d, 'hoppet', { sprite: 'en_dangle' }); }],
     ['nowhere is not a remap', (d) => { skin(d, 'hoppet', { remap: 'nowhere' }); }],
+    ['theme.inkRemap: palest is not a remap', (d) => { d.theme.inkRemap = 'palest'; }],
     ['theme.skins.dragon is not a kind', (d) => { skin(d, 'dragon', { sprite: 'en_hoppet' }); }],
     ['fx_lilypad is 16x8', (d) => { skin(d, 'buzzle', { fx: { fx_flower: 'fx_lilypad' } }); }],
     ['theme.skins.hoppet.fx.fx_lilypad is not a sprite the effects swap', (d) => { skin(d, 'hoppet', { fx: { fx_lilypad: 'fx_star' } }); }],
@@ -2133,6 +2155,7 @@ CHECKS['skins'] = function (ctx) {
   const skins = data.theme.skins || {};
   return result(true, found.names + ' names (' + Object.keys(data.theme.tiles || {}).length + ' tiles, ' + Object.keys(data.theme.hazardSkins || {}).length +
     ' hazard sprites, the skins of ' + (Object.keys(skins).join(', ') || 'no kind') + (data.boss.minionSkin ? ', the minion as ' + data.boss.minionSkin : '') +
+    (data.theme.inkRemap ? ', the ink drops under ' + data.theme.inkRemap : '') +
     '): each in the manifest and defined, with the size, frame names, fps and anchor of the sprite it stands for; ' + broken.length + ' broken copies are each refused');
 };
 
@@ -2629,7 +2652,7 @@ CHECKS['watch-freeze'] = function () {
     type(crate);                                   // the last letter: the pickup
 
     const was = s.entities.filter((e) => !e.dead).map((e) => ({ e: e, age: e.age, x: e.x, t: e.t, y: e.y, animT: e.animT }));
-    const at = { frame: s.frame, time: s.time, world: s.worldTime, x: p.x, y: p.y, animT: p.animT, camera: s.camera.x, slowT: s.power.slowT, invulnT: p.invulnT, hurtT: p.hurtT, quillT: s.power.quillT, last: s.power.last, assist: s.assist };
+    const at = { frame: s.frame, time: s.time, world: s.worldTime, scene: s.sceneTime, x: p.x, y: p.y, animT: p.animT, camera: s.camera.x, slowT: s.power.slowT, invulnT: p.invulnT, hurtT: p.hurtT, quillT: s.power.quillT, last: s.power.last, assist: s.assist };
     c.check(crate.dead && was.length === kinds.length + 1 && urgentBefore === true && at.slowT > 0 && at.invulnT > 0 && at.hurtT > 0 && at.quillT > 0 && s.screen === 'playing', 'setup',
       was.length + ' typables live at the pickup, the nearest ' + (urgentBefore ? '' : 'not ') + 'urgent before it, slowT ' + at.slowT + ', invulnT ' + at.invulnT + ', hurtT ' + at.hurtT + ', quillT ' + at.quillT + ', on ' + s.screen);
     // Adaptive pacing is switched on with its target well below assist: assist goes on towards it at its
@@ -2645,6 +2668,9 @@ CHECKS['watch-freeze'] = function () {
       const on = ' on step ' + n + ' of ' + HELD;
       c.check(s.timeScale === 0, 'timeScale', 'timeScale is ' + s.timeScale + on);
       c.check(s.worldTime === at.world, 'worldTime', 'worldTime moved by ' + (s.worldTime - at.world) + ' ws' + on);
+      // The scene clock stands still while state.time runs on: what TG.Render animates from it holds its frame.
+      c.check(s.sceneTime === at.scene && Math.abs(s.time - at.time - n * DT) < 1e-9, 'scene',
+        'sceneTime moved by ' + (s.sceneTime - at.scene) + ' s and state.time by ' + (s.time - at.time) + ' s' + on);
       for (const w of was) {
         const e = w.e;
         c.check(!e.dead && e.age === w.age && e.x === w.x && e.t === w.t, 'entities',
@@ -2681,6 +2707,7 @@ CHECKS['watch-freeze'] = function () {
     TG.Game.step(DT);                              // the first step the world moves again
     c.check(s.timeScale === s.pace * s.assist * C.HOURGLASS_SCALE && s.worldTime > at.world, 'moves',
       'on the step after the watch timeScale is ' + s.timeScale + ' and worldTime has moved by ' + (s.worldTime - at.world) + ' ws');
+    c.check(s.sceneTime === at.scene + DT, 'moves', 'on the step after the watch sceneTime has moved by ' + (s.sceneTime - at.scene) + ' s, expected one step of ' + DT);
     c.check(since(events, after, 'hero:jump').length === 1 && p.state === 'jump', 'jump', 'the jump pressed during the freeze did not start on the first step the world moved: Pip is ' + p.state);
     const urgentSent = events.filter((x) => x.name === 'threat:urgent' && x.payload.id === nearest.id).length;
     c.check(nearest.urgent === true && urgentSent === 1, 'urgent',
@@ -2953,15 +2980,19 @@ CHECKS['watch-freeze'] = function () {
     c.check(s.power.watchT === C.WATCH_TIME && since(events, 0, 'power:start').length === 2, 'second',
       'a second watch with ' + left + ' s left of the first gives watchT ' + s.power.watchT + ', expected ' + C.WATCH_TIME + ', and ' + since(events, 0, 'power:start').length + ' power:start');
     for (let n = 0; n < 30; n++) TG.Game.step(DT);
-    const world = s.worldTime;
+    const world = s.worldTime, scene = s.sceneTime;
     TG.Game.pause();
     const mark = events.length;
     const continued = TG.Game.continueRun();
     c.check(continued && s.power.watchT === 0 && s.power.last === null && s.timeScale === s.pace * s.assist, 'continue',
       'after a continue watchT is ' + s.power.watchT + ', power.last ' + s.power.last + ' and timeScale ' + s.timeScale);
     c.check(since(events, mark, 'power:end').length === 0, 'continue', 'the continue emitted power:end; timed power-ups end without events there');
+    // The scene clock is behind state.time by the steps the two watches held, and a continue leaves it
+    // there, as it leaves state.time: the picture's animations go on from the frame they stood at.
+    c.check(scene < s.time && s.sceneTime === scene, 'continue', 'a continue moved the scene clock by ' + (s.sceneTime - scene) + ' s (state.time is ' + (s.time - scene) + ' s ahead of where it stood)');
     TG.Game.step(DT);
     c.check(s.screen === 'playing' && s.worldTime > world, 'continue', 'the world does not move on the step after the continue (' + s.screen + ')');
+    c.check(s.sceneTime === scene + DT, 'continue', 'on the step after the continue the scene clock moved by ' + (s.sceneTime - scene) + ' s, expected one step of ' + DT);
     return c;
   };
 
@@ -3018,8 +3049,12 @@ CHECKS['watch-freeze'] = function () {
       TG.Events.on('screen:change', (x) => { if (x.from === 'lifeLost' && marks.screen === null) marks.screen = s.frame; });
       const world = s.worldTime;
       const mark = events.length;
+      // The lifeLost screen alone does not hold the scene clock: with no watch the pool and the flags move
+      // on it, as they always have. The watch holds it, on this screen as on any other.
+      c.check(s.screen === 'lifeLost' && s.sceneTime === s.time, 'scene', 'before the pickup, on ' + s.screen + ', sceneTime is ' + s.sceneTime + ' and state.time ' + s.time + on);
       type(crate);                                 // the pickup, on the lifeLost screen
       const pickup = s.frame;
+      const scene = s.sceneTime;
       c.check(crate.dead && s.screen === 'lifeLost' && s.lifeLost.cause === cause && s.power.watchT > 0, 'setup', 'at the pickup the screen is ' + s.screen + ' (' + s.lifeLost.cause + '), the crate ' + (crate.dead ? 'typed' : 'live') + on);
       c.check(Math.abs(s.power.watchT - (C.WATCH_TIME - DT)) < 1e-9, 'counts', 'after the step of the pickup watchT is ' + s.power.watchT + ', expected ' + (C.WATCH_TIME - DT) + ': the watch counts on the lifeLost screen' + on);
       const rescueX = gap ? gap.x + gap.w + C.RESCUE_AHEAD : null;
@@ -3031,6 +3066,7 @@ CHECKS['watch-freeze'] = function () {
           c.check(Math.abs(left - s.power.watchT - DT) < 1e-9, 'counts', 'on a step of the lifeLost screen watchT went from ' + left + ' to ' + s.power.watchT + on);
         }
         c.check(s.worldTime === world, 'held', 'worldTime moved by ' + (s.worldTime - world) + ' ws, ' + (s.frame - pickup) + ' steps after the pickup' + on);
+        c.check(s.sceneTime === scene, 'scene', 'sceneTime moved by ' + (s.sceneTime - scene) + ' s, ' + (s.frame - pickup) + ' steps after the pickup, on ' + s.screen + on);
         if (marks.rescue !== null) {
           c.check(p.state === 'rescue' && p.x === rescueX, 'bubble', (s.frame - marks.rescue) + ' steps after the rescue Pip is ' + p.state + ' at x ' + p.x + ', expected the bubble at ' + rescueX + ' until the world moves');
         }
@@ -3043,7 +3079,8 @@ CHECKS['watch-freeze'] = function () {
       c.check(since(events, mark, 'section:enter').length + since(events, mark, 'checkpoint').length + since(events, mark, 'hazard:cue').length === 0, 'level',
         'while the watch ran: ' + level() + ' (expected none: the level waits for the world)' + on);
       TG.Game.step(DT);
-      c.check(s.worldTime > world && p.state === 'run', 'moves', 'on the step after power:end worldTime moved by ' + (s.worldTime - world) + ' ws and Pip is ' + p.state + on);
+      c.check(s.worldTime > world && p.state === 'run' && s.sceneTime === scene + DT, 'moves',
+        'on the step after power:end worldTime moved by ' + (s.worldTime - world) + ' ws, sceneTime by ' + (s.sceneTime - scene) + ' s and Pip is ' + p.state + on);
       if (gap) {
         c.check(since(events, mark, 'section:enter').length === 1 && since(events, mark, 'checkpoint').length === 1 && s.section === 1 && s.checkpoint.index === 1, 'level',
           'on the first step the world moved, with Pip put down past the checkpoint line: ' + level() + ', section ' + s.section + ', checkpoint ' + s.checkpoint.index + ' banked (expected one section:enter and one checkpoint, 1 and 1)');
@@ -3054,7 +3091,7 @@ CHECKS['watch-freeze'] = function () {
 
   const bad = [];
   const blind = [];
-  const HOLD_CLAUSES = ['timeScale', 'worldTime', 'entities', 'frame', 'eta', 'urgent', 'pip', 'slowT', 'invulnT', 'jump', 'start', 'ends', 'slot'];
+  const HOLD_CLAUSES = ['timeScale', 'worldTime', 'scene', 'entities', 'frame', 'eta', 'urgent', 'pip', 'slowT', 'invulnT', 'jump', 'start', 'ends', 'slot'];
   const parts = [
     ['the world holds', holds(HOLD_KINDS[0]), HOLD_CLAUSES],
     ['the world holds (' + HOLD_KINDS[1].join(', ') + ')', holds(HOLD_KINDS[1]), HOLD_CLAUSES],
@@ -3098,7 +3135,7 @@ CHECKS['watch-freeze'] = function () {
     if (session.report.error) return result(false, 'the level 2 run: ' + session.report.error);
     if (steps !== HELD || s.worldTime === world) return result(false, 'in the level 2 run the watch held the world for ' + steps + ' steps, expected ' + HELD);
     if (typed < least) return result(false, 'the bot pressed ' + typed + ' keys during the freeze, expected at least ' + least + ' at ' + session.bot.wpm + ' WPM');
-    return result(true, 'the world held for ' + HELD + ' steps (' + fmt(HELD * DT, 3) + ' s: WATCH_TIME counts from the step of the pickup): worldTime, age, x, t of ' + (HOLD_KINDS[0].length + HOLD_KINDS[1].length) + ' kinds, ' +
+    return result(true, 'the world held for ' + HELD + ' steps (' + fmt(HELD * DT, 3) + ' s: WATCH_TIME counts from the step of the pickup): worldTime, the scene clock, age, x, t of ' + (HOLD_KINDS[0].length + HOLD_KINDS[1].length) + ' kinds, ' +
       'timeScale 0, eta 100 x the ws left, urgent, slowT, invulnT, assist, jump, fall, cue, spawns, the lines of the level, close call, power:end, continue, bossIntro, lifeLost and the rescue; ' +
       parts.filter((x) => x[2]).length + ' parts shown to fail with a Red cap in the crate; ' +
       'the level 2 bot pressed ' + typed + ' keys and cleared ' + cleared + ' words in its first freeze');

@@ -185,14 +185,17 @@
     return !!(s && s.power && s.power.quillT > 0);
   }
 
-  // The particle colours of a hazard:hit by hazard kind (LEVEL2 3.4): the level's theme.hazardFx[kind], a
-  // list of palette indices, or Level 1's leaves: with thorns for the bramble, with soil for the others.
-  function hazardColors(kind) {
+  // The particle colours of a hazard's burst (LEVEL2 3.4): the level's theme.hazardFx[key], a list of
+  // palette indices. key: the hazard's kind for a hazard:hit, and `bridge` for a hazard:bridge. Without it
+  // they are Level 1's: leaves with thorns for the bramble and with soil for the other kinds, and the wood
+  // of the plank bridge.
+  function hazardColors(key) {
     var s = gameState();
     var fx = s && s.level && s.level.theme ? s.level.theme.hazardFx : null;
-    var colors = fx ? fx[kind] : null;
+    var colors = fx ? fx[key] : null;
     if (Array.isArray(colors) && colors.length > 0) return colors;
-    return kind === 'bramble' ? [GRASS, CORAL, LIME] : [GRASS, LIME, SOIL];
+    if (key === 'bridge') return [SAND, CLAY, SOIL];
+    return key === 'bramble' ? [GRASS, CORAL, LIME] : [GRASS, LIME, SOIL];
   }
 
   // The effects of each boss by boss.kind (LEVEL2 10.6), with the Baron as the default.
@@ -1317,7 +1320,7 @@
       if (!isNum(p.x)) return;
       var w = num(p.w, 16);
       puff('fx_poof', p.x + w / 2, TG.C.GROUND_Y, 0);
-      burst(WORLD, p.x + w / 2, TG.C.GROUND_Y, 8, 70, [SAND, CLAY, SOIL], 250, 0.4);
+      burst(WORLD, p.x + w / 2, TG.C.GROUND_Y, 8, 70, hazardColors('bridge'), 250, 0.4);
     },
 
     'attack:spawn': function (p) {

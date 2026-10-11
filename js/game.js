@@ -20,6 +20,10 @@
 //   state.power.watchT       real seconds left of a Pocket Watch, 0 when none runs (LEVEL2 6.3). While it is
 //                            above 0 the world is stopped: timeScale is 0 and so is the world step. `last`
 //                            can also be 'watch'
+//   state.sceneTime          the scene clock, s: it runs with state.time and stands still while a Pocket Watch
+//                            holds the world (LEVEL2 6.3). TG.Render animates the world's picture from it, so
+//                            that the pool, the flags, the ink drops and the backdrop hold their frame with
+//                            Pip and the creatures. In a run with no watch it is state.time, bit for bit
 //
 // The boss round state machine lives in js/boss.js. This file hands over to it at the end of the
 // boss intro (screenTimers) and passes it completed boss words (completeWord).
@@ -79,7 +83,7 @@
   function emptyState() {
     return {
       screen: 'boot', screenT: 0, screenData: null, resumeTo: null, pausePending: false,
-      frame: 0, time: 0, worldTime: 0,
+      frame: 0, time: 0, sceneTime: 0, worldTime: 0,
       pace: 1, assist: 1, assistTarget: 1, adaptive: true,
       slowScale: 1, tutorScale: 1, finisherScale: 1, timeScale: 1,
       seed: 1, rng: null, difficulty: 'medium', config: null, levelId: 1, level: null, picker: null, typing: null,
@@ -300,9 +304,11 @@
     // 1.
     if (!s || !isSimScreen(s.screen)) return;
     if (!(dt > 0)) return;
-    // 2.
+    // 2. The scene clock takes the same step as the real one, but none while a Pocket Watch runs: the
+    // steps on which the freeze of step 3 makes the world step 0. A lifeLost screen does not hold it.
     s.frame++;
     s.time += dt;
+    if (!(s.power.watchT > 0)) s.sceneTime += dt;
     s.screenT += dt;
     // 3. The world step is 0 on lifeLost, and while a Pocket Watch runs (timeScale is then 0).
     s.timeScale = timeScaleOf(s);

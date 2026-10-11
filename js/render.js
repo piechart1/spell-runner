@@ -40,6 +40,19 @@
 //     fountain of TG.Effects, her head the one without goggles from the moment they fly off. A minion in a
 //     sprite of its own, the Baronet, comes up in front of his mound; in the intro's cameo he keeps his
 //     helmet as he drops into the hatch.
+//   - Two clocks (LEVEL2 6.3). The world's picture is animated from the scene clock, state.sceneTime, which
+//     stands still while a Pocket Watch holds the world: the backdrop's frames and drift, the pool, the
+//     flags, the swing of a hive or a lantern, the ink drops, the ground markers, a crate's power icon, the
+//     frame of the shield ring, the boss. What prompts the player or answers a key runs on state.time and
+//     does not hold: the chevrons and HOLD, the plates with their blinking borders, edge tags and lock
+//     brackets, the ink spark, and Pip's bubble on the lifeLost screen. In a run with no watch the two
+//     clocks are equal. Three things are drawn by the step count, state.frame, and go on under a watch as
+//     well: the shield ring, which is drawn on alternate steps; Pip's blink while he is invulnerable, which
+//     lasts the whole freeze after a hit just before it, because invulnT stands still; and the watch's own
+//     frame. Held in the off half of its blink, the ring or Pip would be missing for the whole freeze.
+//   - Level 2 names a remap for its ink drops (theme.inkRemap), and a colour for 1 px outside the RED border
+//     of a plate in a boss phase whose band is close to RED (boss.urgentRim). That rim lies under the tails,
+//     so that a plate's tail still joins its border.
 (function (root) {
   'use strict';
   var TG = root.TG = root.TG || {};
@@ -217,6 +230,12 @@
 
   function blinkOn(time, hz) {
     return Math.floor(time * hz * 2) % 2 === 0;
+  }
+
+  // The clock of the world's picture (LEVEL2 6.3): state.sceneTime, which runs with state.time and stands
+  // still while a Pocket Watch holds the world. A state without it is animated from state.time.
+  function sceneClock(state) {
+    return num(state.sceneTime, num(state.time, 0));
   }
 
   // The section (or arena) object and its palette name for the state.
@@ -434,15 +453,18 @@
     }
   }
 
-  // Chevron above a hazard or attack: GOLD, blinking at 2 Hz, steady while its window is open.
-  function chevron(c, up, cx, y, time, steady) {
-    if (!steady && !blinkOn(time, 2)) return;
+  // Chevron above a hazard or attack: GOLD, blinking at 2 Hz, steady while its window is open. now:
+  // state.time. A chevron prompts a key, as the HUD's key prompt does, and blinks on through a Pocket
+  // Watch: held in the dark half of its blink it would be missing for the whole freeze.
+  function chevron(c, up, cx, y, now, steady) {
+    if (!steady && !blinkOn(now, 2)) return;
     var ch = TG.Font && TG.Font.SYM ? (up ? TG.Font.SYM.CHEV_UP : TG.Font.SYM.CHEV_DOWN) : (up ? '{' : '}');
     glyphShadow(c, ch, cx - 4, y, GOLD);
   }
 
   // remap: the section's palette remap, for the tree crowns (the hazards themselves keep their colours).
-  function drawHazards(c, state, camX, time, remap) {
+  // time: the scene clock, for the swing; now: state.time, for the chevrons and HOLD.
+  function drawHazards(c, state, camX, time, now, remap) {
     var C = TG.C;
     var level = state.level;
     var p = state.player;
@@ -458,11 +480,11 @@
       var y;
       switch (h.kind) {
         case 'gap':
-          if (showChev) chevron(c, true, sx + h.w / 2, G - 13, time, inWin);
+          if (showChev) chevron(c, true, sx + h.w / 2, G - 13, now, inWin);
           break;
         case 'bramble':
           sprite(c, hazardSkin(level, 'bramble'), 0, sx, G, false, null);
-          if (showChev) chevron(c, true, sx + 8, G - 22, time, inWin);
+          if (showChev) chevron(c, true, sx + 8, G - 22, now, inWin);
           break;
         case 'branch':
           sprite(c, hazardSkin(level, 'branch'), 0, sx, HANG, false, null);
@@ -470,7 +492,7 @@
           for (y = HANG - 16; y > C.PLAY_TOP - 16; y -= 16) sprite(c, trunk, 0, sx, y, false, null);
           // The trunk ends in a tree crown at the top of the playfield (its top rows run under the HUD).
           sprite(c, hazardSkin(level, 'canopy'), 0, sx - 16, CANOPY_BOTTOM, false, remap);
-          if (showChev) chevron(c, false, sx + 8, HANG - 27, time, inWin);
+          if (showChev) chevron(c, false, sx + 8, HANG - 27, now, inWin);
           break;
         case 'beehive':
           // The hive swings up to 6 px either way; the rope leans with it (cosmetic, DESIGN 5).
@@ -482,7 +504,7 @@
             var lean = Math.round(swing * (y - C.PLAY_TOP) / (ropeTop - C.PLAY_TOP + 16));
             sprite(c, rope, 0, sx + lean, y, false, null);
           }
-          if (showChev) chevron(c, false, sx + 8 + swing, HANG - 35, time, inWin);
+          if (showChev) chevron(c, false, sx + 8 + swing, HANG - 35, now, inWin);
           break;
         case 'arch':
           sprite(c, hazardSkin(level, 'arch'), 0, sx, HANG, false, null);
@@ -495,28 +517,32 @@
           sprite(c, hazardSkin(level, 'canopy'), 0, sx + Math.floor(h.w / 2) - 24, CANOPY_BOTTOM, false, remap);
           if (showChev) {
             var held = inWin || (px > h.winStart && px < h.holdUntil);
-            chevron(c, false, sx + h.w / 2, HANG - 27, time, held);
+            chevron(c, false, sx + h.w / 2, HANG - 27, now, held);
             // The arch is the one hazard that needs the duck key held (DESIGN 5): HOLD above its
             // chevron on every difficulty, blinking and steady with it. While the Easy key prompt
             // (hud.js drawKeyPrompt) shows HOLD over its ENTER keycap above Pip, this sign gives way
             // to it, so the two labels do not overlap as the arch scrolls in.
             var prompted = h.prompt && px >= h.winStart && px <= h.holdUntil &&
               (state.screen === 'playing' || state.screen === 'lifeLost');
-            if (!prompted && (held || blinkOn(time, 2))) wordShadow(c, 'HOLD', sx + h.w / 2, HANG - 37, GOLD);
+            if (!prompted && (held || blinkOn(now, 2))) wordShadow(c, 'HOLD', sx + h.w / 2, HANG - 37, GOLD);
           }
           break;
       }
     }
   }
 
+  // The ink drops, under the remap the level names for them: theme.inkRemap (LEVEL2 3.1, rule 2: on Level
+  // 2's dark bands the ROYAL drop is drawn paler). With none they have their own colours, as in Level 1.
   function drawItems(c, state, camX, time) {
     var items = state.items || [];
     var frame = Math.floor(time * 8) % 4;
+    var theme = state.level.theme;
+    var remap = theme && typeof theme.inkRemap === 'string' && theme.inkRemap ? theme.inkRemap : null;
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
       var sx = Math.floor(it.x - camX);
       if (sx < -8 || sx > TG.C.W + 8) continue;
-      sprite(c, 'item_ink', frame, sx, it.y, false, null);
+      sprite(c, 'item_ink', frame, sx, it.y, false, remap);
     }
   }
 
@@ -871,7 +897,9 @@
     return reach > 0 ? Math.round(reach * Math.sin(2 * Math.PI * FLIT_FLUTTER_HZ * num(e.animT, 0))) : 0;
   }
 
-  function drawEntities(c, state, camX, time) {
+  // time: the scene clock, for the ground markers and a crate's power icon; now: state.time, for the
+  // chevrons of the attacks. The creatures themselves are animated from their own animT.
+  function drawEntities(c, state, camX, time, now) {
     var C = TG.C;
     var list = state.entities || [];
     var p = state.player;
@@ -955,11 +983,11 @@
           break;
         case 'shock':
           sprite(c, name, Math.floor(at * 10) % 2, sx, sy, false, remap);
-          chevron(c, true, sx, sy - 20, time, attackWindow(e));
+          chevron(c, true, sx, sy - 20, now, attackWindow(e));
           break;
         case 'pick':
           sprite(c, name, Math.floor(at * 12) % 4, sx, sy, false, remap);
-          chevron(c, false, sx, sy - 28, time, attackWindow(e));
+          chevron(c, false, sx, sy - 28, now, attackWindow(e));
           break;
         default:
           if (e.kind) sprite(c, name, 0, sx, sy, false, remap);
@@ -990,7 +1018,11 @@
     sprite(c, 'fx_bubble', Math.floor(time * 4) % 2, x, y, false, null);
   }
 
-  function drawPip(c, state, camX, time) {
+  // time: the scene clock, for the bubble Pip waits in after a rescue and for the frame of the shield
+  // ring; now: state.time, for the bubble that carries him on the lifeLost screen and for the ink spark of
+  // a key. The ring's alternate steps and Pip's blink while invulnerable count state.frame, and neither
+  // holds under a Pocket Watch (the note on the two clocks at the top of the file).
+  function drawPip(c, state, camX, time, now) {
     var C = TG.C;
     var p = state.player;
     if (!p) return;
@@ -1021,7 +1053,7 @@
       var toX = gap.x + gap.w + C.RESCUE_AHEAD - camX;
       var bx = sx + (toX - sx) * v;
       var by = sy + (C.GROUND_Y - sy) * v - Math.sin(Math.PI * v) * 30;
-      drawBubble(c, Math.floor(bx), Math.floor(by), time);
+      drawBubble(c, Math.floor(bx), Math.floor(by), now);
       return;
     }
     if (p.state === 'rescue') {
@@ -1051,7 +1083,7 @@
     // The ink spark at the quill tip on the frame of a correct key (DESIGN 3.4).
     if (cast && p.state !== 'fall') {
       var q = p.state === 'slide' ? QUILL_SLIDE : QUILL_RUN;
-      sprite(c, 'ink_spark', Math.floor(time * 20) % 2, sx + q[0], sy + q[1], false, null);
+      sprite(c, 'ink_spark', Math.floor(now * 20) % 2, sx + q[0], sy + q[1], false, null);
     }
     // Bubble shield: an oval ring drawn on alternate frames (DESIGN 7).
     if (state.power && state.power.shield > 0 && num(state.frame, 0) % 2 === 0) {
@@ -1270,6 +1302,23 @@
     }
   }
 
+  // The colour of 1 px outside a plate's RED border in this boss phase, or null: level.boss.urgentRim =
+  // { phase: palette index }. Lady Ratchet's phase 2 band is PLUM dithered MAROON (LEVEL2 3.1), close to
+  // RED in hue, and the border of an urgent plate is faint on it. With INK outside it, the RED line has INK
+  // on both sides. The RED border of a wrong key is the same line and has it too. Level 1's boss names none.
+  function urgentRim(state) {
+    var rims = state.boss && state.level.boss ? state.level.boss.urgentRim : null;
+    var rim = rims ? rims[Math.min(num(state.boss.phase, 1), 3)] : null;
+    return isNum(rim) ? rim : null;
+  }
+
+  // The rim of a plate whose border is RED on this frame: 1 px of the colour `rim` outside the border.
+  function drawRim(c, L, time, rim) {
+    var lab = effectsLabel(L.id);
+    if (plateBorder(L, lab, time) !== RED) return;
+    outline(c, L.x + (lab ? lab.shakeX : 0) - 2, L.y - 2, L.w + 4, L.h + 4, rim);
+  }
+
   // The INK plate of w x h has 1 px more INK around it, and a border (when it has one) outside that, so
   // that raised GOLD letters never touch a GOLD border.
   function drawPlate(c, L, time) {
@@ -1352,8 +1401,14 @@
     }
   }
 
+  // time: state.time. The plates are where the player reads and types, and nothing of them holds under a
+  // Pocket Watch: the blink of an urgent border and of an edge tag, the letter after a wrong key, the lock.
+  // The rims of urgentRim are drawn first: a tail starts in the row of its plate's rim, and drawn over the
+  // rim it still joins the border, as it does where there is no rim.
   function drawPlates(c, state, labels, camX, time) {
     var i;
+    var rim = urgentRim(state);
+    if (rim !== null) for (i = 0; i < labels.length; i++) drawRim(c, labels[i], time, rim);
     for (i = 0; i < labels.length; i++) drawTail(c, labels[i]);
     for (i = labels.length - 1; i >= 0; i--) {
       drawPlate(c, labels[i], time);
@@ -1387,7 +1442,10 @@
   function drawWorld(c, state) {
     var C = TG.C;
     var camX = state.camera && isNum(state.camera.x) ? state.camera.x : 0;
-    var time = num(state.time, 0);
+    // time: the scene clock, which a Pocket Watch holds, for the world's picture. now: state.time, for
+    // what prompts the player or answers a key (the note on the two clocks at the top of the file).
+    var time = sceneClock(state);
+    var now = num(state.time, 0);
     var sec = sectionOf(state);
     var bd = backdropOf(state);
     var palName = sec ? sec.palette : 'day';
@@ -1403,18 +1461,18 @@
     drawGround(c, state, camX, remap, time);
     drawProps(c, state, camX, time);
     // 3. Hazards with their chevrons. 4. Ink drops.
-    drawHazards(c, state, camX, time, remap);
+    drawHazards(c, state, camX, time, now, remap);
     drawItems(c, state, camX, time);
     // 5. Boss, entities, ground markers. 6. Pip.
     drawBoss(c, state, camX, time);
-    drawEntities(c, state, camX, time);
-    drawPip(c, state, camX, time);
+    drawEntities(c, state, camX, time, now);
+    drawPip(c, state, camX, time, now);
     // 7. Effects in the world.
     if (TG.Effects && TG.Effects.draw) TG.Effects.draw(c, 'world', camX);
     // 8. Foreground layer L6.
     drawLayers(c, bd, pal, camX, time, sectionIndex, true);
     // 9. Word plates, lock brackets, edge tags.
-    drawPlates(c, state, layoutLabels(state), camX, time);
+    drawPlates(c, state, layoutLabels(state), camX, now);
     // 10. Flash.
     var flash = TG.Effects && TG.Effects.flash ? TG.Effects.flash() : null;
     if (flash !== null && flash !== undefined) rect(c, 0, C.PLAY_TOP, C.W, C.H - C.PLAY_TOP, flash);
