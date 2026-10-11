@@ -913,7 +913,7 @@ check('Sprites.check accepts every palette key, an anchor outside the frame, fps
   return same(TG.Sprites.check(def), []);
 });
 
-check('Sprites.MANIFEST has 93 entries with distinct names: 27 of owner C and 66 of owner D', function () {
+check('Sprites.MANIFEST has 144 entries with distinct names: 40 of owner C and 104 of owner D', function () {
   const M = TG.Sprites.MANIFEST;
   const names = M.map(function (m) { return m.name; });
   const distinct = names.filter(function (n, i) { return names.indexOf(n) === i; });
@@ -923,7 +923,7 @@ check('Sprites.MANIFEST has 93 entries with distinct names: 27 of owner C and 66
     return typeof m.name === 'string' && m.w > 0 && m.h > 0 && m.frames >= 1 && typeof m.ax === 'number' && typeof m.ay === 'number' &&
       (m.owner === 'C' || m.owner === 'D') && Array.isArray(m.names) && m.names.length === m.frames && typeof m.fps === 'number';
   });
-  return Array.isArray(M) && M.length === 93 && distinct.length === 93 && c === 27 && d === 66 && shapeOk;
+  return Array.isArray(M) && M.length === 144 && distinct.length === 144 && c === 40 && d === 104 && shapeOk;
 });
 
 check('Sprites.MANIFEST: fx_bracket has 4 frames (tl0 tl1 bl0 bl1); spot checks of other entries', function () {
@@ -939,12 +939,49 @@ check('Sprites.MANIFEST: fx_bracket has 4 frames (tl0 tl1 bl0 bl1); spot checks 
   assert.deepStrictEqual(entry('key_wide'), { name: 'key_wide', w: 32, h: 16, frames: 2, ax: 0, ay: 0, owner: 'D', fps: 0, names: ['up', 'down'] });
 });
 
+// The skins rule (LEVEL2 4.5 and Appendix C): the renderer draws a Level 2 sprite where it would draw the
+// Level 1 sprite, with the same frame choice and the same placement, so the two rows must agree.
+check('Sprites.MANIFEST: a Level 2 sprite that takes the place of a Level 1 sprite has its size, frame names, fps and anchor', function () {
+  const M = TG.Sprites.MANIFEST;
+  function entry(name) {
+    const e = M.filter(function (m) { return m.name === name; })[0];
+    if (!e) throw new Error(name + ' is not in the manifest');
+    return stubs.plain(e);
+  }
+  // Level 2 name: the Level 1 row it copies in full
+  const COPIES = {
+    en_flit: 'en_swoop', en_glimmer: 'en_buzzle', en_baronet: 'en_digby', boss2_head: 'boss_head',
+    pr_cog: 'pr_rock', pr_rollgear: 'pr_shock', pr_pendulum: 'pr_pickaxe',
+    tile_cave_top: 'tile_grass', tile_cave_fill: 'tile_soil', tile_cave_edge_l: 'tile_edge_l', tile_cave_edge_r: 'tile_edge_r',
+    tile_cave_wall_l: 'tile_wall_l', tile_cave_wall_r: 'tile_wall_r', tile_pool: 'tile_water', tile_girder: 'tile_plank',
+    tile_clockfloor: 'tile_arena',
+    haz_crystal: 'haz_bramble', haz_pipe: 'haz_branch', haz_pipe_riser: 'haz_trunk', haz_lantern: 'haz_beehive',
+    haz_chain: 'haz_rope', haz_tunnel: 'haz_arch', haz_ceiling: 'haz_canopy', haz_column: 'haz_trunk',
+    pw_watch: 'pw_shield', fx_cogbit: 'fx_chunk', fx_flake: 'fx_feather', bg_gearstar: 'bg_star', fg_stalagmite: 'fg_tuft'
+  };
+  // Level 2 name: the Level 1 sprite whose size and anchor it has; its frames or its fps are its own
+  const PLACED_AS = { boss2_body: 'boss_body', boss2_arm: 'boss_arm', boss2_engine: 'boss_mound', boss2_goggles: 'boss_monocle' };
+  const bad = [];
+  Object.keys(COPIES).forEach(function (n) {
+    const a = entry(n), b = entry(COPIES[n]);
+    a.name = b.name;
+    if (!same(a, b)) bad.push(n + ' is not the row of ' + COPIES[n]);
+  });
+  Object.keys(PLACED_AS).forEach(function (n) {
+    const a = entry(n), b = entry(PLACED_AS[n]);
+    if (a.w !== b.w || a.h !== b.h || a.ax !== b.ax || a.ay !== b.ay) bad.push(n + ' has not the size and anchor of ' + PLACED_AS[n]);
+  });
+  // boss2_arm is boss_arm's three frames and one more
+  if (!same(entry('boss2_arm').names, entry('boss_arm').names.concat(['watch']))) bad.push('boss2_arm frame names');
+  return bad.length === 0 ? true : bad.join('; ');
+});
+
 check('Sprites.missing lists manifest names that are undefined or differ in size or frame count', function () {
   const e2 = stubs.load({ files: CORE });
   const S = e2.TG.Sprites;
   const all = S.missing();
   const c = S.missing('C'), d = S.missing('D');
-  if (all.length !== 93 || c.length !== 27 || d.length !== 66) return 'before: ' + [all.length, c.length, d.length];
+  if (all.length !== 144 || c.length !== 40 || d.length !== 104) return 'before: ' + [all.length, c.length, d.length];
   function blank(w, h, frames, names) {
     const rows = [];
     for (let y = 0; y < h; y++) rows.push(new Array(w + 1).join('0'));
@@ -957,8 +994,8 @@ check('Sprites.missing lists manifest names that are undefined or differ in size
   S.define('pr_rock', blank(16, 12, 2, ['k0', 'k1']));             // wrong size
   S.define('test_extra', blank(8, 8, 1, ['x']));                   // not in the manifest
   const after = S.missing('C');
-  return after.length === 26 && after.indexOf('ink_bolt') === -1 && after.indexOf('ink_spark') !== -1 &&
-    after.indexOf('pr_rock') !== -1 && S.missing('D').length === 66 && S.missing().length === 92 &&
+  return after.length === 39 && after.indexOf('ink_bolt') === -1 && after.indexOf('ink_spark') !== -1 &&
+    after.indexOf('pr_rock') !== -1 && S.missing('D').length === 104 && S.missing().length === 143 &&
     S.missing().indexOf('test_extra') === -1;
 });
 

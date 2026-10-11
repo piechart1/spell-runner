@@ -1338,6 +1338,35 @@ Handed on from M3:
 | M6 | If `nextStage` clears the timed powers as `continueRun` does, include `watchT` and `last` |
 | M8 | CONTRACT passages no test pins: 4.14, 4.16, 4.18, 4.19, 5.1 (`power.watchT`, six factors), 5.2, 5.5, 7.3, 8.2, 11.3 and the WP-B and WP-F checklists. DESIGN 7, 13.2 and 15.2 have no row for the watch |
 
+**The art and the music: made in a separate copy of the project and merged on 2026-10-11.** All 51 sprites of Appendix C, the remaps, `TG.Backdrops.cavern` and the tracks `level2`, `boss2` and `jingle_ready2` are in, as data only: no engine file changed in the merge. Each lane did its own rounds of look and revise; independent critics then looked twice at sheets, at the music's notes and renders, and at 131 frames from the real renderer, and the second look found nothing that must be fixed. Level 1 is unchanged (2,097 frames and event logs identical), and `tools/shot.js --level 2` now draws the level with no warning. The Level 2 creatures' own draw code (M2), Lady Ratchet's (M4) and the world's last engine pieces (M5) are not built, so in a drawn run today the spider and the bat use the generic draw, and the boss is drawn as the Baron.
+
+Where the art departs from this plan, each for the owner to confirm when looking at the final set:
+
+| What | The plan | As made, and why |
+|---|---|---|
+| The tin frog (`tin`, 3.1, 3.6, Appendix C) | BRONZE body, GOLD shine, SILVER eyes | SILVER body, WHITE belly, GOLD eyes, and a silver pad: `{ 14: 3, 15: 4, 4: 18, 13: 2 }`. Bronze on the Gear Hall's brass floor was the weakest read of the level |
+| A roof in sections 2 and 3 (3.3) | Roof pieces in section 1 only | Four `haz_ceiling` rims under the HUD, so that Crystal Deep does not read as a night sky. They put up to 220 INK pixels into the plate band (y 24 to 33), which rule 1 of 3.1 as written does not allow |
+| The Baron peeking from a pipe (3.3) | An item of the near layer | A layer of its own, `peek`, so that he is seen three times in the Gear Hall and not at every moment |
+| The ready jingle (11.1) | As printed, with A in its second bar | Still as printed. Over bar 2 of the level tune that A lies a half step under the tune's B flat, 1.7 s into every run. A tested change to B flat is ready and waits for the owner's ear |
+| The ink drops (3.1) | The fallback remap if they are hard to see | They are hard to see in Crystal Deep. The remap `paleink` is in as data; `drawItems` needs its two lines and the level data a key (M5) |
+| Machines near the floor (3.3) | Solid BRONZE and GOLD pieces | Drawn in outline in the Gear Hall and the arena, so that the rolling gear, the pendulum and the frog stand out from them |
+| Lady Ratchet's far arm (10.1) | As the Baron's far arm | At rest in raise, stomp and throw: the Baron's rule gives her two spanners and a T-shaped throw |
+| Her intro gesture (2, 10.1) | She lifts her goggles | The frames cannot show it (`raise` holds a spanner and the goggles are part of the head). Recommended: she checks her watch and winds her key |
+| Her key (2) | Four quarter turns | Four steps of half a turn: a bow looks the same after half a turn |
+| The Baronet (3.1, 3.5) | GOLD, SOIL, PINK | GOLD, SOIL, WHITE: with three colours he has the monocle and moustache and no pink nose |
+| Section 3's music (11.2) | Up 3 semitones | As planned, and clearly brighter than Level 1's section 3. The lever, if the owner finds it too bright, is the section's `transpose` in the level file |
+
+Appendix C's positions for the cavern's items, and several colour lists of 3.3, are behind the art: `js/sprites-world.js` and CONTRACT 6.5 are the record.
+
+Handed on from the art:
+
+| To | What |
+|---|---|
+| M2 | `en_flit` `dive` has the head at the lower left, so with `flipX` the head leads down and to the right, as the dive from behind needs. `js/effects.js` must draw a cleared creature with its skin: the tin frog's `fx_lilypad` with the frog's remap, and the moth's `fx_flower` swapped for `fx_star` as `theme.skins.buzzle.fx` says |
+| M4 | Draw order and frames for her parts as the boss lane's compositor has them: the far arm at `rest`; the near arm `watch` while the state is `taunt`; `boss2_body` b0 or b1 at 1 fps idle and 4 fps in a taunt, b1 held in the finisher; `boss2_key` at `bx + 14, by - 30 + r` after the far arm and before the head, clipped at `by`, one frame step per half turn (forward k0 to k3); the engine `open` while the hatch is in use. The intro gesture as recommended above, once the owner confirms. For an entity with a skin, draw `en_mound` first and the Baronet over it, and hold `peek` until 12 rows are out: today the mound hides him. The finisher's slump, and `boss_helmet` in place of `fx_helmet` when he is cleared, are polish. The RED urgent border is faint at game size on the MAROON and PLUM dither |
+| M5 | The two lines for `paleink` and its level-data key; the How To Play row for the watch, now that `pw_watch` is defined (13.8, M3); what holds during a freeze; `decor_hole`'s rope ends in mid-air because a decor is 32 px high and stands on the floor line |
+| M8 | CONTRACT 6.2's sentence on colour counts names only the Baron's colours |
+
 ---
 
 ## 14. Decisions

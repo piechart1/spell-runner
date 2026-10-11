@@ -59,9 +59,10 @@ const SFX_NAMES = [
   'boss_telegraph', 'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat',
   'ui_move', 'ui_select', 'ui_back', 'pause', 'tally_tick', 'stamp', 'count_tick', 'start'
 ];
-const TRACK_NAMES = ['title', 'level1', 'boss1', 'victory', 'results', 'gameover', 'jingle_ready', 'jingle_checkpoint'];
-const LOOPS = ['title', 'level1', 'boss1', 'results'];
-const ONCE = ['victory', 'gameover', 'jingle_ready', 'jingle_checkpoint'];
+const TRACK_NAMES = ['title', 'level1', 'boss1', 'victory', 'results', 'gameover', 'jingle_ready', 'jingle_checkpoint',
+  'level2', 'boss2', 'jingle_ready2'];
+const LOOPS = ['title', 'level1', 'boss1', 'results', 'level2', 'boss2'];
+const ONCE = ['victory', 'gameover', 'jingle_ready', 'jingle_checkpoint', 'jingle_ready2'];
 
 // A fresh environment with core.js and audio.js, Audio initialised.
 function fresh(opts) {
@@ -131,6 +132,35 @@ check('TG.Audio.TRACKS contains exactly the names of CONTRACT 7.2', function () 
   const names = Array.prototype.slice.call(env.TG.Audio.TRACKS);
   return same(names.slice().sort(), TRACK_NAMES.slice().sort()) && new Set(names).size === names.length;
 });
+
+// The table of CONTRACT 7.2 itself, read from the document: its names are TG.Audio.TRACKS, in the order of
+// TRACK_NAMES above, and its Kind column agrees with the lists LOOPS and ONCE that the checks below use.
+(function () {
+  const title = 'doc: the table of CONTRACT 7.2 has the tracks of TG.Audio.TRACKS, and its Kind column is Loop for the loops, Jingle for the jingle_ names and Once for the rest';
+  let text;
+  try { text = require('fs').readFileSync(require('path').join(stubs.ROOT, 'docs', 'CONTRACT.md'), 'utf8'); } catch (e) { text = null; }
+  if (text === null) { console.log('skip - ' + title + ' (docs/CONTRACT.md is not present)'); return; }
+  check(title, function () {
+    const lines = text.split('\n');
+    const cells = function (line) { return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); };
+    let i = lines.findIndex(function (l) { return l.indexOf('### 7.2 Music tracks and jingles') === 0; });
+    if (i === -1) return 'heading 7.2 not found';
+    while (i < lines.length && !(lines[i].trim().indexOf('|') === 0 && cells(lines[i])[0] === 'Name')) i++;
+    const rows = [];
+    for (i += 2; i < lines.length && lines[i].trim().indexOf('|') === 0; i++) rows.push(cells(lines[i]));
+    const docNames = rows.map(function (r) { return r[0].replace(/`/g, ''); });
+    const env = stubs.load({ files: FILES });
+    const code = Array.prototype.slice.call(env.TG.Audio.TRACKS);
+    if (!same(docNames.slice().sort(), code.slice().sort())) return 'the document has ' + docNames.join(' ') + '; the code has ' + code.join(' ');
+    if (!same(docNames, TRACK_NAMES)) return 'the order of the document is ' + docNames.join(' ');
+    const bad = rows.filter(function (r, k) {
+      const name = docNames[k];
+      const want = LOOPS.indexOf(name) !== -1 ? 'Loop' : name.indexOf('jingle_') === 0 ? 'Jingle' : 'Once';
+      return r[1] !== want || (want !== 'Loop' && ONCE.indexOf(name) === -1);
+    });
+    if (bad.length) return 'Kind differs for ' + bad.map(function (r) { return r[0] + ' (' + r[1] + ')'; }).join(', ');
+  });
+})();
 
 check('every SFX name has a recipe and every recipe has a name in SFX', function () {
   const env = stubs.load({ files: FILES });
@@ -2808,6 +2838,498 @@ check('TG.Audio has exactly the public names of CONTRACT 4.8 plus the test-only 
   const expected = ['SFX', 'TRACKS', '_internals', 'init', 'isUnlocked', 'jingle', 'music', 'resume', 'setBassOnly',
     'setEnabled', 'setTempoScale', 'sfx', 'suspend', 'unlock', 'update'].sort();
   return same(names, expected);
+});
+
+// =================================================================================================
+// Level 2: the tracks of LEVEL2 11.1 and 11.2
+// =================================================================================================
+
+// The events of one bar of a channel, with steps counted from the start of the bar.
+function barEvents(track, ch, bar) {
+  const spb = track.stepsPerBar;
+  return track.channels[ch].events.filter(function (e) { return e.step >= bar * spb && e.step < (bar + 1) * spb; })
+    .map(function (e) { return Object.assign({}, e, { step: e.step - bar * spb }); });
+}
+
+check('level2, boss2 and jingle_ready2 have the tempo, key and length of LEVEL2 11.1', function () {
+  const env = stubs.load({ files: FILES });
+  const I = env.TG.Audio._internals;
+  const l = I.parse('level2'), b = I.parse('boss2'), j = I.parse('jingle_ready2');
+  const bad = [];
+  if (!(l.bpm === 140 && l.key === 'D' && l.mode === 'minor' && l.beats === 4 && l.bars === 32 && l.loop)) bad.push('level2');
+  if (!(b.bpm === 160 && b.key === 'G' && b.mode === 'minor' && b.beats === 4 && b.bars === 16 && b.loop)) bad.push('boss2');
+  if (!(j.bpm === 140 && j.key === 'D' && j.mode === 'minor' && j.beats === 4 && j.bars === 2 && !j.loop)) bad.push('jingle_ready2');
+  if (l.title !== 'Clockwork Caverns' || b.title !== 'The Great Clock') bad.push('titles ' + l.title + ', ' + b.title);
+  // 32 bars at 140 BPM: "about 55 s". 16 bars at 160 BPM are 24 s.
+  if (Math.abs(I.trackLength('level2') - 32 * 4 * 60 / 140) > 1e-9 || Math.abs(I.trackLength('level2') - 55) > 0.5) bad.push('level2 length ' + I.trackLength('level2'));
+  if (Math.abs(I.trackLength('boss2') - 24) > 1e-9) bad.push('boss2 length ' + I.trackLength('boss2'));
+  if (l.channels.p1.wave !== 'p50' || !l.channels.p1.vibrato || l.channels.p2.wave !== 'p12') bad.push('level2 voices');
+  if (b.channels.p1.wave !== 'p12' || b.channels.p2.wave !== 'p50') bad.push('boss2 voices');
+  return bad.length ? bad.join(', ') : true;
+});
+
+check('level2 is AABA: the three A parts share a tune and the B part has another; every A part ends on a held D, and the last one leads back into the first', function () {
+  const env = stubs.load({ files: FILES });
+  const l = env.TG.Audio._internals.parse('level2');
+  const spb = l.stepsPerBar;
+  const lead = l.channels.p1.events;
+  function part(from, bars) {
+    return lead.filter(function (e) { return e.step >= from * spb && e.step < (from + bars) * spb; })
+      .map(function (e) { return (e.step - from * spb) + ':' + e.midi + ':' + e.len; }).join(',');
+  }
+  // The first seven bars of each part: the eighth bar of an A part is held longer the second and third time.
+  const a1 = part(0, 7), a2 = part(8, 7), b = part(16, 7), a3 = part(24, 7);
+  if (a1 !== a2 || a1 !== a3) return 'the A parts differ';
+  if (a1 === b) return 'the B part is the same as the A part';
+  const bad = [8, 16, 32].filter(function (endBar) {
+    const inBar = lead.filter(function (e) { return e.step >= (endBar - 1) * spb && e.step < endBar * spb; });
+    const last = inBar[inBar.length - 1];
+    return !(last && last.midi % 12 === 2 && last.len >= 6);
+  });
+  if (bad.length) return 'A parts ending in bars ' + bad.join(', ') + ' do not end on a long D';
+  // The loop point: the tune ends on D and starts again on the A above it, and the bass ends a fifth away from its first note.
+  const tri = l.channels.tri.events;
+  const bassStep = Math.abs(tri[0].midi - tri[tri.length - 1].midi) % 12;
+  return (lead[0].midi - lead[lead.length - 1].midi === 7 && (bassStep === 5 || bassStep === 7)) || 'the loop point';
+});
+
+check('the level2 tune is singable and its own: inside the range of the Level 1 tune, no leap wider than an octave, mostly steps, a dotted pair in every bar', function () {
+  const env = stubs.load({ files: FILES });
+  const P = env.TG.Audio._internals.parse;
+  const l = P('level2');
+  const lead = l.channels.p1.events;
+  const midis = lead.map(function (e) { return e.midi; });
+  const ref = P('level1').channels.p1.events.map(function (e) { return e.midi; });
+  const lo = Math.min.apply(null, midis), hi = Math.max.apply(null, midis);
+  if (lo < Math.min.apply(null, ref) || hi > Math.max.apply(null, ref)) return 'range ' + lo + ' to ' + hi + ' is outside the Level 1 tune';
+  let steps = 0;
+  for (let i = 1; i < lead.length; i++) {
+    const d = Math.abs(lead[i].midi - lead[i - 1].midi);
+    if (d > 12) return 'leap of ' + d + ' at step ' + lead[i].step;
+    if (d === 1 || d === 2) steps++;
+  }
+  if (Math.abs(lead[0].midi - lead[lead.length - 1].midi) > 12) return 'leap at the loop point';
+  if (!(steps > (lead.length - 1) / 2)) return 'only ' + steps + ' of ' + (lead.length - 1) + ' moves are steps';
+  // Dotted: a note of 3 steps and one of 1, or a note of 6 and one of 2, side by side.
+  const plain = [];
+  for (let bar = 0; bar < l.bars; bar++) {
+    const ev = barEvents(l, 'p1', bar);
+    const dotted = ev.some(function (e, i) {
+      const next = ev[i + 1];
+      return !!next && next.step === e.step + e.len && ((e.len === 3 && next.len === 1) || (e.len === 6 && next.len === 2));
+    });
+    if (!dotted) plain.push(bar + 1);
+  }
+  if (plain.length) return 'no dotted pair in bars ' + plain.join(', ');
+  // Not the Level 1 tune moved to another key: the two A parts have different rhythms.
+  const rhythm = function (t) { return t.channels.p1.events.filter(function (e) { return e.step < 8 * t.stepsPerBar; }).map(function (e) { return e.step + ':' + e.len; }).join(','); };
+  return rhythm(l) !== rhythm(P('level1')) || 'the rhythm of the A part is that of level1';
+});
+
+check('the level2 tune does not start again inside a part: two bars side by side open with the same two notes only where one part ends and the next begins', function () {
+  const env = stubs.load({ files: FILES });
+  const P = env.TG.Audio._internals.parse;
+  // The first two notes of a bar, pitch and length. Bar 1 of the A part opens A, G; if the bar
+  // before it opened the same way the tune would seem to come in a bar early. (level1 keeps the
+  // same rule: none of its bars opens like the one before it.)
+  const inside = function (t) {
+    const head = function (bar) { return barEvents(t, 'p1', bar % t.bars).slice(0, 2).map(function (e) { return e.midi + ':' + e.len; }).join(' '); };
+    const out = [];
+    for (let bar = 0; bar < t.bars; bar++) {
+      if (bar % 8 !== 7 && head(bar) === head(bar + 1)) out.push((bar + 1) + ' and ' + (bar + 2));
+    }
+    return out;
+  };
+  const l1 = inside(P('level1')), l2 = inside(P('level2'));
+  if (l1.length) return 'level1 bars ' + l1.join(', ') + ': this check needs another look';
+  return l2.length === 0 || 'bars ' + l2.join(', ') + ' open with the same two notes';
+});
+
+check('the level2 tune is not the Level 1 tune in minor: it opens on the fifth and steps down where level1 opens on the key note and climbs, no bar of its A part has the rhythm of the same bar of level1, and the two are on the same scale degree on fewer than a third of the beats', function () {
+  const env = stubs.load({ files: FILES });
+  const I = env.TG.Audio._internals;
+  const l2 = I.parse('level2'), l1 = I.parse('level1');
+  // The scale degree, 1 to 7, of a note in the key of its track (0 outside the scale).
+  const degree = function (t, midi) { return I.keyPitchClasses(t.key, t.mode).indexOf(midi % 12) + 1; };
+  const head = function (t) { return t.channels.p1.events.slice(0, 3); };
+  const h1 = head(l1), h2 = head(l2);
+  if (!(degree(l1, h1[0].midi) === 1 && h1[0].midi < h1[1].midi && h1[1].midi < h1[2].midi)) return 'level1 no longer opens on its key note and climbs: this check needs another look';
+  if (!(degree(l2, h2[0].midi) === 5 && h2[0].midi > h2[1].midi && h2[1].midi > h2[2].midi)) return 'level2 does not open on the fifth and step down';
+  const bad = [];
+  // The A part and the B part, bar against bar.
+  [0, 16].forEach(function (from) {
+    let same = 0;
+    for (let bar = from; bar < from + 8; bar++) {
+      const r = function (t) { return barEvents(t, 'p1', bar).map(function (e) { return e.step + ':' + e.len; }).join(','); };
+      if (r(l1) === r(l2)) bad.push('bar ' + (bar + 1) + ' has the rhythm of level1');
+      // The note that sounds as each beat starts. A beat on which either tune rests is not counted.
+      for (let beat = 0; beat < 4; beat++) {
+        const at = function (t) {
+          const step = bar * t.stepsPerBar + beat * 4;
+          return t.channels.p1.events.filter(function (e) { return e.step <= step && step < e.step + e.len; })[0];
+        };
+        const a = at(l1), b = at(l2);
+        if (a && b && degree(l1, a.midi) === degree(l2, b.midi)) same++;
+      }
+    }
+    if (!(same < 32 / 3)) bad.push('bars ' + (from + 1) + ' to ' + (from + 8) + ': the same scale degree as level1 on ' + same + ' of 32 beats');
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('level2 harmony: the bass walks in quarters from the roots Dm, Bb, C, Am (A part) and Gm, Bb, C, Dm (B part), and not in fifths or octaves with the tune; pulse 2 ticks eighths on the root and fifth, answers the rest in the 4th bar of an A part with one arpeggio, and plays sixteenths in the B part', function () {
+  const env = stubs.load({ files: FILES });
+  const l = env.TG.Audio._internals.parse('level2');
+  const A = [2, 10, 0, 9, 2, 10, 0, 9], B = [7, 10, 0, 2, 7, 10, 0, 2];
+  const roots = A.concat(A, B, A);
+  const bad = [];
+  for (let bar = 0; bar < l.bars; bar++) {
+    const inB = bar >= 16 && bar < 24;
+    const tri = barEvents(l, 'tri', bar);
+    if (tri.length !== 4 || tri.some(function (e, i) { return e.step !== i * 4 || e.len !== 4; })) bad.push('bar ' + (bar + 1) + ': the bass is not four quarters');
+    else if (tri[0].midi % 12 !== roots[bar]) bad.push('bar ' + (bar + 1) + ': the bass starts on ' + (tri[0].midi % 12));
+    const p2 = barEvents(l, 'p2', bar);
+    // The fourth bar of an A part, where the tune rests on beat 4: three beats of ticks, then one
+    // rising arpeggio of the chord in sixteenths.
+    const answer = !inB && bar % 8 === 3;
+    const ticks = answer ? p2.filter(function (e) { return e.step < 12; }) : p2;
+    const want = inB ? 1 : 2;
+    if (ticks.length !== (answer ? 12 : 16) / want || ticks.some(function (e, i) { return e.step !== i * want || e.len !== want; })) {
+      bad.push('bar ' + (bar + 1) + ': pulse 2 is not in ' + (inB ? 'sixteenths' : 'eighths'));
+    } else if (!inB && bar % 8 !== 7) {
+      // Root on the beat, fifth off it. (The last bar of an A part changes chord half-way.)
+      const off = ticks.filter(function (e, i) { return (e.midi % 12) !== (i % 2 === 0 ? roots[bar] : (roots[bar] + 7) % 12); });
+      if (off.length) bad.push('bar ' + (bar + 1) + ': pulse 2 leaves the root and fifth');
+    } else if (!inB) {
+      // The close: A E, A C (the third of Am), D F (the root and third of Dm, under the held D), A E.
+      const close = ticks.map(function (e) { return e.midi % 12; }).join(',');
+      if (close !== '9,4,9,0,2,5,9,4') bad.push('bar ' + (bar + 1) + ': the close of pulse 2 is ' + close);
+    }
+    if (answer) {
+      const fill = p2.filter(function (e) { return e.step >= 12; });
+      const chord = [roots[bar], (roots[bar] + 3) % 12, (roots[bar] + 7) % 12];
+      const ok = fill.length === 4 && fill.every(function (e, i) {
+        return e.step === 12 + i && e.len === 1 && chord.indexOf(e.midi % 12) !== -1 && (i === 0 || e.midi > fill[i - 1].midi);
+      });
+      if (!ok) bad.push('bar ' + (bar + 1) + ': pulse 2 does not answer with a rising arpeggio on beat 4');
+      if (barEvents(l, 'p1', bar).some(function (e) { return e.step + e.len > 12; })) bad.push('bar ' + (bar + 1) + ': the tune does not rest on beat 4');
+    }
+  }
+  // An octave jump in the bass in most bars.
+  const jumps = l.channels.tri.events.filter(function (e, i, all) { return i > 0 && Math.abs(e.midi - all[i - 1].midi) === 12; }).length;
+  if (jumps < l.bars / 2) bad.push('only ' + jumps + ' octave jumps in the bass');
+  // The voices keep their order: the tune above pulse 2, pulse 2 not below the bass.
+  ['p1/p2', 'p2/tri'].forEach(function (pair) {
+    const up = l.channels[pair.split('/')[0]].events, down = l.channels[pair.split('/')[1]].events;
+    up.forEach(function (a) {
+      down.forEach(function (b) {
+        if (a.step < b.step + b.len && b.step < a.step + a.len && a.midi < b.midi) bad.push(pair + ' cross at step ' + Math.max(a.step, b.step));
+      });
+    });
+  });
+  // The bass is a line of its own: it never moves with the tune from one fifth or octave to the
+  // next, round the loop point included. (level1 has none of these either.)
+  const at = function (ch, step) {
+    return l.channels[ch].events.filter(function (e) { return e.step <= step % l.totalSteps && step % l.totalSteps < e.step + e.len; })[0];
+  };
+  let prev = null;
+  for (let step = 0; step <= l.totalSteps; step++) {
+    const a = at('p1', step), b = at('tri', step);
+    if (!a) prev = null;
+    if (!a || !b) continue;
+    const cur = { a: a.midi, b: b.midi };
+    if (prev && (prev.a !== cur.a || prev.b !== cur.b)) {
+      const before = (prev.a - prev.b) % 12, after = (cur.a - cur.b) % 12;
+      const da = cur.a - prev.a, db = cur.b - prev.b;
+      if (da !== 0 && db !== 0 && (da > 0) === (db > 0) && before === after && (after === 0 || after === 7)) {
+        bad.push('the tune and the bass move in ' + (after === 0 ? 'octaves' : 'fifths') + ' into step ' + (step % l.totalSteps));
+      }
+    }
+    if (!prev || prev.a !== cur.a || prev.b !== cur.b) prev = cur;
+  }
+  return bad.length ? bad.slice(0, 5).join('; ') : true;
+});
+
+check('the level2 bass is heard on small speakers: a note at or above 120 Hz on beat 1 of every bar, fewer than a third of the beats under 120 Hz and never more than two of them in a row, round the loop point included', function () {
+  const env = stubs.load({ files: FILES });
+  const l = env.TG.Audio._internals.parse('level2');
+  const tri = l.channels.tri.events;
+  // The bass is in quarters (checked above), so there is one note to a beat. A triangle wave has
+  // little above its fundamental: under about 120 Hz a small speaker gives almost none of it.
+  const low = tri.map(function (e) { return 440 * Math.pow(2, (e.midi - 69) / 12) < 120; });
+  const bad = [];
+  let run = 0, longest = 0;
+  // Twice round, so that a run across the loop point is counted.
+  for (let i = 0; i < low.length * 2; i++) {
+    run = low[i % low.length] ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  if (longest > 2) bad.push(longest + ' beats in a row under 120 Hz');
+  const count = low.filter(Boolean).length;
+  if (!(count < low.length / 3)) bad.push(count + ' of ' + low.length + ' beats under 120 Hz');
+  tri.forEach(function (e, i) {
+    if (e.step % l.stepsPerBar === 0 && low[i]) bad.push('bar ' + (e.step / l.stepsPerBar + 1) + ' starts under 120 Hz');
+  });
+  return bad.length ? bad.slice(0, 5).join('; ') : true;
+});
+
+check('level2 drums: kick on 1 and 3, snare on 2 and 4, the accented hat on every off-beat eighth; every 8th bar ends in a fill', function () {
+  const env = stubs.load({ files: FILES });
+  const l = env.TG.Audio._internals.parse('level2');
+  const bad = [];
+  for (let bar = 0; bar < l.bars; bar++) {
+    const ev = barEvents(l, 'noise', bar);
+    const at = function (s) { const e = ev.filter(function (x) { return x.step === s; })[0]; return e ? e.drum : '-'; };
+    const grid = [0, 2, 4, 6, 8, 10, 12, 14].map(at).join('');
+    if (grid !== 'kHsHkHsH') bad.push('bar ' + (bar + 1) + ' is ' + grid);
+    const fill = ev.length > 8;
+    if (fill !== (bar % 8 === 7)) bad.push('bar ' + (bar + 1) + (fill ? ' has a fill' : ' has no fill'));
+  }
+  return bad.length ? bad.slice(0, 5).join('; ') : true;
+});
+
+check('boss2: a riff in 16ths that keeps coming back to G, with A flat its one accidental, heard in every bar, and its pedal G4 softer than its tune; pulse 2 ticks G3 G4 in eighths; the bass goes G, A flat, B flat, A flat', function () {
+  const env = stubs.load({ files: FILES });
+  const b = env.TG.Audio._internals.parse('boss2');
+  const riff = b.channels.p1.events;
+  if (riff.length !== b.totalSteps || riff.some(function (e) { return e.len !== 1; })) return 'the riff is not all 16ths';
+  const acc = function (ch) { return b.channels[ch].events.filter(function (e) { return e.accidental; }); };
+  const notAb = acc('p1').concat(acc('p2'), acc('tri')).filter(function (e) { return e.midi % 12 !== 8; });
+  if (notAb.length) return 'an accidental other than A flat at step ' + notAb[0].step;
+  // The natural second of G minor would undo the flattened one.
+  if (['p1', 'p2', 'tri'].some(function (ch) { return b.channels[ch].events.some(function (e) { return e.midi % 12 === 9; }); })) return 'an A natural';
+  for (let bar = 0; bar < b.bars; bar++) {
+    const cell = barEvents(b, 'p1', bar);
+    const g = cell.filter(function (e) { return e.midi % 12 === 7; }).length;
+    if (cell[0].midi % 12 !== 7 || g < 3) return 'bar ' + (bar + 1) + ' of the riff starts on ' + (cell[0].midi % 12) + ' and has ' + g + ' Gs';
+    // The A flat is in the riff itself in every bar. In the bars of the first riff (the ones with
+    // G4 between the notes of the tune) it is on beat 2, where the bass has it, as the F is in boss1.
+    const flats = cell.filter(function (e) { return e.midi % 12 === 8; });
+    if (!flats.length) return 'bar ' + (bar + 1) + ' of the riff has no A flat';
+    const first = cell.some(function (e) { return e.midi === 67; });
+    if (first && !flats.some(function (e) { return e.step === 4; })) return 'bar ' + (bar + 1) + ' of the riff has no A flat on beat 2';
+    // In those bars the G4 between the notes of the tune is the note of pulse 2's upper tick, and
+    // the two take turns on it. The riff plays it softer than its tune notes, which are at full level.
+    if (first) {
+      const pedal = cell.filter(function (e) { return e.step % 2 === 1; }), tune = cell.filter(function (e) { return e.step % 2 === 0; });
+      if (pedal.some(function (e) { return e.midi !== 67; }) || tune.some(function (e) { return e.midi === 67; })) return 'bar ' + (bar + 1) + ' of the riff: the pedal is not on the off 16ths only';
+      if (tune.some(function (e) { return e.vel !== 1; }) || pedal.some(function (e) { return !(e.vel >= 0.3 && e.vel <= 0.7); })) return 'bar ' + (bar + 1) + ' of the riff: the pedal G4 is not softer than the tune notes';
+    }
+    const ost = barEvents(b, 'p2', bar).map(function (e) { return e.step + ':' + e.midi + ':' + e.len; }).join(' ');
+    if (ost !== '0:55:2 2:67:2 4:55:2 6:67:2 8:55:2 10:67:2 12:55:2 14:67:2') return 'bar ' + (bar + 1) + ' pulse 2 is ' + ost;
+    const tri = barEvents(b, 'tri', bar);
+    if (tri.length !== 8 || tri.some(function (e) { return e.len !== 2; })) return 'bar ' + (bar + 1) + ': the bass is not in eighths';
+    const line = [0, 2, 4, 6].map(function (i) { return tri[i].midi % 12; }).join(',');
+    // Every 4th bar ends on D, the fifth, as the Baron's ends on B.
+    if (line !== (bar % 4 === 3 ? '7,8,10,2' : '7,8,10,8')) return 'bar ' + (bar + 1) + ': the bass goes ' + line;
+    if (tri.some(function (e, i) { return i % 2 === 1 && e.midi !== tri[i - 1].midi + 12; })) return 'bar ' + (bar + 1) + ': the bass does not bounce in octaves';
+  }
+  return true;
+});
+
+check('boss2 drums: a kick on every beat with the snare on 2 and 4, the accented hat of level2 on every off-beat eighth, a roll every 4th bar', function () {
+  const env = stubs.load({ files: FILES });
+  const b = env.TG.Audio._internals.parse('boss2');
+  const bad = [];
+  for (let bar = 0; bar < b.bars; bar++) {
+    const ev = barEvents(b, 'noise', bar);
+    const at = function (s) { const e = ev.filter(function (x) { return x.step === s; })[0]; return e ? e.drum : '-'; };
+    if (bar % 4 === 3) {
+      const roll = ev.filter(function (e) { return e.step >= 9 && e.drum === 's'; });
+      if ([0, 2, 4, 6, 8].map(at).join('') !== 'kHxHk' || roll.length !== 7) bad.push('roll bar ' + (bar + 1));
+      else if (roll.some(function (e, i) { return i > 0 && e.vel < roll[i - 1].vel; })) bad.push('the roll of bar ' + (bar + 1) + ' does not grow');
+    } else if ([0, 2, 4, 6, 8, 10, 12, 14].map(at).join('') !== 'kHxHkHxH' || ev.length !== 8) {
+      bad.push('bar ' + (bar + 1));
+    }
+  }
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('boss2 is more urgent than level2, faster and denser, and neither is louder than its Level 1 counterpart: the same worst-case peak, and key_ok above the mix', function () {
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  const l = I.parse('level2'), b = I.parse('boss2');
+  if (!(b.bpm > l.bpm && b.channels.p1.events.length / b.bars > l.channels.p1.events.length / l.bars)) return 'boss2 is not faster and denser';
+  const bad = [];
+  [['level2', 'level1'], ['boss2', 'boss1'], ['jingle_ready2', 'jingle_ready']].forEach(function (pair) {
+    const mine = trackPeak(I, pair[0]), ref = trackPeak(I, pair[1]);
+    if (mine > ref + 1e-9) bad.push(pair[0] + ' peaks at ' + mine.toFixed(4) + ', ' + pair[1] + ' at ' + ref.toFixed(4));
+  });
+  const W = waveTable(env);
+  const keyRms = 0.12 * W.p25.rms;
+  ['level2', 'boss2'].forEach(function (name) {
+    const t = I.parse(name);
+    let sq = 0;
+    ['p1', 'p2', 'tri', 'noise'].forEach(function (ch) {
+      const c = t.channels[ch];
+      const maxVel = Math.max.apply(null, c.events.map(function (e) { return e.vel * (ch === 'noise' ? I.DRUM_LEVEL[e.drum] : 1); }));
+      const waveRms = ch === 'noise' ? I.NOISE_AMP : W[c.wave].rms;
+      sq += Math.pow(I.GAINS[ch] * I.MUSIC_LEVEL * c.vel * maxVel * waveRms, 2);   // the channels add as uncorrelated signals
+    });
+    if (!(keyRms > Math.sqrt(sq))) bad.push(name + ' mix RMS ' + Math.sqrt(sq).toFixed(4) + ' >= key_ok ' + keyRms.toFixed(4));
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('jingle_ready2 is jingle_ready in its rhythm, on the D minor triad', function () {
+  const env = stubs.load({ files: FILES });
+  const P = env.TG.Audio._internals.parse;
+  const j = P('jingle_ready2'), ref = P('jingle_ready');
+  const bad = [];
+  ['p1', 'p2', 'tri', 'noise'].forEach(function (ch) {
+    const rhythm = function (t) { return t.channels[ch].events.map(function (e) { return e.step + ':' + e.len + (e.drum || ''); }).join(' '); };
+    if (rhythm(j) !== rhythm(ref)) bad.push(ch + ' rhythm ' + rhythm(j));
+    if (j.channels[ch].wave !== ref.channels[ch].wave || j.channels[ch].gate !== ref.channels[ch].gate) bad.push(ch + ' wave or gate');
+  });
+  ['p1', 'p2', 'tri'].forEach(function (ch) {
+    const out = j.channels[ch].events.filter(function (e) { return [2, 5, 9].indexOf(e.midi % 12) === -1; });
+    if (out.length) bad.push(ch + ' leaves the triad at step ' + out[0].step);
+  });
+  // LEVEL2 11.1 prints the notes.
+  const notes = function (ch) { return j.channels[ch].events.map(function (e) { return e.midi; }).join(' '); };
+  if (notes('p1') !== '74 74 74 77 77 77 81 81 86') bad.push('p1 ' + notes('p1'));
+  if (notes('p2') !== '65 65 65 69 69 69 74 74 77') bad.push('p2 ' + notes('p2'));
+  if (notes('tri') !== '38 38 45 38') bad.push('tri ' + notes('tri'));
+  return bad.length ? bad.join('; ') : true;
+});
+
+// The music of the level data as LEVEL2 11.2 gives it.
+const L2_MUSIC = { level: 'level2', boss: 'boss2', ready: 'jingle_ready2' };
+const L2_SECTIONS = [
+  { index: 0, name: 'LANTERN HOLLOW', stage: '2-1', palette: 'lantern', music: { transpose: 0, tempo: 140, keyOk: { root: 2, mode: 'minor' } } },
+  { index: 1, name: 'THE GEAR HALL', stage: '2-2', palette: 'brass', music: { transpose: 0, tempo: 140, keyOk: { root: 2, mode: 'minor' } } },
+  { index: 2, name: 'CRYSTAL DEEP', stage: '2-3', palette: 'crystal', music: { transpose: 3, tempo: 148, keyOk: { root: 5, mode: 'minor' } } },
+  { index: 3, name: 'THE GREAT CLOCK', stage: '2-B', palette: 'clock',
+    music: { transpose: 0, tempo: 160, keyOk: { root: 7, mode: 'minor' }, phase3: { tempo: 176, p2Octave: 12 } } }
+];
+
+// The ready jingle plays over the loop it ducks: level:start starts both, so the jingle's two bars
+// lie on the first bars of the level track, the loop at the section's tempo and the jingle at its
+// own. The pairs of a jingle note and a loop note that sound together a semitone apart in the same
+// octave for longer than a 16th of the jingle, each as 'voice step:midi / voice step:midi'. The
+// section's transpose moves both alike and is left out.
+function readyRubs(P, jingle, loop, loopTempo) {
+  const j = P(jingle), l = P(loop);
+  const sixteenth = 60 / j.bpm / 4;
+  const sounds = function (t, bpm, ch, e) {
+    const step = 60 / bpm / 4;
+    return [e.step * step, (e.step + e.len * t.channels[ch].gate) * step];
+  };
+  const out = [];
+  ['p1', 'p2', 'tri'].forEach(function (jc) {
+    j.channels[jc].events.forEach(function (a) {
+      const sa = sounds(j, j.bpm, jc, a);
+      ['p1', 'p2', 'tri'].forEach(function (lc) {
+        l.channels[lc].events.forEach(function (b) {
+          const sb = sounds(l, loopTempo, lc, b);
+          if (Math.abs(a.midi - b.midi) === 1 && Math.min(sa[1], sb[1]) - Math.max(sa[0], sb[0]) > sixteenth) {
+            out.push(jc + ' ' + a.step + ':' + a.midi + ' / ' + lc + ' ' + b.step + ':' + b.midi);
+          }
+        });
+      });
+    });
+  });
+  return out;
+}
+
+check('the ready jingle over the loop it ducks: jingle_ready has no note a semitone from a note of level1 in the same octave for longer than a 16th, and jingle_ready2 over level2 has only the pair that LEVEL2 11.1 prints, the A of its second bar under the B flat of the tune', function () {
+  const env = stubs.load({ files: FILES });
+  const P = env.TG.Audio._internals.parse;
+  const bad = [];
+  // Level 1: sections 1 and 2 at 150, section 3 at 158 (js/levels/level1.js).
+  [150, 158].forEach(function (tempo) {
+    const rubs = readyRubs(P, 'jingle_ready', 'level1', tempo);
+    if (rubs.length) bad.push('jingle_ready over level1 at ' + tempo + ': ' + rubs.join(', '));
+  });
+  // Level 2. The jingle is the text of LEVEL2 11.1: its second bar starts on A5, twice, and bar 2
+  // of the tune holds B flat 5 there. That is the one pair, at either tempo. If the jingle's text
+  // changes (B flat for the A, in pulse 1 and in the bass, is the tested way to remove it), this
+  // list becomes empty and the notes pinned in the check of the jingle above change with it.
+  const printed = ['p1 16:81 / p1 16:82', 'p1 18:81 / p1 16:82'];
+  [L2_SECTIONS[0].music.tempo, L2_SECTIONS[2].music.tempo].forEach(function (tempo) {
+    const rubs = readyRubs(P, 'jingle_ready2', 'level2', tempo);
+    if (!same(rubs, printed)) bad.push('jingle_ready2 over level2 at ' + tempo + ': ' + (rubs.join(', ') || 'none'));
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('a run of Level 2 plays its own tracks: jingle_ready2 over level2 at 140, up 3 semitones at 148 in section 3, boss2 at 160, then 176 with pulse 2 an octave up from phase 3', function () {
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  const jingles = spyJingle(env);
+  emit(env, 'screen:change', { from: 'results', to: 'playing', data: null });
+  emit(env, 'level:start', { levelId: 2, difficulty: 'medium', name: 'CLOCKWORK CAVERNS', continued: false, music: L2_MUSIC });
+  emit(env, 'section:enter', L2_SECTIONS[0]);
+  run(env, 30);
+  let s = I.sequencer('loop');
+  if (s.name !== 'level2' || !s.playing || s.bpm !== 140 || s.transpose !== 0) return 'section 1: ' + JSON.stringify(s);
+  if (!same(jingles, ['jingle_ready2']) || I.sequencer('once').name !== 'jingle_ready2' || I.sequencer('once').transpose !== 0) return 'ready jingle: ' + jingles.join(',');
+  emit(env, 'section:enter', L2_SECTIONS[1]);
+  run(env, 60 * 2);   // one bar at 140 BPM is 1.71 s
+  s = I.sequencer('loop');
+  if (s.name !== 'level2' || s.bpm !== 140 || s.transpose !== 0) return 'section 2: ' + JSON.stringify(s);
+  emit(env, 'section:enter', L2_SECTIONS[2]);
+  run(env, 60 * 2);
+  s = I.sequencer('loop');
+  if (s.name !== 'level2' || s.bpm !== 148 || s.transpose !== 3) return 'section 3: ' + JSON.stringify(s);
+  // A continue in section 3: the jingle is in F minor too.
+  emit(env, 'screen:change', { from: 'playing', to: 'lifeLost', data: null });
+  emit(env, 'screen:change', { from: 'lifeLost', to: 'gameOver', data: null });
+  emit(env, 'game:over', { checkpoint: 2, score: 0 });
+  emit(env, 'screen:change', { from: 'gameOver', to: 'playing', data: null });
+  emit(env, 'game:continue', { checkpoint: 2, continues: 1, assist: 0.85 });
+  jingles.length = 0;
+  emit(env, 'level:start', { levelId: 2, difficulty: 'medium', name: 'CLOCKWORK CAVERNS', continued: true, music: L2_MUSIC });
+  emit(env, 'section:enter', L2_SECTIONS[2]);
+  run(env, 30);
+  s = I.sequencer('loop');
+  const once = I.sequencer('once');
+  if (s.name !== 'level2' || s.bpm !== 148 || s.transpose !== 3) return 'after the continue: ' + JSON.stringify(s);
+  if (!same(jingles, ['jingle_ready2']) || once.name !== 'jingle_ready2' || once.transpose !== 3) return 'ready jingle after the continue: ' + JSON.stringify(once);
+  emit(env, 'boss:warning', {});
+  emit(env, 'screen:change', { from: 'playing', to: 'bossIntro', data: null });
+  emit(env, 'boss:enter', {});
+  emit(env, 'section:enter', L2_SECTIONS[3]);
+  emit(env, 'screen:change', { from: 'bossIntro', to: 'boss', data: null });
+  run(env, 30);
+  s = I.sequencer('loop');
+  if (s.name !== 'boss2' || !s.playing || s.bpm !== 160 || s.transpose !== 0 || s.p2Octave !== 0) return 'boss track: ' + JSON.stringify(s);
+  emit(env, 'boss:phase', { phase: 2 });
+  run(env, 60 * 2);   // one bar at 160 BPM is 1.5 s
+  s = I.sequencer('loop');
+  if (s.bpm !== 160 || s.p2Octave !== 0) return 'phase 2 changed the track: ' + JSON.stringify(s);
+  emit(env, 'boss:phase', { phase: 3 });
+  run(env, 60 * 2);
+  s = I.sequencer('loop');
+  if (s.name !== 'boss2' || s.bpm !== 176 || s.p2Octave !== 12) return 'phase 3: ' + JSON.stringify(s);
+  return (env.warnings.length === 0 && env.errors.length === 0) || 'console: ' + env.warnings.concat(env.errors).join('; ');
+});
+
+check('boss2 in phase 3: pulse 2 ticks on G4 and G5 instead of G3 and G4, and the riff and the bass stay where they were', function () {
+  // The pitches each voice plays in the first two bars, by the wave of its oscillators.
+  const voices = function (opts) {
+    const env = unlocked();
+    const waves = env.TG.Audio._internals.graph().waves;
+    const from = nodeCount(env);
+    env.TG.Audio.music('boss2', opts);
+    run(env, 60 * 3);
+    const seen = { riff: {}, p2: {}, bass: {} };
+    createdSince(env, from).forEach(function (n) {
+      if (n.kind !== 'oscillator') return;
+      const hz = n.frequency.events[0].value.toFixed(1);
+      if (n.periodicWave === waves.p12) seen.riff[hz] = true;
+      else if (n.periodicWave === waves.p50) seen.p2[hz] = true;
+      else if (n.type === 'triangle') seen.bass[hz] = true;
+    });
+    const list = function (set) { return Object.keys(set).map(Number).sort(function (a, b) { return a - b; }).join(' '); };
+    return { riff: list(seen.riff), p2: list(seen.p2), bass: list(seen.bass) };
+  };
+  const hz = function (midi) { return (440 * Math.pow(2, (midi - 69) / 12)).toFixed(1); };
+  const before = voices({}), after = voices({ tempo: 176, p2Octave: 12 });
+  if (before.p2 !== Number(hz(55)) + ' ' + Number(hz(67))) return 'pulse 2 before: ' + before.p2;
+  if (after.p2 !== Number(hz(67)) + ' ' + Number(hz(79))) return 'pulse 2 in phase 3: ' + after.p2;
+  if (!before.riff || !before.bass) return 'no riff or no bass';
+  return (before.riff === after.riff && before.bass === after.bass) || 'the riff or the bass moved';
 });
 
 // =================================================================================================

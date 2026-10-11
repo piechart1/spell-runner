@@ -936,7 +936,21 @@
     ['boss_helmet',  16,  8, 'helmet',                        0,  8,  4],
     ['pr_rock',      12, 12, 'k0 k1',                        10,  6, 12],
     ['pr_pickaxe',   16, 16, 'p0 p1 p2 p3',                  12,  8, 16],
-    ['pr_shock',     16,  8, 's0 s1',                        10,  8,  8]
+    ['pr_shock',     16,  8, 's0 s1',                        10,  8,  8],
+    // Level 2 (LEVEL2 Appendix C). A row with a Level 1 name beside it is a copy of that sprite's row.
+    ['en_dangle',        16, 16, 'hang0 hang1 zip',            4,  8, 16],
+    ['en_flit',          24, 16, 'flap0 flap1 dive',           8, 12, 16],   // en_swoop
+    ['en_glimmer',       16, 16, 'fly0 fly1',                 16,  8, 16],   // en_buzzle
+    ['en_baronet',       16, 16, 'peek up spin',               0,  8, 16],   // en_digby
+    ['boss2_body',       48, 32, 'b0 b1',                      0, 24, 32],   // boss_body; fps 0, the renderer picks the frame (10.1)
+    ['boss2_head',       32, 24, 'normal laugh hurt dizzy',    0, 16, 24],   // boss_head
+    ['boss2_arm',        16, 16, 'rest raise throw watch',     0,  8,  8],   // boss_arm, plus watch
+    ['boss2_key',        16, 16, 'k0 k1 k2 k3',                0,  8,  8],
+    ['boss2_engine',     48, 16, 'shut open',                  0, 24, 16],   // boss_mound's size and anchor
+    ['boss2_goggles',     8,  8, 'goggles',                    0,  4,  4],   // boss_monocle
+    ['pr_cog',           12, 12, 'k0 k1',                     10,  6, 12],   // pr_rock
+    ['pr_rollgear',      16,  8, 's0 s1',                     10,  8,  8],   // pr_shock
+    ['pr_pendulum',      16, 16, 'p0 p1 p2 p3',               12,  8, 16]    // pr_pickaxe
   ];
 
   var MANIFEST_D = [
@@ -1011,7 +1025,50 @@
     ['bg_molehill',  16,  8, 'hill',                          0,  0,  8],
     ['bg_moon',      32, 32, 'moon',                          0,  0, 32],
     ['bg_star',       8,  8, 's0 s1',                         2,  0,  8],
-    ['fg_tuft',      16,  8, 't0 t1',                         0,  0,  8]
+    ['fg_tuft',      16,  8, 't0 t1',                         0,  0,  8],
+    // Level 2 (LEVEL2 Appendix C). A row with a Level 1 name beside it is a copy of that sprite's row.
+    // Tiles (16x16, anchor 0,0)
+    ['tile_cave_top',    16, 16, 'g0 g1',                      0,  0,  0],   // tile_grass
+    ['tile_cave_fill',   16, 16, 's0 s1',                      0,  0,  0],   // tile_soil
+    ['tile_cave_edge_l', 16, 16, 'edge',                       0,  0,  0],   // tile_edge_l
+    ['tile_cave_edge_r', 16, 16, 'edge',                       0,  0,  0],   // tile_edge_r
+    ['tile_cave_wall_l', 16, 16, 'wall',                       0,  0,  0],   // tile_wall_l
+    ['tile_cave_wall_r', 16, 16, 'wall',                       0,  0,  0],   // tile_wall_r
+    ['tile_pool',        16, 16, 'w0 w1',                      3,  0,  0],   // tile_water
+    ['tile_girder',      16, 16, 'plank',                      0,  0,  0],   // tile_plank
+    ['tile_clockfloor',  16, 16, 'a0 a1',                      0,  0,  0],   // tile_arena
+    // Hazard skins
+    ['haz_crystal',      16, 16, 'bramble',                    0,  0, 16],   // haz_bramble
+    ['haz_pipe',         16, 16, 'branch',                     0,  0, 16],   // haz_branch
+    ['haz_pipe_riser',   16, 16, 'trunk',                      0,  0, 16],   // haz_trunk
+    ['haz_lantern',      16, 24, 'hive',                       0,  0, 24],   // haz_beehive
+    ['haz_chain',        16, 16, 'rope',                       0,  0, 16],   // haz_rope
+    ['haz_tunnel',       48, 16, 'arch',                       0,  0, 16],   // haz_arch
+    ['haz_ceiling',      48, 16, 'canopy',                     0,  0, 16],   // haz_canopy
+    ['haz_column',       16, 16, 'trunk',                      0,  0, 16],   // haz_trunk
+    // The Pocket Watch, effects and decor
+    ['pw_watch',         16, 16, 'p0 p1',                      4,  8, 16],   // every pw_ row
+    ['fx_cogbit',         8,  8, 'c0 c1',                      0,  4,  4],   // fx_chunk
+    ['fx_flake',          8,  8, 'f0 f1',                      6,  4,  4],   // fx_feather
+    ['decor_hole',       32, 32, 'hole',                       0,  0, 32],
+    // Backdrop pieces of `cavern` (anchor bottom left)
+    ['bg_mist',          64, 16, 'm0 m1',                      2,  0, 16],
+    ['bg_gearstar',       8,  8, 's0 s1',                      2,  0,  8],   // bg_star
+    ['bg_clockface',     48, 48, 'c0 c1',                      1,  0, 48],
+    ['bg_cave_far',     128, 48, 'w0 w1',                      2,  0, 48],
+    ['bg_cave_mid',     128, 56, 'wall',                       0,  0, 56],
+    ['bg_roots',         32, 24, 'roots',                      0,  0, 24],
+    ['bg_lantern',       16, 24, 'l0 l1',                      3,  0, 24],
+    ['bg_cog_l',         48, 48, 'c0 c1 c2 c3',                4,  0, 48],
+    ['bg_pipe_v',        16, 48, 'pipe',                       0,  0, 48],
+    ['bg_crystal_l',     32, 24, 'crystal',                    0,  0, 24],
+    ['bg_stalagmite',    16, 24, 'spike',                      0,  0, 24],
+    ['bg_pipe_h',        32, 16, 'pipe',                       0,  0, 16],
+    ['bg_baronpeek',     16, 16, 'out in',                     1,  0, 16],
+    ['bg_rail',          32,  8, 'rail',                       0,  0,  8],
+    ['bg_boiler',        32, 32, 'b0 b1',                      2,  0, 32],
+    ['bg_crystal_s',     16, 16, 'crystal',                    0,  0, 16],
+    ['fg_stalagmite',    16,  8, 't0 t1',                      0,  0,  8]    // fg_tuft
   ];
 
   function buildManifest() {

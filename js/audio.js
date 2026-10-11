@@ -91,7 +91,8 @@
     'ui_move', 'ui_select', 'ui_back', 'pause', 'tally_tick', 'stamp', 'count_tick', 'start'
   ];
 
-  var TRACK_NAMES = ['title', 'level1', 'boss1', 'victory', 'results', 'gameover', 'jingle_ready', 'jingle_checkpoint'];
+  var TRACK_NAMES = ['title', 'level1', 'boss1', 'victory', 'results', 'gameover', 'jingle_ready', 'jingle_checkpoint',
+    'level2', 'boss2', 'jingle_ready2'];
 
   var SEMITONE = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
   var SCALES = {
@@ -259,6 +260,84 @@
   var T_TRI = [tC, tAm, tF, tG, tC, tAm, tF, tG, tF, tG, tEm, tAm, tDm, tG, tC, tC];
   var T_N = 'k h s h k h s h';
 
+  // --- level2: "Clockwork Caverns", D minor, 140 BPM, 32 bars AABA (LEVEL2 11.1) --------------
+  // The A part is an eight-bar tune in a dotted rhythm (long, short, long) that moves by step over
+  // Dm, Bb, C, Am. It starts on the fifth and comes down: bar 1 steps down from A to F and back up
+  // from D to F, bar 2 holds the B flat and walks down to D, and bar 3 is bar 1 a step lower. Bar 4
+  // carries the rise of bar 3 on through G to A, drops to E and stops there; bar 7 climbs to the
+  // top, and bar 8 turns those two notes round (A, G), falls to E and goes on to a held D. The B
+  // part has the same rhythm at half speed over Gm, Bb, C, Dm and swings like a pendulum, a bar
+  // down and a bar up; its last bar turns through Am back into the A part.
+  var L2_A = [
+    'A5:3 G5:1 F5:4 D5:3 E5:1 F5:4',
+    'Bb5:6 A5:2 F5:3 E5:1 D5:4',
+    'G5:3 F5:1 E5:4 C5:3 D5:1 E5:4',
+    'G5:3 A5:1 E5:8 -:4',
+    'A5:3 G5:1 F5:4 D5:3 E5:1 F5:4',
+    'Bb5:6 A5:2 F5:3 E5:1 D5:4',
+    'E5:3 F5:1 G5:4 A5:3 Bb5:1 C6:4',
+    'A5:3 G5:1 E5:4 D5:6 -:2'
+  ];
+  var L2_A_HELD = L2_A.slice(0, 7).concat(['A5:3 G5:1 E5:4 D5:8']);
+  var L2_B = [
+    'D6:6 C6:2 Bb5:6 G5:2',
+    'F5:6 G5:2 Bb5:6 A5:2',
+    'G5:6 F5:2 E5:6 C5:2',
+    'D5:3 E5:1 F5:4 A5:8',
+    'D6:6 C6:2 Bb5:6 G5:2',
+    'F5:6 G5:2 Bb5:6 A5:2',
+    'E5:3 F5:1 G5:4 C6:3 Bb5:1 G5:4',
+    'A5:6 F5:2 E5:8'
+  ];
+  // Pulse 2, the escapement: root and fifth in eighths under the A part. In bar 4, where the tune
+  // rests for a beat, it answers with one rising arpeggio in sixteenths. The last bar of an A is
+  // the close: Am for two beats, whose last tick is the third, C; it steps up to D and F, the root
+  // and third of Dm, under the tune's held D; then A and E again on the last beat, which turns the
+  // loop round. Under the B part, rising arpeggios in sixteenths.
+  var kDm = bounce('D4', 'A4'), kBb = bounce('Bb3', 'F4'), kC = bounce('C4', 'G4');
+  var kAm = 'A3 E4 A3 E4 A3 E4 /1 A3 C4 E4 A4 /2';
+  var L2_PA = [kDm, kBb, kC, kAm, kDm, kBb, kC, 'A3 E4 A3 C4 D4 F4 A3 E4'];
+  var wGm = rep('G3 Bb3 D4 G4', 4).join(' '), wBb = rep('Bb3 D4 F4 Bb4', 4).join(' ');
+  var wC = rep('G3 C4 E4 G4', 4).join(' '), wDm = rep('A3 D4 F4 A4', 4).join(' ');
+  var wDmAm = rep('A3 D4 F4 A4', 2).concat(rep('A3 C4 E4 A4', 2)).join(' ');
+  var L2_PB = [wGm, wBb, wC, wDm, wGm, wBb, wC, wDmAm];
+  // Triangle: quarters that walk through the chord from its root: the root, its octave below on
+  // beat 2 in most bars, then the third and the fifth. Only that low octave (and the A2 that turns
+  // the B part round) is under 120 Hz, so the line is heard on small speakers too. The last note
+  // of a bar is a step, a fourth or a fifth from the root of the next, and the bass never moves in
+  // octaves or fifths with the tune.
+  var L2_TA = [
+    'D3 D2 F3 A3', 'Bb3 F3 D3 F3', 'C3 C2 E3 G3', 'A3 A2 C3 E3',
+    'D3 D2 F3 A3', 'Bb3 F3 D3 F3', 'C3 C2 E3 G3', 'A3 A2 D3 A3'
+  ];
+  var L2_TB = [
+    'G3 G2 D3 F3', 'Bb3 F3 D3 F3', 'C3 C2 E3 G3', 'D3 D2 F3 A3',
+    'G3 G2 D3 F3', 'Bb3 F3 D3 F3', 'C3 C2 E3 G3', 'D3 D2 A2 A3'
+  ];
+  // Kick on 1 and 3, snare on 2 and 4, the accented hat on every off-beat eighth: tick, tock.
+  // Every 8th bar ends in a rim fill: three clicks in 16ths after the last snare, each louder.
+  var L2_N = 'k H s H k H s H';
+  var L2_NF = 'k H s H k H /1 s H@.6 H@.8 H /2';
+  var L2_NA = rep(L2_N, 7).concat([L2_NF]);
+
+  // --- boss2: "The Great Clock", G minor with A flat, 160 BPM (176 in phase 3), 16 bars --------
+  // A 16th riff over a G pedal. In R2_A the tune is on the eighths, with G4 between every two of
+  // its notes: G D, the same a half step up on beat 2 (Ab Eb, over the A flat of the bass), then
+  // down in thirds, D Bb, C Ab, to the G of the next bar. R2_C runs up and down the scale around G5.
+  // The A flat (marked !) gives the Phrygian edge, as the F natural does in boss1. The pedal G4 is
+  // the note of pulse 2's upper tick, so it is played softer (@.6) and the tune stands out of it.
+  var R2_A = 'G5 G4@.6 D5 G4@.6 Ab5! G4@.6 Eb5 G4@.6 D5 G4@.6 Bb4 G4@.6 C5 G4@.6 Ab4! G4@.6';
+  var R2_B = 'G5 G4@.6 D5 G4@.6 Ab5! G4@.6 Eb5 G4@.6 D5 G4@.6 Bb4 G4@.6 D5 G4@.6 F5 G4@.6';
+  var R2_C = 'G5 Ab5! G5 F5 Eb5 D5 Eb5 F5 G5 Ab5! Bb5 Ab5! G5 F5 Eb5 D5';
+  var R2_D = 'G5 Ab5! G5 F5 Eb5 D5 Eb5 F5 G5 Ab5! Bb5 C6 D6 C6 Bb5 Ab5!';
+  var B2_OST = 'G3 G4 G3 G4 G3 G4 G3 G4';
+  var B2_TA = 'G2 G3 Ab2! Ab3! Bb2 Bb3 Ab2! Ab3!';
+  var B2_TB = 'G2 G3 Ab2! Ab3! Bb2 Bb3 D2 D3';
+  // Kick on every beat, with the snare on 2 and 4 (x), and the accented hat on every off-beat
+  // eighth, the tick of level2 carried into the fight; roll every 4th bar.
+  var B2_N = 'k H x H k H x H';
+  var B2_NR = 'k H x H /1 k s@.5 s@.6 s@.7 s@.8 s@.9 s s /2';
+
   var MUSIC = {
     title: {
       name: 'Once Upon a Keystroke', bpm: 132, key: 'C', mode: 'major', beats: 4, bars: 16, loop: true,
@@ -345,6 +424,31 @@
       p2: { wave: 'p12', gate: 0.9, text: '/1 ' + bars(['E5 G5 C6 E6:5']) },
       tri: { gate: 0.9, text: bars(['C3:4 G3:4']) },
       noise: { text: '/1 ' + bars(['k h h s:5']) }
+    },
+    // Level 2 (LEVEL2 11.1).
+    level2: {
+      name: 'Clockwork Caverns', bpm: 140, key: 'D', mode: 'minor', beats: 4, bars: 32, loop: true,
+      p1: { wave: 'p50', vibrato: true, gate: 0.88, text: bars(L2_A.concat(L2_A_HELD, L2_B, L2_A_HELD)) },
+      p2: { wave: 'p12', gate: 0.5, text: '/2 ' + bars(L2_PA.concat(L2_PA)) + ' /1 ' + bars(L2_PB) + ' /2 ' + bars(L2_PA) },
+      tri: { gate: 0.8, text: '/4 ' + bars(L2_TA.concat(L2_TA, L2_TB, L2_TA)) },
+      noise: { text: '/2 ' + bars(L2_NA.concat(L2_NA, L2_NA, L2_NA)) }
+    },
+    boss2: {
+      name: 'The Great Clock', bpm: 160, key: 'G', mode: 'minor', beats: 4, bars: 16, loop: true,
+      p1: { wave: 'p12', gate: 0.6, text: '/1 ' + bars([R2_A, R2_A, R2_A, R2_B, R2_A, R2_A, R2_A, R2_B, R2_C, R2_C, R2_C, R2_D, R2_C, R2_C, R2_A, R2_B]) },
+      p2: { wave: 'p50', gate: 0.5, vel: 0.8, text: '/2 ' + bars(rep(B2_OST, 16)) },
+      tri: { gate: 0.85, text: '/2 ' + bars(rep([B2_TA, B2_TA, B2_TA, B2_TB].join(' | '), 4)) },
+      noise: { text: '/2 ' + bars(rep([B2_N, B2_N, B2_N, B2_NR].join(' | '), 4)) }
+    },
+    // The ready jingle of Level 2: jingle_ready's rhythm on the D minor triad, the text of LEVEL2
+    // 11.1. It plays over the first two bars of level2, and the A that starts its second bar is a
+    // half step under the B flat the tune holds there (test/test-audio.js names the pair).
+    jingle_ready2: {
+      name: 'Ready 2', bpm: 140, key: 'D', mode: 'minor', beats: 4, bars: 2, loop: false,
+      p1: { wave: 'p50', gate: 0.8, text: '/2 ' + bars(['D5 D5 D5 - F5 F5 F5 -', 'A5 A5 -:4 D6:8']) },
+      p2: { wave: 'p25', gate: 0.8, text: '/2 ' + bars(['F4 F4 F4 - A4 A4 A4 -', 'D5 D5 -:4 F5:8']) },
+      tri: { gate: 0.9, text: '/8 ' + bars(['D2 D2', 'A2 D2']) },
+      noise: { text: '/4 ' + bars(['k s k s', 'k s k:8']) }
     }
   };
 

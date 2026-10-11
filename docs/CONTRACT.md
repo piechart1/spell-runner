@@ -1928,6 +1928,12 @@ TG.Sprites.define('en_buzzle', {
 | `lampred` | WP-C | Baron's lamp from phase 2 | `{ 19: 25 }` (CREAM to RED). The lamp glass is the only CREAM on `boss_head`, in all four frames, and the brass helmet is GOLD, so the remap changes the lamp and nothing else |
 | `sunset` | WP-D | Section 3 backdrop and tiles | SKY and HAZE to ORANGE and CORAL; ROYAL to VIOLET; FOREST and PINE to PLUM-leaning greens. WP-D writes the table |
 | `dusk` | WP-D | Boss arena backdrop and tiles | Blues to DEEP_BLUE, greens to PINE and DEEP_TEAL, hills to PLUM and INK. WP-D writes the table |
+| `tin` | WP-C | Level 2: the frog (`en_hoppet`) and its lily pad (`fx_lilypad`), through `theme.skins`. An entity's remap, not a section's | `{ 14: 3, 15: 4, 4: 18, 13: 2 }` (GRASS to SILVER, LIME to WHITE, WHITE to GOLD, FOREST to STONE). A silver frog with brass eyes and a tin disc for its pad, whose underside is FOREST. These are not the pairs of LEVEL2 Appendix C (GRASS to BRONZE, LIME to GOLD, WHITE to SILVER): that frog was lost on the brass floor of section 2, and that table left the pad's underside green |
+| `brass` | WP-D | Level 2: section 2 and boss arena backdrop and tiles (palettes `brass` and `clock`) | `{ 2: 16, 10: 18 }` (STONE to BRONZE, TEAL to GOLD) |
+| `crystal` | WP-D | Level 2: section 3 backdrop and tiles (palette `crystal`) | `{ 28: 5, 16: 9, 18: 11, 17: 10 }` (PLUM to DEEP_BLUE, BRONZE to DEEP_TEAL, GOLD to AQUA, ORANGE to TEAL) |
+| `paleink` | WP-D | Level 2: the ink drops (`item_ink`), in every section; the level data names it (the fallback of LEVEL2 3.1, rule 2). An item's remap, not a section's | `{ 6: 7, 5: 6 }` (ROYAL to SKY, DEEP_BLUE to ROYAL). The drop then has the colours of `icon_ink` |
+
+The four Level 2 remaps list only the colours they change; every other colour is left as drawn (LEVEL2 3.1 and Appendix C). `test/test-gfx.js` and `test/test-sprites-world.js` read the rows of this table that give their pairs as `{ ... }` and compare them, and the words after them, with `TG.Remaps`. A section's remap is applied to the backdrop pieces, the tiles and the ceiling rim `haz_ceiling`, as `haz_canopy` takes it in Level 1.
 
 ### 6.4 Sprite registry
 
@@ -1976,6 +1982,24 @@ Boss composition, drawn in this order, with `bx = boss.x`, `by = boss.y`, `r = b
 | `boss_mound` | `bx, by` | |
 
 Parts are clipped at `by` so nothing shows below the ground line while the body is lowered.
+
+Level 2 (LEVEL2 2, 3.5, 4 and 10.1; the rows are those of LEVEL2 Appendix C). A sprite that takes the place of a Level 1 sprite keeps that sprite's size, frame names, fps and anchor, so that the renderer can draw one for the other; the Level 1 name is given in "Used for". Lady Ratchet's parts use STONE, TEAL, GOLD, PINK, WHITE and BRONZE between them, with CREAM on the lenses of her goggles only (the two on `boss2_head`, and the pair that is `boss2_goggles`), so that `lampred` changes the lenses and nothing else.
+
+| Name | Size | Frames | Frame names | fps | Anchor | Used for |
+|---|---|---|---|---|---|---|
+| `en_dangle` | 16x16 | 3 | hang0 hang1 zip | 4 | 8,16 | Dangle, a cave spider. `hang0`, `hang1` while it drops and hangs on its thread (the renderer draws the thread; the sprite's top row is opaque at the anchor's x, where the thread meets it); `zip` in the clear animation |
+| `en_flit` | 24x16 | 3 | flap0 flap1 dive | 8 | 12,16 | Flit, a bat. The row of `en_swoop`. Flap: frames 0, 1. `dive` while `phase` is `dive` and in the clear animation. Drawn with `flipX` from its turn behind Pip |
+| `en_glimmer` | 16x16 | 2 | fly0 fly1 | 16 | 8,16 | Glimmer, a glow-moth. The row of `en_buzzle`, whose kind it skins; drawn in the bee's rows, 0 to 11 |
+| `en_baronet` | 16x16 | 3 | peek up spin | 0 | 8,16 | The Baron at minion size in a spare helmet. The row of `en_digby`, whose kind it skins in phase 3; also the cameo of the boss intro. `peek` with the helmet over his eyes, `up` with the monocle showing; `spin` has neither helmet nor monocle (they fly off as `fx_helmet` and `boss_monocle`) |
+| `boss2_body` | 48x32 | 2 | b0 b1 | 0 | 24,32 | Lady Ratchet. The size and anchor of `boss_body`. `b0` standing; `b1` the foot lifted and the tail twitched. The foot is in rows 24 to 31, behind the engine; above it `b1` shows the hem a pixel higher, the chain swung and the tail's tip flicked to the other side. Rows 0 to 9 are the same in both. fps 0: the renderer picks the frame |
+| `boss2_head` | 32x24 | 4 | normal laugh hurt dizzy | 0 | 16,24 | The row of `boss_head`. A long snout with two WHITE buck teeth under its tip in every frame. Goggle rims GOLD, the two lenses CREAM (see `lampred`, section 6.3); `hurt` has no goggles and so no CREAM. Rows 0 and 1 are empty, so that at `rise` 40 the engine hides the whole head |
+| `boss2_arm` | 16x16 | 4 | rest raise throw watch | 0 | 8,8 | The frames of `boss_arm` and `watch`, the near arm during a taunt. Left arm as drawn; right arm with `flipX`. The shoulder is on the right edge at rows 4 to 7 in every frame. `rest` hand on hip; `raise` holds a spanner; `watch` holds the pocket watch up under her nose, and is the only frame with GOLD |
+| `boss2_key` | 16x16 | 4 | k0 k1 k2 k3 | 0 | 8,8 | The wind-up key in her back: a bow of two wings on a stem one pixel wide. Drawn between the far arm and the head; the stem ends at the anchor, on the top edge of the far shoulder. The four frames are four steps of half a turn, after which the bow looks the same again: `k0` face on, `k1` the left wing near and wide, `k2` edge on, `k3` the right wing near and wide (`k1` mirrored). So k0 to k3 in a loop is a steady turn one way, eight frames to the turn, and k3 to k0 is the turn backwards |
+| `boss2_engine` | 48x16 | 2 | shut open | 0 | 24,16 | The brass engine with its hatch, the arched door in the middle of its front: a porthole in it, hinged on its right; `open` shows it swung aside. The size and anchor of `boss_mound`; drawn in front of the body. The two frames differ only in columns 17 to 32. The dial of the boiler gauge is on the left: its centre is column 6, row 6 (`bx - 18, by - 10`), with a WHITE face 3 px to the left, to the right and above it for the needle the renderer draws |
+| `boss2_goggles` | 8x8 | 1 | goggles | 0 | 4,4 | The row of `boss_monocle`. Pops off on a hit (effect). GOLD rims, CREAM lenses: drawn with `lampred` while `boss.lampRed`, it matches the lenses on her head |
+| `pr_cog` | 12x12 | 2 | k0 k1 | 10 | 6,12 | A cog. The row of `pr_rock`, whose kind it skins |
+| `pr_rollgear` | 16x8 | 2 | s0 s1 | 10 | 8,8 | A gear rolling along the floor: the upper half of a big gear, its hub on the floor line. The row of `pr_shock`, whose kind it skins |
+| `pr_pendulum` | 16x16 | 4 | p0 p1 p2 p3 | 12 | 8,16 | A pendulum, a round bob on a thin rod, four swing steps: left, down, right, down, the bob a row higher at the two ends. The row of `pr_pickaxe`, whose kind it skins |
 
 **WP-D: `js/sprites-world.js`**
 
@@ -2075,6 +2099,66 @@ Backdrop pieces (anchor bottom left):
 | `bg_star` | 8x8 | 2 | s0 s1 | 2 | Arena sky |
 | `fg_tuft` | 16x8 | 2 | t0 t1 | 0 | L6 |
 
+Level 2 (LEVEL2 3.3 to 3.5; the rows are those of LEVEL2 Appendix C). The level names its tiles and hazard skins in `theme.tiles` and `theme.hazardSkins`; each has the size, frame names, fps and anchor of the Level 1 sprite it takes the place of, which is given in "Used for".
+
+Level 2 tiles (16x16, anchor 0,0):
+
+| Name | Frames | Frame names | fps | Used for |
+|---|---|---|---|---|
+| `tile_cave_top` | 2 | g0 g1 | 0 | `tiles.top`, for `tile_grass`. Rock with moss specks |
+| `tile_cave_fill` | 2 | s0 s1 | 0 | `tiles.fill` and `tiles.arenaFill`, for `tile_soil` |
+| `tile_cave_edge_l` | 1 | edge | 0 | `tiles.edgeL`, for `tile_edge_l` |
+| `tile_cave_edge_r` | 1 | edge | 0 | `tiles.edgeR`, for `tile_edge_r` |
+| `tile_cave_wall_l` | 1 | wall | 0 | `tiles.wallL`, for `tile_wall_l` |
+| `tile_cave_wall_r` | 1 | wall | 0 | `tiles.wallR`, for `tile_wall_r` |
+| `tile_pool` | 2 | w0 w1 | 3 | `tiles.gapFill`, for `tile_water`. A glowing pool, AQUA, DEEP_TEAL and SHADOW only, so that no section remap changes it |
+| `tile_girder` | 1 | plank | 0 | `tiles.plank`, for `tile_plank`. A girder over a bridged gap: a STONE beam four rows deep with a GOLD deck line and GOLD rivets, open between its struts. BRONZE under `brass`; under `crystal` it stays STONE and the GOLD turns AQUA |
+| `tile_clockfloor` | 2 | a0 a1 | 0 | `tiles.arenaTop`, for `tile_arena`. Dark floor plates with the brass inlaid: SHADOW under a BRONZE edge with GOLD rivets, a BRONZE cog in a0 and a stud in a1; `tile_rail` is drawn over it, on the SHADOW bed of its top four rows |
+
+Level 2 hazard skins (anchor bottom left):
+
+| Name | Size | Frames | Frame names | fps | Anchor | Used for |
+|---|---|---|---|---|---|---|
+| `haz_crystal` | 16x16 | 1 | bramble | 0 | 0,16 | `hazardSkins.bramble`, for `haz_bramble`. A cluster of three AQUA shards with CORAL points; the shards fill the lower 8 px |
+| `haz_pipe` | 16x16 | 1 | branch | 0 | 0,16 | `hazardSkins.branch`, for `haz_branch`. A low pipe hanging from the roof: the riser ends in a wide outlet, mouth down, with a CORAL glow and drips at the mouth |
+| `haz_pipe_riser` | 16x16 | 1 | trunk | 0 | 0,16 | `hazardSkins.trunk`, for `haz_trunk`. Tiled upwards from the low pipe to the roof |
+| `haz_lantern` | 16x24 | 1 | hive | 0 | 0,24 | `hazardSkins.beehive`, for `haz_beehive`. A lantern; the renderer swings it as it swings the beehive |
+| `haz_chain` | 16x16 | 1 | rope | 0 | 0,16 | `hazardSkins.rope`, for `haz_rope`. Tiled upwards from the lantern |
+| `haz_tunnel` | 48x16 | 1 | arch | 0 | 0,16 | `hazardSkins.arch`, for `haz_arch`. A low rock tunnel: a shelf of rough rock between the feet of two columns, with CORAL-tipped stalactites under it |
+| `haz_ceiling` | 48x16 | 1 | canopy | 0 | 0,16 | `hazardSkins.canopy`, for `haz_canopy`. A rock rim where the riser or the tunnel's columns meet the roof: three hanging lumps, one over each column and one over a riser, at full width above them so that it covers the columns. SHADOW and PLUM, with the section's remap. Also four items of the backdrop `cavern`, as a hint of the roof in sections 2 and 3 (6.5) |
+| `haz_column` | 16x16 | 1 | trunk | 0 | 0,16 | `hazardSkins.archTrunk`, for `haz_trunk` above the tunnel's first and last 16 px. Rough rock columns, 12 px wide (the riser is 8) |
+
+Level 2 power-up, effects and decor:
+
+| Name | Size | Frames | Frame names | fps | Anchor | Used for |
+|---|---|---|---|---|---|---|
+| `pw_watch` | 16x16 | 2 | p0 p1 | 4 | 8,16 | The Pocket Watch. The row of every `pw_` icon: 12x12 art centred in the cell; the hand ticks between the frames |
+| `fx_cogbit` | 8x8 | 2 | c0 c1 | 0 | 4,4 | Clockwork bits, a cog (c0) and a small collar (c1): Lady Ratchet's defeat and the Baronet's clear. The row of `fx_chunk` |
+| `fx_flake` | 8x8 | 2 | f0 f1 | 6 | 4,4 | Snowflakes drifting down the shaft after the defeat. The row of `fx_feather` |
+| `decor_hole` | 32x32 | 1 | hole | 0 | 0,32 | Decor at the start of the level: the bottom of the Baron's hole, a heap of earth under the end of a rope. The rope runs off the top of the frame, 32 px above the floor, fading to BARK there, and ends in a knot 3 px above the heap |
+
+Level 2 backdrop pieces, backdrop `cavern` (anchor bottom left):
+
+| Name | Size | Frames | Frame names | fps | Used for |
+|---|---|---|---|---|---|
+| `bg_mist` | 64x16 | 2 | m0 m1 | 2 | L1, sections 1 to 3 |
+| `bg_gearstar` | 8x8 | 2 | s0 s1 | 2 | Arena sky, as the palette's `starSprite`. The row of `bg_star`. A dark cog whose teeth glint in turn |
+| `bg_clockface` | 48x48 | 2 | c0 c1 | 1 | Arena sky, as the palette's `moonSprite`. The minute hand ticks once a second |
+| `bg_cave_far` | 128x48 | 2 | w0 w1 | 2 | L2, tiles horizontally. Its four dots twinkle between the frames |
+| `bg_cave_mid` | 128x56 | 1 | wall | 0 | L3, sections 1 to 3, tiles horizontally. SHADOW rocks; below y 150 the rock round its arch is lit in single BRONZE pixels |
+| `bg_roots` | 32x24 | 1 | roots | 0 | L3, section 1. Hangs from the roof: its bottom is at y 40 |
+| `bg_lantern` | 16x24 | 2 | l0 l1 | 3 | L3, sections 1 and 2. A lantern on a post, one in each arch of `bg_cave_mid`. The lit side of the post is ORANGE, then BRONZE |
+| `bg_cog_l` | 48x48 | 4 | c0 c1 c2 c3 | 4 | L3, section 2 and the arena. A big turning cog, SHADOW inside a 1 px BRONZE line, with 1 px spokes and a 2 x 2 GOLD pin |
+| `bg_pipe_v` | 16x48 | 1 | pipe | 0 | L3, section 2. A standpipe, SHADOW inside a 1 px BRONZE line, with two GOLD rivets on each flange |
+| `bg_crystal_l` | 32x24 | 1 | crystal | 0 | L3, section 3, one before each arch of `bg_cave_mid`. DEEP_TEAL with a TEAL face and an AQUA glint |
+| `bg_stalagmite` | 16x24 | 1 | spike | 0 | L4, sections 1 and 3 |
+| `bg_pipe_h` | 32x16 | 1 | pipe | 0 | L4, section 2 and the arena. A pipe run, SHADOW inside a 1 px BRONZE line, without GOLD |
+| `bg_baronpeek` | 16x16 | 2 | out in | 1 | Layer `peek`, section 2. The Baron looks out of the end of a pipe and ducks back. SOIL, GOLD, PINK and WHITE, with BRONZE and SHADOW for the pipe mouth, which is drawn as `bg_pipe_h` is |
+| `bg_rail` | 32x8 | 1 | rail | 0 | Layer `rails`, section 3, tiles horizontally. A SHADOW rail with short SILVER glints |
+| `bg_boiler` | 32x32 | 2 | b0 b1 | 2 | L4, the arena. A dark tank drawn in a 1 px BRONZE line; the CREAM needle of its gauge quivers and two GOLD sparks in its firebox change places |
+| `bg_crystal_s` | 16x16 | 1 | crystal | 0 | L4, section 3. DEEP_TEAL with a TEAL face and an AQUA glint |
+| `fg_stalagmite` | 16x8 | 2 | t0 t1 | 0 | L6, sections 1 and 3. The row of `fg_tuft` |
+
 ### 6.5 Backdrops
 
 `js/sprites-world.js` registers the composition of the parallax layers.
@@ -2102,6 +2186,35 @@ TG.Backdrops.meadow = {
 - `sections` on an item limits it to those section indices (3 = arena). Items without it appear everywhere.
 - `remap` is applied to every backdrop piece and tile.
 - Layers with `front: true` are drawn after the entities (L6).
+
+**Level 2: the backdrop `cavern`** (LEVEL2 3.1, 3.3 and Appendix C; `TG.Backdrops.cavern` in `js/sprites-world.js`). A palette may carry three more keys. Each is optional, and without it the renderer does what it does for `meadow`: `starSprite` and `moonSprite` name the sprites that `stars` and `moon` are drawn with (`bg_star` and `bg_moon` by default; the moon is drawn with the frame of its `fps`), and `phases`, `{ phase: { color, dither } }`, gives the first band during a boss phase (a phase that is not listed keeps the band).
+
+| Palette | Used in | First band, y 0 to 150 | Floor band, y 150 to 184 | `slowSky` | `remap` | Other keys |
+|---|---|---|---|---|---|---|
+| `lantern` | Section 1 | PLUM | PLUM dithered SHADOW | DEEP_BLUE | none | |
+| `brass` | Section 2 | PLUM | PLUM dithered SHADOW | DEEP_BLUE | `brass` | |
+| `crystal` | Section 3 | DEEP_BLUE | DEEP_BLUE dithered DEEP_TEAL | PLUM | `crystal` | |
+| `clock` | Arena | PLUM | MAROON dithered PLUM | DEEP_BLUE | `brass` | `phases`: 2 is PLUM dithered MAROON, 3 is INK dithered PLUM. `stars` (8) drawn with `bg_gearstar`. `moon` at x 328, y 84 drawn with `bg_clockface` |
+
+| Layer | Factor | Repeat | Items (sections are counted from 1, as in LEVEL2; the item's `sections` list counts from 0, with 3 for the arena) |
+|---|---|---|---|
+| `mist` | 0.1, drift 1 | 512 | `bg_mist` x3, sections 1 to 3 |
+| `far` | 0.2 | 128 | `bg_cave_far`, with its bottom at y 168 |
+| `mid` | 0.4 | 384 | `bg_cave_mid` x3 in sections 1 and 3, x2 in section 2, where the hall is more open, and none in the arena. `bg_roots` x3 with the bottom at y 40, section 1. `haz_ceiling` x4 with the bottom at y 30 to 34, sections 2 and 3. `bg_lantern`, one in each arch of the rocks: x3 in section 1 and x2 in section 2. `bg_cog_l`, section 2 and the arena. `bg_pipe_v` x2, section 2. `bg_crystal_l`, one before each arch: x3, section 3 |
+| `near` | 0.7 | 384 | `bg_molehill` x3 and `bg_stalagmite` x2, section 1. `bg_pipe_h` x2, section 2 and the arena. `bg_boiler` x2, the arena. `bg_crystal_s` x3 and `bg_stalagmite` x2, section 3 |
+| `peek` | 0.7 | 1536 | `bg_baronpeek`, section 2, 16 px left of every fourth pipe run of `near` |
+| `rails` | 0.7 | 32 | `bg_rail`, section 3 |
+| `fg` | 1.3, `front` | 256 | `fg_stalagmite` x3 at y 216, sections 1 and 3 |
+
+- The first band of every palette is the band where the word plates travel. It runs from y 0, because the Hourglass colour and the phase colour are applied to the first band only, and it is one flat colour (rule 1 of LEVEL2 3.1).
+- A piece that stands inside the band, between y 24 and y 150, is SHADOW there. The exceptions are the four that LEVEL2 3.1 names: the 1 px BRONZE line of `bg_cog_l` and `bg_pipe_v` (their rims and, on the cog, the inner edge of the wheel and the ends of its 1 px spokes in the lowest 5 rows of the band), the 1 px DEEP_TEAL lines of `bg_mist`, the four GOLD lamps of `bg_cave_far` (2 px wide) and the BRONZE teeth of `bg_gearstar`. `bg_clockface` is the one bright piece in the band. Every other bright pixel is below y 150. `test/test-sprites-world.js` checks this on the pixel data of every item.
+- The roof is hinted at under the HUD, and every roof piece ends by y 40: `bg_roots` in section 1, and in sections 2 and 3, which are too deep for roots, four of the rock rims that the hazards hang from (`haz_ceiling`, drawn with the section's remap as every backdrop item is). Without them the flat band over the far wall reads as open sky, most of all the DEEP_BLUE band of section 3. A rim ends at y 34 or higher, above the rim of a pipe or the tunnel, whose bottom is at y 36. It is the one item of the backdrop with an outline: besides SHADOW it puts its INK outline into the band between y 24 and y 33, and flecks of PLUM, which is the band colour of section 2 and becomes that of section 3 under the remap `crystal` (while the Hourglass runs the flecks are the other of the two band colours). The arena has no roof piece: the boss bar is there, and the clock face 2 px below it.
+- `bg_baronpeek` has a layer of its own, `peek`, with the factor of `near` and four times its repeat, so that the Baron is at the left end of every fourth pipe run. As an item of `near`, whose repeat is the width of the screen, one copy of him was on screen at every moment of the Gear Hall, in a mole's colours, where the creatures walk. With the sections of LEVEL2 9.1 he comes by three times, each time from the right edge to the left: as the section begins, with Pip at tiles 425 to 460, and with Pip at tiles 562 to 597. No pipe, lantern or crystal of LEVEL2 Appendix B passes him while he is on screen; the gap at tile 452 does, at the left edge.
+- `bg_cave_far` is solid along its skyline and its foot and leaves every other row open between them, so the far wall is half as strong as the SHADOW rocks of `bg_cave_mid` in front of it and the floor band shows through it. `bg_cave_mid` is a row of rocks standing on the floor line, with open floor between them. Below y 150 the rock round its arch is lit in single BRONZE pixels, densest at the inner faces of the arch and sparse from y 168 down, where the ground creatures pass: the light of the lantern that stands in the arch in sections 1 and 2 and, as DEEP_TEAL under the remap `crystal`, of the crystal cluster that stands before it in section 3. The arena has no mid rocks.
+- The arena scrolls during the fight as every section does, so the pieces of the arena pass behind the boss; only the gear stars and the clock face keep their place.
+- The pieces of the arena are kept dark so that they are not taken for parts of the fight. `bg_gearstar` is a SHADOW cog whose BRONZE teeth glint in turn, the upright ones in `s0` and the diagonal ones in `s1`, so that it is not taken for `pr_cog`, the GOLD cog Lady Ratchet throws through the same band. The machines of the Gear Hall and the arena (`bg_cog_l`, `bg_pipe_v`, `bg_pipe_h`, `bg_boiler`) stand in the 34 px above the floor, where `pr_rollgear` and `pr_pendulum` pass in BRONZE and GOLD and the tin frog in SILVER. Each is SHADOW inside a 1 px BRONZE line from top to bottom, with at most 6 pixels of GOLD and CREAM in a frame and no filled patch: the pin of the cog, the rivets of the standpipe, the needle and the two sparks of the boiler. The boiler is thereby not taken for `boss2_engine` when it passes behind her. `test/test-sprites-world.js` checks these.
+- `bg_rail` is drawn behind the play plane, so it runs across every open gap 4 px above the floor. Its head is SHADOW with two short SILVER glints in every 32 px and not one bright line, which would read as something to run along. It is not in the arena, where `tile_rail` lies on the play plane.
+- Three more pieces are dimmer than the hazard skin they can stand behind. `bg_crystal_l` and `bg_crystal_s` are DEEP_TEAL with a TEAL face of 2 px and an AQUA glint at the tips only, behind the AQUA `haz_crystal` and behind Pip, whose tunic is TEAL. `bg_lantern` is an ORANGE glow round a GOLD flame with a CREAM heart of 2 px, behind `haz_lantern` with its CREAM glass. `bg_stalagmite` is SHADOW with a STONE face on its lit third, so that it reads as rock at the back and not as a spike in Pip's way. The same test file checks the three.
 
 ### 6.6 What the renderer draws for each entity
 
@@ -2205,6 +2318,9 @@ Recipes are in DESIGN 15.2 and 15.3. `TG.Audio` plays everything in response to 
 | `gameover` | Once | Screen `gameOver` |
 | `jingle_ready` | Jingle | `level:start`, whatever the value of `continued`. Not on `game:continue`, which is always followed by `level:start` |
 | `jingle_checkpoint` | Jingle | `checkpoint` with `index > 0` |
+| `level2` | Loop | The level track of Level 2 (LEVEL2 11.1), named by `music.level` as `level1` is. `transpose` and `tempo` come from the latest `section:enter`: 0 and 140 in sections 1 and 2, 3 and 148 in section 3 |
+| `boss2` | Loop | The boss track of Level 2, named by `music.boss` as `boss1` is, at the arena's `tempo` (160). From `boss:phase` with phase 3 the tempo and the octave of pulse 2 are those of the arena's `music.phase3` (176 and 12 for Level 2; LEVEL2 11.2) |
+| `jingle_ready2` | Jingle | `level:start` of a level whose `music.ready` names it (Level 2), in place of `jingle_ready` and under the same rule. It takes the section's `transpose`, as `jingle_ready` does |
 
 `TG.Audio` never chooses a level or boss track by its own name. If a payload names a track that is not in `TG.Audio.TRACKS`, it warns once and plays nothing.
 
