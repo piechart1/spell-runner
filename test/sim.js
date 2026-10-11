@@ -3,7 +3,8 @@
 //
 //   node test/sim.js                       the acceptance matrix (36 runs a level) and every extra check
 //   node test/sim.js --level N             the same for one level (LEVELS below lists the levels built)
-//   node test/sim.js --quick               the same for the first level only (as node test/run-all.js --quick runs it)
+//   node test/sim.js --quick               the same for the first level only (as node test/run-all.js --quick runs it),
+//                                          with the checks that only read a level's data for every level
 //   node test/sim.js --milestone N         the runs and checks of WP-E milestone N (CONTRACT 12)
 //   node test/sim.js --check NAME          one extra check, no matrix runs
 //   node test/sim.js --measure             also a MEASURE line after each RUN line (LEVEL2 13.5: window use,
@@ -162,7 +163,8 @@ function loadEnv(files) {
 // 2. Checker: assertions inside every run (CONTRACT 10.3)
 // ===============================================================================================
 //
-//   event-names    every event has a name in TG.Events.NAMES and the payload fields of section 8
+//   event-names    every event has a name in TG.Events.NAMES and the payload fields of section 8, those
+//                  and no other
 //   first-letters  no two live typables share a first letter
 //   active-cap     live threats never exceed config.maxActive for the section
 //   word-pool      every word in threat:spawn, boss:weakopen and boss:finisher is in the pools
@@ -245,6 +247,11 @@ class Checker {
     if (fields) {
       for (const f of fields) {
         if (!(f in payload)) this.fail('event-names', name + ' payload lacks "' + f + '"');
+      }
+      // And no field that section 8 does not list: payload fields are binding (CONTRACT 12.1), and Level 1's
+      // events are to stay as they are while Level 2 is built (a skin, say, is not carried on one).
+      for (const k of Object.keys(payload)) {
+        if (fields.indexOf(k) === -1) this.fail('event-names', name + ' payload has "' + k + '", which section 8 does not list');
       }
     }
 
@@ -1601,7 +1608,8 @@ CHECKS['anchored-kinds'] = function () {
 // checks, with Pip running, jumping and sliding at the contact, and once more with its word typed:
 //   dangle  x is its anchorX on every step; it drops from the roof to DANGLE_ELEV by t = DANGLE_DROP_T,
 //           slowing as it goes, and hangs there; one warning, from above, at the spawn
-//   flit    enter, cross, behind and dive in that order with the path of the table; a second warning,
+//   flit    enter, cross, behind and dive in that order with the path of the table, level at
+//           FLIT_CROSS_ELEV through the crossing (the flutter there is the renderer's); a second warning,
 //           from behind, once, on the step it reaches FLIT_CROSS_T, and flipX from that step on
 //   both    spawned above the playfield with a top tag, and no tag once in view (a dangle hanging beyond
 //           the right edge has a right tag until it scrolls in); contact on the step t reaches 1 is
@@ -1729,14 +1737,16 @@ CHECKS['new-kinds'] = function () {
       if (phases[phases.length - 1] !== want) phases.push(want);
       // It comes lower as t goes on; t stands still during a letter stall, and the flit with it.
       const lower = (before) => !before || before.phase !== want || (r.t > before.t ? r.elev < before.elev : r.elev === before.elev);
+      if (r.y !== C.GROUND_Y - r.elev) return 'y ' + r.y + ' with elev ' + r.elev + at;
       if (want === 'enter') {
         if (!near(r.dx, C.FLIT_FROM_DX) || !(r.elev <= roof && r.elev > C.FLIT_CROSS_ELEV) || !lower(f.rows[i - 1])) return 'enter' + at + ': dx ' + fmt(r.dx, 2) + ', elev ' + fmt(r.elev, 2);
       } else if (want === 'cross') {
         const dx = C.FLIT_FROM_DX + (C.FLIT_BEHIND_DX - C.FLIT_FROM_DX) * (r.t - T1) / (T2 - T1);
-        // 4 px either way: the table gives the crossing a flutter, and LEVEL2 leaves open whose it is.
-        if (!near(r.dx, dx) || Math.abs(r.elev - C.FLIT_CROSS_ELEV) > 4) return 'cross' + at + ': dx ' + fmt(r.dx, 2) + ' (expected ' + fmt(dx, 2) + '), elev ' + fmt(r.elev, 2);
+        // Level. The table's 4 px flutter is drawn by TG.Render about this path and is no part of it (LEVEL2
+        // 13.8): the hitbox, the plate and the clock do not flutter.
+        if (!near(r.dx, dx) || r.elev !== C.FLIT_CROSS_ELEV) return 'cross' + at + ': dx ' + fmt(r.dx, 2) + ' (expected ' + fmt(dx, 2) + '), elev ' + fmt(r.elev, 2) + ' (expected ' + C.FLIT_CROSS_ELEV + ')';
       } else if (want === 'behind') {
-        if (!near(r.dx, C.FLIT_BEHIND_DX) || !(r.elev >= C.FLIT_BEHIND_ELEV && r.elev <= C.FLIT_CROSS_ELEV + 4) || !lower(f.rows[i - 1])) {
+        if (!near(r.dx, C.FLIT_BEHIND_DX) || !(r.elev >= C.FLIT_BEHIND_ELEV && r.elev <= C.FLIT_CROSS_ELEV) || !lower(f.rows[i - 1])) {
           return 'behind' + at + ': dx ' + fmt(r.dx, 2) + ', elev ' + fmt(r.elev, 2);
         }
       } else {
@@ -1771,10 +1781,10 @@ CHECKS['new-kinds'] = function () {
           // The tag, from the spawn on.
           const tags = tagOrder(f.rows);
           const far = kind === 'dangle' && f.spawnScreenX - 8 >= C.W;        // it hangs beyond the right edge
+          // A far dangle is above the playfield for its first steps as well as beyond the edge. Its tag is
+          // the right one from the spawn, as a far boulder's is: layoutLabels asks about the right edge first.
           const wantTags = far ? 'right,none' : 'top,none';
-          // A far dangle is above the playfield for its first steps as well as beyond the edge, and
-          // layoutLabels then gives it the top tag: either tag is taken there.
-          if (tags.join() !== wantTags && !(far && tags.join() === 'top,right,none')) bad.push(where + ': tags ' + tags.join(',') + ', expected ' + wantTags);
+          if (tags.join() !== wantTags) bad.push(where + ': tags ' + tags.join(',') + ', expected ' + wantTags);
           if (f.enters !== 1) bad.push(where + ': ' + f.enters + ' threat:enter');
           if (kind === 'dangle') {
             const e = f.e;
@@ -2005,6 +2015,118 @@ CHECKS['spawn-skin'] = function () {
   // 3. Level 1 names no minion skin.
   if (TG.Levels[1].boss.minionSkin !== undefined) bad.push('Level 1 has boss.minionSkin ' + TG.Levels[1].boss.minionSkin);
   return bad.length ? result(false, bad.slice(0, 6).join('; ')) : result(true, 'spec.skin is copied onto a threat and a crate and absent otherwise; the minion, and no rock, carries level.boss.minionSkin when the level has one; nothing else changes');
+};
+
+// --- skins --------------------------------------------------------------------------------------
+// The check of that name in LEVEL2 13.5, on the data of each level played. A level may name sprites to be
+// drawn in the place of Level 1's: theme.tiles and theme.hazardSkins by key (LEVEL2 3.4), theme.skins by
+// kind (LEVEL2 4.5) and boss.minionSkin for the phase 3 minion (LEVEL2 4.4). TG.Render and TG.Effects put
+// such a sprite where the original goes and choose its frame as they choose the original's, so:
+//   every name is in the manifest (TG.Sprites.MANIFEST) and is a defined sprite;
+//   each has the size, the frame names, the fps and the anchor of the sprite it stands for: SKIN_ORIGINALS
+//   for a tile or a hazard, the sprite of the kind in TG.Entities.KINDS for a creature or an attack;
+//   a key of theme.tiles or theme.hazardSkins is one the renderer reads, a kind of theme.skins is a kind,
+//   and a remap of theme.skins is a defined remap;
+//   a sprite that the effects leave in the place of another (skin.fx) has its size and its anchor. Its
+//   frames and its frame rate are its own, because the effects play it as it is: Level 2's fx_star, for
+//   the bee's fx_flower, has other frame names and twice the frame rate;
+//   a key of skin.fx is a sprite the effects swap for that kind (SKIN_FX): any other would be read by
+//   nothing, and the level would carry a swap that is never drawn.
+
+// The Level 1 sprite that each key of theme.tiles and theme.hazardSkins stands for: the fallbacks of
+// js/render.js (TILES and HAZARD_SKINS there; archTrunk falls back to trunk).
+const SKIN_ORIGINALS = {
+  tiles: {
+    top: 'tile_grass', fill: 'tile_soil', edgeL: 'tile_edge_l', edgeR: 'tile_edge_r', wallL: 'tile_wall_l', wallR: 'tile_wall_r',
+    gapFill: 'tile_water', gapFillDark: 'tile_dark', plank: 'tile_plank', arenaTop: 'tile_arena', arenaFill: 'tile_soil', rail: 'tile_rail'
+  },
+  hazardSkins: {
+    bramble: 'haz_bramble', branch: 'haz_branch', trunk: 'haz_trunk', canopy: 'haz_canopy', beehive: 'haz_beehive', rope: 'haz_rope',
+    arch: 'haz_arch', archTrunk: 'haz_trunk'
+  }
+};
+
+// The sprites that js/effects.js swaps through skin.fx, by kind: the buzzle's flower, in clearEnd (fxFor).
+const SKIN_FX = { buzzle: ['fx_flower'] };
+
+// What is wrong with the skins of the level data `data`, and how many names were looked at.
+function skinProblems(TG, data) {
+  const problems = [];
+  let names = 0;
+  const rows = new Map(TG.Sprites.MANIFEST.map((m) => [m.name, m]));
+  const theme = data.theme || {};
+  // `name` is drawn in the place of `original`. whole: the frame names and the fps are compared as well.
+  const alike = (where, name, original, whole) => {
+    names++;
+    const a = rows.get(name), b = rows.get(original);
+    if (!a) { problems.push(where + ': ' + name + ' is not in the manifest'); return; }
+    if (!b) { problems.push(where + ': ' + original + ', which it stands for, is not in the manifest'); return; }
+    if (!TG.Sprites.has(name)) problems.push(where + ': ' + name + ' is not defined');
+    if (a.w !== b.w || a.h !== b.h) problems.push(where + ': ' + name + ' is ' + a.w + 'x' + a.h + ' and ' + original + ' ' + b.w + 'x' + b.h);
+    if (a.ax !== b.ax || a.ay !== b.ay) problems.push(where + ': ' + name + ' has its anchor at ' + a.ax + ',' + a.ay + ' and ' + original + ' at ' + b.ax + ',' + b.ay);
+    if (!whole) return;
+    if (a.names.join(' ') !== b.names.join(' ')) problems.push(where + ': ' + name + ' has the frames ' + a.names.join(' ') + ' and ' + original + ' ' + b.names.join(' '));
+    if (a.fps !== b.fps) problems.push(where + ': ' + name + ' has fps ' + a.fps + ' and ' + original + ' ' + b.fps);
+  };
+  for (const group of Object.keys(SKIN_ORIGINALS)) {
+    for (const key of Object.keys(theme[group] || {})) {
+      const where = 'theme.' + group + '.' + key;
+      if (!SKIN_ORIGINALS[group][key]) problems.push(where + ' is not a key the renderer reads');
+      else alike(where, theme[group][key], SKIN_ORIGINALS[group][key], true);
+    }
+  }
+  const K = TG.Entities.KINDS;
+  for (const kind of Object.keys(theme.skins || {})) {
+    const skin = theme.skins[kind], where = 'theme.skins.' + kind;
+    if (!K[kind]) { problems.push(where + ' is not a kind'); continue; }
+    if (skin.sprite !== undefined) alike(where + '.sprite', skin.sprite, K[kind].sprite, true);
+    if (skin.remap !== undefined) {
+      names++;
+      if (!TG.Remaps[skin.remap]) problems.push(where + '.remap: ' + skin.remap + ' is not a remap');
+    }
+    for (const from of Object.keys(skin.fx || {})) {
+      if ((SKIN_FX[kind] || []).indexOf(from) === -1) problems.push(where + '.fx.' + from + ' is not a sprite the effects swap for a ' + kind);
+      else alike(where + '.fx.' + from, skin.fx[from], from, false);
+    }
+  }
+  if (data.boss && data.boss.minionSkin !== undefined) alike('boss.minionSkin', data.boss.minionSkin, K.digby.sprite, true);
+  return { problems: problems, names: names };
+}
+
+CHECKS['skins'] = function (ctx) {
+  const env = simEnv(SIM_FILES.concat(['js/sprites-chars.js', 'js/sprites-world.js']));
+  const TG = env.TG;
+  const data = TG.Levels[ctx.levelId];
+  const found = skinProblems(TG, data);
+  if (found.problems.length > 0) return result(false, found.problems.slice(0, 6).join('; '));
+  // Each rule must also be able to fail: copies of the level with one name changed, and what is then said.
+  const skin = (d, kind, value) => { d.theme.skins = Object.assign({}, d.theme.skins); d.theme.skins[kind] = value; };
+  const broken = [
+    ['tile_nowhere is not in the manifest', (d) => { d.theme.tiles.top = 'tile_nowhere'; }],
+    ['en_boulder is 24x32', (d) => { d.theme.tiles.top = 'en_boulder'; }],
+    ['en_hoppet has its anchor at 8,16', (d) => { d.theme.tiles.fill = 'en_hoppet'; }],
+    ['theme.tiles.roof is not a key', (d) => { d.theme.tiles.roof = 'tile_grass'; }],
+    ['haz_trunk has the frames', (d) => { d.theme.hazardSkins.bramble = 'haz_trunk'; }],
+    ['en_dangle has the frames hang0 hang1 zip', (d) => { skin(d, 'hoppet', { sprite: 'en_dangle' }); }],
+    ['en_dangle has fps 4', (d) => { skin(d, 'hoppet', { sprite: 'en_dangle' }); }],
+    ['nowhere is not a remap', (d) => { skin(d, 'hoppet', { remap: 'nowhere' }); }],
+    ['theme.skins.dragon is not a kind', (d) => { skin(d, 'dragon', { sprite: 'en_hoppet' }); }],
+    ['fx_lilypad is 16x8', (d) => { skin(d, 'buzzle', { fx: { fx_flower: 'fx_lilypad' } }); }],
+    ['theme.skins.hoppet.fx.fx_lilypad is not a sprite the effects swap', (d) => { skin(d, 'hoppet', { fx: { fx_lilypad: 'fx_star' } }); }],
+    ['theme.skins.buzzle.fx.fx_poof is not a sprite the effects swap', (d) => { skin(d, 'buzzle', { fx: { fx_poof: 'fx_star' } }); }],
+    ['en_flit is 24x16', (d) => { d.boss.minionSkin = 'en_flit'; }]
+  ];
+  const missed = [];
+  for (const [said, change] of broken) {
+    const copy = JSON.parse(JSON.stringify(data));
+    change(copy);
+    if (!skinProblems(TG, copy).problems.some((p) => p.indexOf(said) !== -1)) missed.push(said);
+  }
+  if (missed.length > 0) return result(false, 'a broken copy of the level passed: ' + missed.join('; '));
+  const skins = data.theme.skins || {};
+  return result(true, found.names + ' names (' + Object.keys(data.theme.tiles || {}).length + ' tiles, ' + Object.keys(data.theme.hazardSkins || {}).length +
+    ' hazard sprites, the skins of ' + (Object.keys(skins).join(', ') || 'no kind') + (data.boss.minionSkin ? ', the minion as ' + data.boss.minionSkin : '') +
+    '): each in the manifest and defined, with the size, frame names, fps and anchor of the sprite it stands for; ' + broken.length + ' broken copies are each refused');
 };
 
 // --- typing-results -----------------------------------------------------------------------------
@@ -3684,13 +3806,17 @@ CHECKS['level1-events'] = function () {
 // list with `length`, `deterministic`, `no-presentation` and `words-by-difficulty`); the others are the
 // WP-E acceptance items of CONTRACT 12 written as checks; `anchored-kinds`, `attack-windows` and `spawn-skin`
 // are the groundwork of LEVEL2 13.1 in js/entities.js and js/boss.js, and `level1-events` is the regression
-// check of LEVEL2 13.5; `new-kinds` and `watch-freeze` are the checks of those names in LEVEL2 13.5, and
+// check of LEVEL2 13.5; `new-kinds`, `skins` and `watch-freeze` are the checks of those names in LEVEL2 13.5, and
 // `targets` holds the rows of its target table. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
 // level"); the others are run once. `deterministic` and `no-presentation` are marked as well, though 13.5
-// does not list them: each plays a whole run, and a level's own kinds are only met on that level.
+// does not list them: each plays a whole run, and a level's own kinds are only met on that level. `skins`
+// is marked too: it reads the data of one level. A check marked dataOnly reads the level's data and plays
+// nothing, so --quick, which plays the first level only, still runs it for every level: a misspelled sprite
+// name in a later level's file then fails the quick run as well.
 const CHECK_LIST = [
-  { name: 'level-valid', milestone: 1, perLevel: true },
+  { name: 'level-valid', milestone: 1, perLevel: true, dataOnly: true },
   { name: 'counts', milestone: 1, perLevel: true },
+  { name: 'skins', milestone: 1, perLevel: true, dataOnly: true },
   { name: 'jump-geometry', milestone: 1 },
   { name: 'fall-geometry', milestone: 1 },
   { name: 'duck-held', milestone: 1 },
@@ -3910,9 +4036,13 @@ function main(argv) {
     if (!filtered && !opts.adaptive) for (const profile of Object.keys(played)) ctx.runs[profile] = played[profile];
   }
 
+  // With --quick, the levels that are not played: each still gets its dataOnly checks.
+  const unplayed = opts.quick && opts.level === undefined ? LEVELS.slice(1).map((levelId) => ({ until: until, levelId: levelId, runs: {}, all: all })) : [];
+
   for (const name of checks) {
-    const perLevel = CHECK_LIST.some((c) => c.name === name && c.perLevel);
-    for (const ctx of perLevel ? ctxs : ctxs.slice(0, 1)) {
+    const entry = CHECK_LIST.find((c) => c.name === name);
+    const perLevel = !!(entry && entry.perLevel);
+    for (const ctx of perLevel ? (entry.dataOnly ? ctxs.concat(unplayed) : ctxs) : ctxs.slice(0, 1)) {
       const label = 'CHECK name=' + name + (perLevel ? ' level=' + ctx.levelId : '');
       let r;
       try {

@@ -28,6 +28,11 @@
 //   - Defeat (DESIGN 11.6): the picture freezes for 0.5 s; from 0.55 s the Baron is drawn at minion size,
 //     spinning on his mound, and goes down the hole at 1.7 to 2.2 s.
 //   - Ground markers lie 4 px below the ground line, so that Pip's feet do not hide them.
+//   - Level 2's dangle sways on its thread and its flit flutters in its crossing (LEVEL2 4.3). Their plates
+//     hold still, the flit's clear of the top of its flutter; the tail and the lock brackets go with the
+//     sprite. A typable beyond the right edge has the right tag while it is also above the playfield.
+//     TG.Render.sway(entity) and TG.Render.flutter(entity) give the two distances, so that TG.Effects can
+//     begin a clear where the creature was drawn.
 (function (root) {
   'use strict';
   var TG = root.TG = root.TG || {};
@@ -55,6 +60,10 @@
   var FREEZE_TIME = 0.5;            // DESIGN 11.6: 30-frame freeze of the picture after the finisher
   var CANOPY_BOTTOM = 36;           // tree crowns of the branch and arch: y 20 to 35, the top rows under the HUD
   var MARKER_DY = 4;                // ground markers lie on the top rows of the ground, so Pip's feet do not hide them
+  var DANGLE_SWAY = 2;              // LEVEL2 4.3: the dangle sways this many px either way on its thread,
+  var DANGLE_SWAY_HZ = 0.4;         // this many times a world second
+  var FLIT_FLUTTER = 4;             // LEVEL2 4.3: in its crossing the flit rises and falls this many px about its path,
+  var FLIT_FLUTTER_HZ = 2;          // this many times a world second
 
   var canvas = null, ctx = null;
   var lastState = null, lastScreen = null;
@@ -624,6 +633,45 @@
     return skin && typeof skin.remap === 'string' && skin.remap ? skin.remap : null;
   }
 
+  // The dangle's thread (LEVEL2 4.3): 1 px of SILVER from the top of the playfield at x0, the anchor, down
+  // to the top of the sprite at x1 and row `bottom`. The two are at most DANGLE_SWAY px apart, so the line
+  // is one upright run for each x it passes through. Nothing is drawn while the sprite is above the top.
+  function drawThread(c, x0, x1, bottom) {
+    var top = TG.C.PLAY_TOP;
+    var runs = Math.abs(x1 - x0) + 1, step = x1 < x0 ? -1 : 1;
+    for (var k = 0; k < runs; k++) {
+      var y = top + Math.floor((bottom - top) * k / runs);
+      rect(c, x0 + k * step, y, 1, top + Math.floor((bottom - top) * (k + 1) / runs) - y, SILVER);
+    }
+  }
+
+  // Two kinds are drawn a little away from the place the simulation gives them (LEVEL2 4.3): the dangle
+  // sways on its thread and the flit flutters in its crossing. Both are presentation: the hitbox stays, and
+  // so does the plate, which is easier to read when it holds still. Both run on the entity's animT, which
+  // stands still with the world under a Pocket Watch (state.time does not).
+
+  // How many px to the right of its anchor a dangle is drawn; 0 for any other kind.
+  function sway(e) {
+    if (e.kind !== 'dangle') return 0;
+    return Math.round(DANGLE_SWAY * Math.sin(2 * Math.PI * DANGLE_SWAY_HZ * num(e.animT, 0)));
+  }
+
+  // How far the flutter of a crossing flit reaches above and below its path, px; 0 for anything else. It
+  // grows to FLIT_FLUTTER over the first eighth of the crossing and dies away over the last, so that the
+  // flit does not jump as the phase begins and ends.
+  function flutterReach(e) {
+    var C = TG.C;
+    if (e.kind !== 'flit' || e.phase !== 'cross') return 0;
+    var r = (num(e.t, 0) - C.FLIT_ENTER_T) / (C.FLIT_CROSS_T - C.FLIT_ENTER_T);
+    return FLIT_FLUTTER * clamp(8 * Math.min(r, 1 - r), 0, 1);
+  }
+
+  // How many px above its path a flit is drawn.
+  function flutter(e) {
+    var reach = flutterReach(e);
+    return reach > 0 ? Math.round(reach * Math.sin(2 * Math.PI * FLIT_FLUTTER_HZ * num(e.animT, 0))) : 0;
+  }
+
   function drawEntities(c, state, camX, time) {
     var C = TG.C;
     var list = state.entities || [];
@@ -662,6 +710,22 @@
         case 'swoop':
           if (e.phase === 'dive' && p) sprite(c, 'fx_marker', fpsFrame('fx_marker', time), Math.floor(px - camX), G + MARKER_DY, false, null);
           sprite(c, name, e.phase === 'dive' ? 'dive' : Math.floor(at * 8) % 2, sx, sy, false, remap);
+          break;
+        case 'dangle':
+          // LEVEL2 4.3: it comes down and hangs on a thread, legs out and in, and sways on it. The thread
+          // runs from the anchor's x at the top of the playfield, so it is not drawn while the anchor is
+          // beyond the right edge.
+          var anchorSx = Math.floor(num(e.x, 0) - camX);
+          var swung = sx + sway(e);
+          if (anchorSx < C.W) drawThread(c, anchorSx, swung, sy - num(e.h, 16));
+          sprite(c, name, Math.floor(at * 4) % 2, swung, sy, false, remap);
+          break;
+        case 'flit':
+          // LEVEL2 4.3: it flaps across over Pip, faces right from its turn behind him, and dives at him
+          // from there with the swoop's marker on the ground. Its dive frame has the head at the lower
+          // left, so flipped it leads down and to the right.
+          if (e.phase === 'dive' && p) sprite(c, 'fx_marker', fpsFrame('fx_marker', time), Math.floor(px - camX), G + MARKER_DY, false, null);
+          sprite(c, name, e.phase === 'dive' ? 'dive' : Math.floor(at * 8) % 2, sx, sy - flutter(e), e.turned === true, remap);
           break;
         case 'truffle':
           sprite(c, name, Math.floor(at * 12) % 4, sx, sy, e.flipX !== false, remap);
@@ -808,7 +872,7 @@
 
   // Screen boxes that plates keep clear of: Pip standing, and the sprite of every typable on screen.
   // A hoppet's box includes its hop and a buzzle's its bob, so that a plate does not jump from frame
-  // to frame as the creature moves.
+  // to frame as the creature moves; a crossing flit's includes the reach of its flutter.
   function obstacles(state, list, camX) {
     var C = TG.C;
     var out = [];
@@ -821,6 +885,7 @@
       if (!(sx + ew / 2 > 0 && sx - ew / 2 < C.W && bottom > C.PLAY_TOP && top < C.GROUND_Y)) continue;
       if (e.kind === 'hoppet') top = Math.min(top, C.GROUND_Y - eh - C.HOP_HEIGHT);
       if (e.kind === 'buzzle') { top -= C.BUZZLE_BOB; bottom += C.BUZZLE_BOB; }
+      if (e.kind === 'flit') { top -= flutterReach(e); bottom += flutterReach(e); }
       out.push({ id: e.id, x: Math.floor(sx - ew / 2), y: Math.floor(top), w: ew, h: Math.ceil(bottom - top) });
     }
     return out;
@@ -897,10 +962,13 @@
     var onScreen = sx + ew / 2 > 0 && sx - ew / 2 < C.W && bottom > C.PLAY_TOP && top < C.GROUND_Y;
     var edge = null, x, y, tailX = null, tailY = null;
     if (!onScreen) {
+      // Beyond the right edge is asked before above the playfield: a dangle whose anchor is still ahead of
+      // the view comes down out of sight, and its tag is the right one from its spawn, as a far boulder's
+      // is (LEVEL2 4.3). No other kind is in both places at once.
       if (top >= C.GROUND_Y) edge = 'bottom';
+      else if (sx - ew / 2 >= C.W) edge = 'right';
       else if (bottom <= C.PLAY_TOP) edge = 'top';
-      else if (sx + ew / 2 <= 0) edge = 'left';
-      else edge = 'right';
+      else edge = 'left';
     }
     if (edge === 'right' || edge === 'left') {
       x = edge === 'right' ? C.W - 2 - w : 2;
@@ -912,10 +980,12 @@
       x = Math.floor(sx - w / 2);
       y = C.GROUND_Y - 12 - h;
     } else {
+      // The plate holds still over a dangle that sways and a flit that flutters, clear of the top of the
+      // flutter; its tail ends on the sprite where that is drawn.
       x = Math.floor(sx - w / 2);
-      y = Math.floor(top) - 4 - h;
-      tailX = Math.floor(sx);
-      tailY = Math.floor(top);
+      y = Math.floor(top - flutterReach(e)) - 4 - h;
+      tailX = Math.floor(sx) + sway(e);
+      tailY = Math.floor(top) - flutter(e);
     }
     return {
       id: e.id, text: text, typed: clamp(Math.floor(num(e.typed, 0)), 0, text.length),
@@ -1066,9 +1136,11 @@
         brackets(c, L.x - 5, L.y - 5, L.x + L.w + 5, L.y + L.h + 5, time, snap);
         return;
       }
-      var sx = Math.floor(num(t.x, 0) - camX);
+      // The brackets go with the sprite as it is drawn: with a dangle's sway and a flit's flutter.
+      var sx = Math.floor(num(t.x, 0) - camX) + sway(t);
       var w = num(t.w, 16), h = num(t.h, 16);
-      var top = Math.floor(num(t.y, C.GROUND_Y) - h), bottom = Math.min(Math.floor(num(t.y, C.GROUND_Y)), C.GROUND_Y);
+      var up = flutter(t);
+      var top = Math.floor(num(t.y, C.GROUND_Y) - h) - up, bottom = Math.min(Math.floor(num(t.y, C.GROUND_Y)), C.GROUND_Y) - up;
       brackets(c, sx - Math.floor(w / 2) - 3, top - 3, sx + Math.ceil(w / 2) + 3, bottom + 3, time, snap);
       return;
     }
@@ -1204,6 +1276,10 @@
     worldToScreenX: function (state, x) {
       var cx = state && state.camera && isNum(state.camera.x) ? state.camera.x : 0;
       return Math.floor(x - cx);
-    }
+    },
+    // How far from the place the simulation gives it an entity is drawn (LEVEL2 4.3): sway, px to the
+    // right, for a dangle; flutter, px up, for a flit in its crossing. 0 for anything else.
+    sway: sway,
+    flutter: flutter
   };
 })(typeof window !== 'undefined' ? window : globalThis);

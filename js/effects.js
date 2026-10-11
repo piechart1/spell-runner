@@ -16,7 +16,11 @@
 // Everything is presentation. Nothing here writes to the game state, emits a simulation event or uses
 // state.rng; randomness comes from a private TG.RNG generator. The state is read (camera, player,
 // boss, power) through TG.Game.state when it exists, so that effects start where the player sees
-// them; without TG.Game the last camera given to draw() is used.
+// them; without TG.Game the last camera given to draw() is used. The level's theme and the entity that
+// an event names are read there too, for the look of a skinned creature (LEVEL2 4.5): an event payload
+// carries no skin. The clear of a dangle or a flit begins where TG.Render drew the creature, which is a
+// little away from the payload's place (the dangle sways, the flit flutters); TG.Render says how far. One
+// that the clamp of CONTRACT 4.17 moves in from an edge of the view begins at the clamped place instead.
 //
 // Timing: TG.Effects.update(dt) is called once per simulation step (dt = 1/60 s), so lengths given in
 // "frames" below are 1/60 s each.
@@ -167,7 +171,7 @@
   // Sprite box of a kind when the payload does not give one.
   var FALLBACK_BOX = {
     boulder: [24, 32], dawdle: [16, 16], hoppet: [16, 16], buzzle: [16, 16], swoop: [24, 16], truffle: [24, 16],
-    digby: [16, 16], rock: [12, 12], crate: [16, 32], shock: [16, 8], pick: [16, 16]
+    digby: [16, 16], dangle: [16, 16], flit: [24, 16], rock: [12, 12], crate: [16, 32], shock: [16, 8], pick: [16, 16]
   };
 
   function boxOf(kind) {
@@ -201,6 +205,60 @@
     var s = gameState();
     var kind = s && s.boss ? s.boss.kind : null;
     return hasOwn(BOSS_FX, kind) ? BOSS_FX[kind] : BOSS_FX.baron;
+  }
+
+  // --- skins (LEVEL2 4.5) ----------------------------------------------------------------------
+
+  // The entity with this id, or null. The payloads of word:clear, threat:hit and threat:bounce carry no
+  // skin, and the entity they name is still in state.entities while they are handled: TG.Entities drops
+  // the dead at the end of its update.
+  function entityById(id) {
+    var s = gameState();
+    var list = s ? s.entities : null;
+    if (!list || id === null || id === undefined) return null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) return list[i];
+    }
+    return null;
+  }
+
+  // The level's skin for a kind: theme.skins[kind] = { sprite, remap, fx }, each part optional; null when
+  // the level has none.
+  function themeSkin(kind) {
+    var s = gameState();
+    var skins = s && s.level && s.level.theme ? s.level.theme.skins : null;
+    return skins && hasOwn(skins, kind) && skins[kind] ? skins[kind] : null;
+  }
+
+  // Gives the effect f the look TG.Render gave the creature: the entity's own skin if it has one, else the
+  // sprite of the level's skin for its kind, else `name`; and the remap of the level's skin, which is
+  // written for the look of the kind and so is not put on an entity's own skin. e: the entity, or null.
+  function dress(f, kind, e, name) {
+    var skin = themeSkin(kind);
+    var own = e && typeof e.skin === 'string' && e.skin ? e.skin : null;
+    f.sprite = own || (skin && typeof skin.sprite === 'string' && skin.sprite ? skin.sprite : name);
+    f.remap = !own && skin && typeof skin.remap === 'string' && skin.remap ? skin.remap : null;
+  }
+
+  // The sprite that the clear of a kind leaves behind: `name`, or the one the level's skin puts in its
+  // place (skin.fx, as Level 2's glow-moth has a star for the bee's flower). The buzzle's fx_flower is the
+  // only one asked for (clearEnd), and the `skins` check of test/sim.js refuses any other key of skin.fx,
+  // so that a level cannot carry a swap that nothing draws.
+  function fxFor(kind, name) {
+    var skin = themeSkin(kind);
+    var fx = skin ? skin.fx : null;
+    return fx && typeof fx[name] === 'string' && fx[name] ? fx[name] : name;
+  }
+
+  // How far from its place in the simulation TG.Render draws the entity e (LEVEL2 4.3): a dangle sways on
+  // its thread, px to the right, and a flit flutters in its crossing, px up. 0 for any other kind, for no
+  // entity and without TG.Render.
+  function swayOf(e) {
+    return e && TG.Render && TG.Render.sway ? TG.Render.sway(e) : 0;
+  }
+
+  function flutterOf(e) {
+    return e && TG.Render && TG.Render.flutter ? TG.Render.flutter(e) : 0;
   }
 
   // --- drawing ---------------------------------------------------------------------------------
@@ -249,6 +307,19 @@
     }
     ctx.fillStyle = TG.PAL[c];
     ctx.fillRect(Math.floor(x), Math.floor(y), Math.floor(w), Math.floor(h));
+  }
+
+  // The dangle's thread (LEVEL2 4.3), as TG.Render draws it for the spider while it hangs: 1 px of SILVER
+  // from the top of the playfield at x0, its anchor, down to the top of the sprite at x1 and row `bottom`,
+  // as one upright run for each x it passes through. Nothing is drawn while the sprite is above the top.
+  function thread(ctx, x0, x1, bottom) {
+    var top = TG.C.PLAY_TOP;
+    if (bottom <= top) return;
+    var runs = Math.abs(x1 - x0) + 1, step = x1 < x0 ? -1 : 1;
+    for (var k = 0; k < runs; k++) {
+      var y = top + Math.floor((bottom - top) * k / runs);
+      rect(ctx, x0 + k * step, y, 1, top + Math.floor((bottom - top) * (k + 1) / runs) - y, SILVER);
+    }
   }
 
   function glyph(ctx, ch, x, y, c) {
@@ -412,30 +483,30 @@
     return f;
   }
 
-  // The sprite and frame that stand for a kind at the moment it is cleared.
+  // The sprite and frame that stand for a kind at the moment it is cleared. The sprite is the kind's own:
+  // a skin replaces it and keeps the frame (dress).
   var GHOST = {
     boulder: ['en_boulder', 'crack3'], dawdle: ['en_dawdle', 'crawl0'], hoppet: ['en_hoppet', 'sit'],
     buzzle: ['en_buzzle', 'fly0'], swoop: ['en_swoop', 'flap0'], truffle: ['en_truffle', 'run0'],
-    digby: ['en_digby', 'up'], rock: ['pr_rock', 'k0'], crate: ['crate_balloon', 'c0']
+    digby: ['en_digby', 'up'], dangle: ['en_dangle', 'hang0'], flit: ['en_flit', 'flap0'],
+    rock: ['pr_rock', 'k0'], crate: ['crate_balloon', 'c0']
   };
 
   // Screen-space clamp of an effect position (CONTRACT 4.17): the centre of the sprite box is kept
   // inside x 8..376 and y PLAY_TOP + 8 .. GROUND_Y - 8, so a clear off screen plays where the edge tag was.
-  // Returns the world anchor { x, y } in `out` and whether the box was outside the view.
+  // Returns the world anchor { x, y } in `out` and whether the clamp moved it: it does for every box
+  // outside the view, and for one that is partly in view at an edge.
   function placeClear(x, y, w, h, out) {
     var C = TG.C;
     var cx = camX();
-    var sx = x - cx;
-    var cy = y - h / 2;
-    var outside = !(sx + w / 2 > 0 && sx - w / 2 < C.W && y > C.PLAY_TOP && y - h < C.GROUND_Y);
-    sx = clamp(sx, 8, C.W - 8);
-    cy = clamp(cy, C.PLAY_TOP + 8, C.GROUND_Y - 8);
+    var sx = clamp(x - cx, 8, C.W - 8);
+    var cy = clamp(y - h / 2, C.PLAY_TOP + 8, C.GROUND_Y - 8);
     out.x = sx + cx;
     out.y = cy + h / 2;
-    out.outside = outside;
+    out.moved = sx !== x - cx || cy !== y - h / 2;
     return out;
   }
-  var placeTmp = { x: 0, y: 0, outside: false };
+  var placeTmp = { x: 0, y: 0, moved: false };
 
   // The universal clear sequence of a threat or crate (DESIGN 4.6) from a word:clear payload.
   function startClear(p) {
@@ -448,6 +519,16 @@
     placeClear(x, y, w, h, placeTmp);
     var ax = placeTmp.x, ay = underground ? C.GROUND_Y : placeTmp.y;
     var blast = p.cause === 'blast';
+    // The creature is where TG.Render drew it: a dangle swayed on its thread, a flit up or down in its
+    // flutter (LEVEL2 4.3). The letters and the popups below keep to the place of the plate, which held
+    // still. A clear that the clamp has moved in from an edge of the view is played there as it is, the
+    // dangle upright on its thread: the creature was not seen in that place.
+    var e = entityById(p.id);
+    var fx = placeTmp.moved ? ax : ax + swayOf(e), fy = placeTmp.moved ? ay : ay - flutterOf(e);
+    // A flit flies beside Pip, so its clear keeps its place in the view as he runs on, and the ink bolt
+    // flies to it there. Behind him it is 24 px from the left edge, and a clear left standing in the world
+    // would be out of sight before it ended.
+    var beside = kind === 'flit';
 
     var pre = BOLT_TIME;
     if (blast) {
@@ -458,20 +539,25 @@
       pre = blastCount * BLAST_STAGGER;
       blastCount++;
     } else {
-      bolt(ax, ay - h / 2);
+      var b = bolt(fx, fy - h / 2);
+      if (beside) b.follow = true;
     }
 
     var f = alloc('clear', WORLD);
     f.kind = kind;
-    f.x = ax; f.y = ay; f.x0 = ax; f.y0 = ay;
+    f.x = fx; f.y = fy; f.x0 = fx; f.y0 = fy;
+    if (kind === 'dangle') f.x1 = ax;          // its thread comes down from its anchor
     f.w = w; f.h = h;
     f.pre = pre;
     f.under = underground;
     f.power = p.power || null;
-    f.flip = kind === 'truffle';
+    // It faces the way it was drawn: the truffle, and a flit after its turn, face right.
+    f.flip = kind === 'truffle' || (kind === 'flit' && !!(e && e.turned));
+    if (beside) f.follow = true;
     var g = GHOST[kind] || GHOST.hoppet;
-    f.sprite = g[0];
-    f.frame = g[1];
+    dress(f, kind, e, g[0]);
+    // A flit caught in its dive has its wings folded already, and keeps them so.
+    f.frame = kind === 'flit' && e && e.phase === 'dive' ? 'dive' : g[1];
     f.life = pre + WHITE_TIME + clearLength(kind, underground);
     f.z = 1;
 
@@ -513,6 +599,8 @@
       case 'swoop': return 1.2;
       case 'truffle': return 1.4;
       case 'digby': return underground ? 0.52 : 0.42;
+      case 'dangle': return 0.3;
+      case 'flit': return 0.55;
       case 'rock': return 0.3;
       case 'crate': return 0.16;
       default: return 0.1;
@@ -560,6 +648,17 @@
       case 'digby':
         if (!f.under) digbyHelmet(f);
         break;
+      case 'dangle':
+        // The thread snaps back with the spider on it (clearStep), and two twinkles are left where it
+        // hung (LEVEL2 4.2).
+        twinkle(x - 5, cy - 3, 0);
+        twinkle(x + 5, cy + 3, 4 * FRAME);
+        break;
+      case 'flit':
+        // It folds its wings; the first of the three twinkles it leaves (LEVEL2 4.2).
+        twinkle(x, cy, 0);
+        f.a = 1;
+        break;
       case 'rock':
         f.x0 = x; f.y0 = y;
         var s = gameState();
@@ -583,6 +682,13 @@
     h.ground = TG.C.GROUND_Y - 4;
     h.bounces = 2;
     h.blinkOut = 0.3;
+  }
+
+  // An fx_star that twinkles in place and blinks out, as it is, with no remap (LEVEL2 4.2).
+  function twinkle(x, y, delay) {
+    var st = spriteParticle('fx_star', x, y, 0, 0, 0, 0.45, 8, 2);
+    st.delay = delay;
+    st.blinkOut = 0.15;
   }
 
   // Per-step work of the kind animation. tc: s since the white flash ended.
@@ -622,6 +728,21 @@
           digbyHelmet(f);
         }
         break;
+      case 'dangle':
+        // Zips back up, slowly at first, and is out through the top of the playfield at the end.
+        var zip = clamp(tc / 0.3, 0, 1);
+        f.y = f.y0 + (C.PLAY_TOP - f.y0) * zip * zip;
+        break;
+      case 'flit':
+        // Tumbles up into the dark, swaying, and leaves a twinkle a third and two thirds of the way.
+        var up = clamp(tc / 0.55, 0, 1);
+        f.x = f.x0 + Math.sin(tc * 14) * 5;
+        f.y = f.y0 + (C.PLAY_TOP - f.y0) * up * up;
+        if (f.a < 3 && tc >= f.a * 0.18) {
+          f.a++;
+          twinkle(f.x, f.y - f.h / 2, 0);
+        }
+        break;
       case 'rock':
         var r = clamp(tc / 0.3, 0, 1);
         var s = gameState();
@@ -653,6 +774,7 @@
           p.blinkOut = 0.2;
         }
         var pad = spriteParticle('fx_lilypad', f.x, cy, 0, 26, 0, 2.2);
+        pad.remap = f.remap;     // the frog's own colours: a tin frog leaves a tin disc (LEVEL2 4.1)
         pad.sway = 5;
         pad.swayHz = 1.2;
         pad.ground = C.GROUND_Y - 4;
@@ -660,8 +782,13 @@
         pad.blinkOut = 0.4;
         break;
       case 'buzzle':
-        // Turns into a flower that drifts down.
+        // Turns into a flower that drifts down, or into what the level's skin leaves in the flower's place.
         puff('fx_poof', f.x, f.y - 8, 0);
+        var swap = fxFor(f.kind, 'fx_flower');
+        if (swap !== 'fx_flower') {
+          mothStars(f, swap);
+          break;
+        }
         var fl = spriteParticle('fx_flower', f.x, f.y - 8, 0, 34, 0, 2.6, 4, 2);
         fl.sway = 6;
         fl.swayHz = 1.4;
@@ -680,11 +807,26 @@
         var s = spriteParticle('fx_star', f.x, f.y, 0, -20, 0, 0.35, 8, 2);
         s.z = 3;
         burst(WORLD, f.x, f.y, 6, 70, [WHITE, GOLD], 0, 0.25);
-        var rk = spriteParticle('pr_rock', f.x, f.y + 6, -rnd(70, 100), -rnd(180, 230), 650, 1.2, 20, 2);
+        var rk = spriteParticle(f.sprite, f.x, f.y + 6, -rnd(70, 100), -rnd(180, 230), 650, 1.2, 20, 2);
+        rk.remap = f.remap;
         rk.blinkOut = 0.3;
         rk.follow = true;
         s.follow = true;
         break;
+    }
+  }
+
+  // What a skinned buzzle leaves in place of the flower (LEVEL2 4.1: the glow-moth's four fx_star twinkles
+  // that drift down). Each is the sprite as it is, at its own frame rate, and is gone before it lands.
+  function mothStars(f, name) {
+    var inf = info(name);
+    for (var i = 0; i < 4; i++) {
+      var st = spriteParticle(name, f.x + (i - 1.5) * 7, f.y - 8 - (i % 2) * 6, 0, rnd(22, 38), 0, rnd(0.9, 1.3),
+        inf ? inf.fps : 8, inf ? inf.frames : 2);
+      st.delay = i * 3 * FRAME;
+      st.sway = 3;
+      st.swayHz = rnd(1.0, 1.6);
+      st.blinkOut = 0.3;
     }
   }
 
@@ -726,13 +868,22 @@
     });
   }
 
-  // A creature knocked away after it reached Pip (threat:hit, threat:bounce).
-  function knockAway(kind, dir) {
+  // The side a creature that reached Pip is knocked away to, from its threat:hit or threat:bounce payload
+  // and its entity (or null): back the way it came, -1 for the left and 1 for the right. A flit that has
+  // turned came from behind, though its dive ends on Pip's own x (LEVEL2 4.3). Sets heroTmp.
+  function awaySide(p, e) {
+    heroPos(heroTmp);
+    return (e && e.turned) || (isNum(p.x) && p.x < heroTmp.x - 2) ? -1 : 1;
+  }
+
+  // A creature knocked away after it reached Pip (threat:hit, threat:bounce). e: its entity, or null.
+  function knockAway(kind, e, dir) {
     var g = GHOST[kind];
     if (!g) return;
     heroPos(heroTmp);
     var box = boxOf(kind);
     var f = spriteParticle(g[0], heroTmp.x + dir * 6, heroTmp.y - 4, dir * rnd(90, 130), -rnd(150, 200), 600, 0.7);
+    dress(f, kind, e, g[0]);
     f.frame = g[1] === 'crack3' ? 'whole' : g[1];
     f.flip = kind === 'truffle';          // it keeps facing Pip as it is knocked back
     f.spin = 0.1;
@@ -867,30 +1018,22 @@
 
     'threat:hit': function (p) {
       // CONTRACT 4.17: the hit effect is drawn at Pip's position, not at the threat's.
-      heroPos(heroTmp);
-      var dir = isNum(p.x) && p.x < heroTmp.x - 2 ? -1 : 1;
-      knockAway(p.kind, dir);
+      var e = entityById(p.id);
+      knockAway(p.kind, e, awaySide(p, e));
     },
 
     'threat:bounce': function (p) {
-      heroPos(heroTmp);
-      var dir = isNum(p.x) && p.x < heroTmp.x - 2 ? -1 : 1;
+      var e = entityById(p.id);
+      var dir = awaySide(p, e);
       puff('fx_poof', heroTmp.x + dir * 8, heroTmp.y - 10, 0);
-      knockAway(p.kind, dir);
+      knockAway(p.kind, e, dir);
     },
 
     'threat:escape': function (p) {
       if (p.reason !== 'flee') return;
-      var s = gameState();
-      if (!s || !s.entities) return;
-      for (var i = 0; i < s.entities.length; i++) {
-        var e = s.entities[i];
-        if (e && e.id === p.id && isNum(e.x) && isNum(e.y)) {
-          var h = num(e.h, 16);
-          puff('fx_poof', e.x, Math.min(e.y, TG.C.GROUND_Y) - h / 2, 0);
-          return;
-        }
-      }
+      var e = entityById(p.id);
+      if (!e || !isNum(e.x) || !isNum(e.y)) return;
+      puff('fx_poof', e.x, Math.min(e.y, TG.C.GROUND_Y) - num(e.h, 16) / 2, 0);
     },
 
     'hazard:hit': function (p) {
@@ -1208,8 +1351,12 @@
     }
   }
 
+  // The splash of ink where the bolt lands. It stays with what the bolt hit: after a bolt that kept its
+  // place in the view (startClear, for a flit) the splash keeps it too.
   function boltArrived(f) {
+    followNew = f.follow;
     burst(WORLD, f.x1, f.y1, 6, 70, [AQUA, WHITE], 0, 0.2);
+    followNew = false;
   }
 
   // Letters burst upward in world or screen space, then fly to the SCORE counter in screen space.
@@ -1337,14 +1484,17 @@
     var C = TG.C;
     var sx = Math.floor(f.x - cx), sy = Math.floor(f.y);
     var tc = f.t - f.pre - WHITE_TIME;
+    // The creature's own sprite is f.sprite under f.remap, the look of its skin (dress). The mound of a
+    // Digby and the power icon of a crate are not skinned, as in TG.Render.
     if (tc < 0) {
       var white = f.t >= f.pre && !reduceFlash();
       if (f.kind === 'digby' && f.under) {
         sprite(ctx, 'en_mound', 'm0', sx, C.GROUND_Y, false, white ? 'white' : null);
       } else if (f.kind === 'digby') {
-        spriteClipped(ctx, f.sprite, f.frame, sx, sy, false, white ? 'white' : null, C.GROUND_Y);
+        spriteClipped(ctx, f.sprite, f.frame, sx, sy, false, white ? 'white' : f.remap, C.GROUND_Y);
       } else {
-        sprite(ctx, f.sprite, f.frame, sx, sy, f.flip, white ? 'white' : null);
+        if (f.kind === 'dangle') thread(ctx, Math.floor(f.x1 - cx), sx, sy - f.h);
+        sprite(ctx, f.sprite, f.frame, sx, sy, f.flip, white ? 'white' : f.remap);
         if (f.kind === 'crate' && f.power) sprite(ctx, 'pw_' + f.power, 0, sx, sy, false, white ? 'white' : null);
       }
       return;
@@ -1353,41 +1503,50 @@
     switch (f.kind) {
       case 'dawdle':
         spin = Math.floor(tc * 30) % 2 === 1;
-        sprite(ctx, 'en_dawdle', 'shell', sx, sy, spin, null);
+        sprite(ctx, f.sprite, 'shell', sx, sy, spin, f.remap);
         break;
       case 'hoppet':
         // Inflates: the puffed frame, wobbling.
-        sprite(ctx, 'en_hoppet', 'puff', sx + (Math.floor(tc * 40) % 2), sy, false, null);
+        sprite(ctx, f.sprite, 'puff', sx + (Math.floor(tc * 40) % 2), sy, false, f.remap);
         break;
       case 'buzzle':
         var a = tc * 16;
         var bxx = f.x0 + Math.sin(a) * 9;
         var byy = f.y0 - tc * 90 + Math.cos(a) * 3;
         f.x = bxx; f.y = byy;
-        sprite(ctx, 'en_buzzle', Math.floor(tc * 16) % 2, Math.floor(bxx - cx), Math.floor(byy), Math.cos(a) > 0, null);
+        sprite(ctx, f.sprite, Math.floor(tc * 16) % 2, Math.floor(bxx - cx), Math.floor(byy), Math.cos(a) > 0, f.remap);
         break;
       case 'swoop':
-        sprite(ctx, 'en_swoop', Math.floor(tc * 12) % 2, sx, sy, false, null);
+        sprite(ctx, f.sprite, Math.floor(tc * 12) % 2, sx, sy, false, f.remap);
         break;
       case 'truffle':
         var turned = tc >= 0.34;
         var fr = tc < 0.28 ? 0 : (tc < 0.4 ? 1 : Math.floor(tc * 16) % 4);
-        sprite(ctx, 'en_truffle', fr, sx, sy, !turned, null);
+        sprite(ctx, f.sprite, fr, sx, sy, !turned, f.remap);
         break;
       case 'digby':
         var start = f.under ? 0.1 : 0;
         if (f.under && tc < 0.1) {
           // Pops out of the mound first.
           var rise = Math.floor(16 * (1 - tc / 0.1));
-          spriteClipped(ctx, 'en_digby', 'up', sx, C.GROUND_Y + rise, false, null, C.GROUND_Y);
+          spriteClipped(ctx, f.sprite, 'up', sx, C.GROUND_Y + rise, false, f.remap, C.GROUND_Y);
           sprite(ctx, 'en_mound', 'm0', sx, C.GROUND_Y, false, null);
           break;
         }
         var sink = Math.floor(clamp((tc - start) / 0.3, 0, 1) * 16);
-        spriteClipped(ctx, 'en_digby', 'spin', sx, Math.min(sy, C.GROUND_Y) + sink, Math.floor(tc * 20) % 2 === 1, null, C.GROUND_Y);
+        spriteClipped(ctx, f.sprite, 'spin', sx, Math.min(sy, C.GROUND_Y) + sink, Math.floor(tc * 20) % 2 === 1, f.remap, C.GROUND_Y);
+        break;
+      case 'dangle':
+        // Drawn up on its thread, which shortens with it (LEVEL2 4.2).
+        thread(ctx, Math.floor(f.x1 - cx), sx, sy - f.h);
+        sprite(ctx, f.sprite, 'zip', sx, sy, false, f.remap);
+        break;
+      case 'flit':
+        // Wings folded, turned over and back as it tumbles.
+        sprite(ctx, f.sprite, 'dive', sx, sy, f.flip !== (Math.floor(tc * 15) % 2 === 1), f.remap);
         break;
       case 'rock':
-        sprite(ctx, 'pr_rock', Math.floor(tc * 20) % 2, sx, sy, false, null);
+        sprite(ctx, f.sprite, Math.floor(tc * 20) % 2, sx, sy, false, f.remap);
         break;
       case 'boulder':
       case 'crate':

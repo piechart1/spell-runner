@@ -1367,6 +1367,25 @@ Handed on from the art:
 | M5 | The two lines for `paleink` and its level-data key; the How To Play row for the watch, now that `pw_watch` is defined (13.8, M3); what holds during a freeze; `decor_hole`'s rope ends in mid-air because a decor is 32 px high and stands on the floor line |
 | M8 | CONTRACT 6.2's sentence on colour counts names only the Baron's colours |
 
+**M2, the creatures on screen: built on 2026-10-12.** `js/render.js` draws the Dangle (`hang0` and `hang1`, a 2 px sway on `animT`, and the 1 px SILVER thread from `PLAY_TOP`, not drawn while the anchor is beyond the right edge) and the Flit (`flap0` and `flap1`, the `dive` frame, `flipX` from `turned`, a 4 px flutter in the crossing on `animT`, and the Swoop's ground marker in the dive). `js/effects.js` has their clears (the zip up the thread with two twinkles; the fold and tumble with three) and draws a cleared creature with its skin: the tin frog and its pad under the frog's remap, the glow-moth with `fx_star` for the bee's flower, the cog as the rock. It finds the entity by the payload's id, so no payload gained a field. `test/sim.js` has the `skins` check (72 runs, 47 checks) and `new-kinds` is exact in the crossing. Level 1 is unchanged (2,097 frames and event logs identical, and every frame of six whole runs).
+
+Corrections to 4.3 and 4.5, as built: a Dangle beyond the right edge has the right tag from its spawn, which needed the order of two tests in `wanted()` changed (no Level 1 typable is ever in that position); both kinds are drawn in front of the pipe, lantern, tunnel and roof rims, because behind them a riser or column hides the bat's face for seconds; a crossing Flit's plate holds still, 4 px above the top of the flutter; a clear starts where the creature is drawn, and one that the clamp of CONTRACT 4.17 moves in from an edge is played at the clamped place, upright; a skin's `fx` swaps one effect sprite only, the bee's flower, and the `skins` check refuses any other.
+
+For the owner, none of it blocking:
+
+- The bat's word plate beside a crate. In Crystal Deep on Medium and Hard a crate can float beside a bat as it enters. The bat's word then flips above and below it for a fraction of a second, or sits under the bat for about 3 s with the crate's word above. It touches about one bat in eight on Medium and Hard and none on Easy; the word being typed never moves. The cause is the plate rule that Level 1 also uses (CONTRACT 5.13). The choices: leave it; change the shared rule so that a plate keeps its row until it is really blocked, which changes Level 1 frames and needs new reference frames; or move the crates. To settle with the legibility pass of M5.
+- The bat's turn hardly shows in the sprite, because its two flap frames are drawn front-on; the second warning sound and the dive frame carry it.
+- Still to judge in a browser once the level can be reached (M6): the 0.3 s zip, the 0.55 s tumble, the sway and the flutter in motion.
+
+Handed on from M2:
+
+| To | What |
+|---|---|
+| M4 | The Baronet's clear (helmet, monocle, a cog for the daisy) is a branch on the entity's own skin in `js/effects.js` (`clearEnd`, `digbyHelmet`), not a theme `fx` swap. `TG.Effects` finds the entity by the payload's id while it is marked dead and still in `state.entities`; a test that hands an entity to effects uses `removed(e, reason)` in `test/test-render.js`. The `event-names` assertion is exact: a new payload field fails every run unless CONTRACT 8 and `TG.Events.FIELDS` change with it |
+| M5 | The plate rule, if the owner agrees to change it (a trial is recorded in the M2 scratch notes: comparing at unrounded positions stops the flipping only). During a freeze the Flit's ground marker and whatever else runs on `state.time` keep moving |
+| M6 | No test draws a real Level 2 state yet: `test/test-render.js` spawns the two kinds into a Level 1 run. The whole drawn Level 2 run of 13.5 in `test/test-integration.js` is the first |
+| M8 | CONTRACT 4.17 (where a clear starts for a kind drawn away from its simulation place) and 5.13 (`wanted()`'s order) |
+
 ---
 
 ## 14. Decisions
