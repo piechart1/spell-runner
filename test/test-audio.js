@@ -56,9 +56,16 @@ const SFX_NAMES = [
   'clear_crunch', 'deflect', 'crate_break', 'streak', 'jump', 'land', 'slide', 'cue_jump', 'cue_duck',
   'ink_drop', 'power_get', 'shield_up', 'shield_break', 'slow_on', 'slow_off', 'watch_tick', 'watch_off',
   'ink_blast', 'one_up', 'hurt', 'fall', 'rescue', 'checkpoint', 'warn', 'urgent_tick', 'boss_rumble', 'boss_laugh',
-  'boss_telegraph', 'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat',
+  'boss_telegraph', 'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat', 'toot', 'click',
   'ui_move', 'ui_select', 'ui_back', 'pause', 'tally_tick', 'stamp', 'count_tick', 'start'
 ];
+// The boss sounds that Lady Ratchet has a variant of (LEVEL2 11.3), played with these options. The checks
+// that go through every sound effect go through these six as well.
+const RATCHET = { variant: 'ratchet' };
+const VARIANT_SOUNDS = ['boss_laugh', 'boss_telegraph', 'boss_throw', 'boss_stomp', 'boss_hit', 'boss_defeat'];
+// Every sound a check goes through: [name, options to add, label]. The 52 names and the six variants.
+const EVERY_SOUND = SFX_NAMES.map(function (name) { return [name, {}, name]; })
+  .concat(VARIANT_SOUNDS.map(function (name) { return [name, RATCHET, name + ' (ratchet)']; }));
 const TRACK_NAMES = ['title', 'level1', 'boss1', 'victory', 'results', 'gameover', 'jingle_ready', 'jingle_checkpoint',
   'level2', 'boss2', 'jingle_ready2'];
 const LOOPS = ['title', 'level1', 'boss1', 'results', 'level2', 'boss2'];
@@ -133,6 +140,41 @@ check('TG.Audio.TRACKS contains exactly the names of CONTRACT 7.2', function () 
   return same(names.slice().sort(), TRACK_NAMES.slice().sort()) && new Set(names).size === names.length;
 });
 
+// The rows of the first table under a heading of docs/CONTRACT.md whose first column is Name, as lists of
+// cells; null when the heading is not there.
+function contractTable(text, heading) {
+  const lines = text.split('\n');
+  const cells = function (line) { return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); };
+  let i = lines.findIndex(function (l) { return l.indexOf(heading) === 0; });
+  if (i === -1) return null;
+  while (i < lines.length && !(lines[i].trim().indexOf('|') === 0 && cells(lines[i])[0] === 'Name')) i++;
+  const rows = [];
+  for (i += 2; i < lines.length && lines[i].trim().indexOf('|') === 0; i++) rows.push(cells(lines[i]));
+  return rows;
+}
+
+// The table of CONTRACT 7.1 itself, read from the document: its names are TG.Audio.SFX, each once, in the
+// order of SFX_NAMES above, and every row says what plays the sound.
+(function () {
+  const title = 'doc: the table of CONTRACT 7.1 has the sound effects of TG.Audio.SFX, each once and in the code\'s order, and no row is empty';
+  let text;
+  try { text = require('fs').readFileSync(require('path').join(stubs.ROOT, 'docs', 'CONTRACT.md'), 'utf8'); } catch (e) { text = null; }
+  if (text === null) { console.log('skip - ' + title + ' (docs/CONTRACT.md is not present)'); return; }
+  check(title, function () {
+    const rows = contractTable(text, '### 7.1 Sound effects');
+    if (rows === null) return 'heading 7.1 not found';
+    const docNames = rows.map(function (r) { return r[0].replace(/`/g, ''); });
+    const env = stubs.load({ files: FILES });
+    const code = Array.prototype.slice.call(env.TG.Audio.SFX);
+    const missing = code.filter(function (n) { return docNames.indexOf(n) === -1; });
+    const extra = docNames.filter(function (n) { return code.indexOf(n) === -1; });
+    if (missing.length || extra.length) return 'the document lacks ' + (missing.join(' ') || 'nothing') + ' and has ' + (extra.join(' ') || 'nothing') + ' that the code has not';
+    if (!same(docNames, code) || !same(code, SFX_NAMES)) return 'the order of the document is ' + docNames.join(' ');
+    const empty = rows.filter(function (r) { return r.length !== 2 || !r[1]; });
+    return empty.length ? 'no "Plays on" for ' + empty.map(function (r) { return r[0]; }).join(', ') : true;
+  });
+})();
+
 // The table of CONTRACT 7.2 itself, read from the document: its names are TG.Audio.TRACKS, in the order of
 // TRACK_NAMES above, and its Kind column agrees with the lists LOOPS and ONCE that the checks below use.
 (function () {
@@ -141,13 +183,8 @@ check('TG.Audio.TRACKS contains exactly the names of CONTRACT 7.2', function () 
   try { text = require('fs').readFileSync(require('path').join(stubs.ROOT, 'docs', 'CONTRACT.md'), 'utf8'); } catch (e) { text = null; }
   if (text === null) { console.log('skip - ' + title + ' (docs/CONTRACT.md is not present)'); return; }
   check(title, function () {
-    const lines = text.split('\n');
-    const cells = function (line) { return line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); }); };
-    let i = lines.findIndex(function (l) { return l.indexOf('### 7.2 Music tracks and jingles') === 0; });
-    if (i === -1) return 'heading 7.2 not found';
-    while (i < lines.length && !(lines[i].trim().indexOf('|') === 0 && cells(lines[i])[0] === 'Name')) i++;
-    const rows = [];
-    for (i += 2; i < lines.length && lines[i].trim().indexOf('|') === 0; i++) rows.push(cells(lines[i]));
+    const rows = contractTable(text, '### 7.2 Music tracks and jingles');
+    if (rows === null) return 'heading 7.2 not found';
     const docNames = rows.map(function (r) { return r[0].replace(/`/g, ''); });
     const env = stubs.load({ files: FILES });
     const code = Array.prototype.slice.call(env.TG.Audio.TRACKS);
@@ -347,12 +384,12 @@ check('after unlock, sfx(name) for every name creates nodes, starts sources and 
 
 check('every sound effect envelope starts at zero, never jumps and ends at zero; exponential ramps never target zero', function () {
   const bad = [];
-  SFX_NAMES.forEach(function (name) {
+  EVERY_SOUND.forEach(function (sound) {
     const env = unlocked();
     const from = nodeCount(env);
-    env.TG.Audio.sfx(name, { step: 4, duration: 0.7 });
+    env.TG.Audio.sfx(sound[0], Object.assign({ step: 4, duration: 0.7 }, sound[1]));
     const problems = envelopeProblems(createdSince(env, from));
-    if (problems.length) bad.push(name + ': ' + problems[0]);
+    if (problems.length) bad.push(sound[2] + ': ' + problems[0]);
   });
   return bad.length ? bad.join('; ') : true;
 });
@@ -360,9 +397,10 @@ check('every sound effect envelope starts at zero, never jumps and ends at zero;
 check('every sound effect uses only the six voices of DESIGN 15.1 (P12, P25, P50, TRI, NZ-L, NZ-S)', function () {
   const env = unlocked();
   const bad = [];
-  SFX_NAMES.forEach(function (name) {
+  EVERY_SOUND.forEach(function (sound) {
+    const name = sound[2];
     const from = nodeCount(env);
-    env.TG.Audio.sfx(name, { step: 1 });
+    env.TG.Audio.sfx(sound[0], Object.assign({ step: 1 }, sound[1]));
     createdSince(env, from).forEach(function (n) {
       if (n.kind === 'oscillator') {
         const lfo = n.frequency.value <= 20 && !n.periodicWave;   // vibrato LFOs are not voices
@@ -936,9 +974,9 @@ check('the whole mix cannot clip: music, a jingle and three sound effect voices 
   if (!(R >= 10 && comp.attack.value <= 0.005)) return 'not set as a limiter: ratio ' + R + ', attack ' + comp.attack.value;
   let worstVoice = 0;
   let worstName = '';
-  SFX_NAMES.forEach(function (name) {
-    const p = sfxVoicePeak(env, name, { step: 9, duration: 1.5 });
-    if (p > worstVoice) { worstVoice = p; worstName = name; }
+  EVERY_SOUND.forEach(function (sound) {
+    const p = sfxVoicePeak(env, sound[0], Object.assign({ step: 9, duration: 1.5 }, sound[1]));
+    if (p > worstVoice) { worstVoice = p; worstName = sound[2]; }
   });
   const loops = LOOPS.map(function (n) { return trackPeak(I, n); });
   const once = ONCE.map(function (n) { return trackPeak(I, n); });
@@ -3330,6 +3368,441 @@ check('boss2 in phase 3: pulse 2 ticks on G4 and G5 instead of G3 and G4, and th
   if (after.p2 !== Number(hz(67)) + ' ' + Number(hz(79))) return 'pulse 2 in phase 3: ' + after.p2;
   if (!before.riff || !before.bass) return 'no riff or no bass';
   return (before.riff === after.riff && before.bass === after.bass) || 'the riff or the bass moved';
+});
+
+check('the music and the boss of js/levels/level2.js are the ones these checks play: its tracks, each section\'s music with the arena\'s phase3, and the boss kind ratchet; Level 1\'s boss is the baron and its arena names no phase3', function () {
+  const env = stubs.load({ files: FILES.concat(['js/levels/level1.js', 'js/levels/level2.js']) });
+  const one = env.TG.Levels[1], two = env.TG.Levels[2];
+  const bad = [];
+  if (!same(two.theme.music, L2_MUSIC)) bad.push('theme.music ' + JSON.stringify(two.theme.music));
+  two.sections.concat([two.arena]).forEach(function (sec, i) {
+    const want = L2_SECTIONS[i];
+    if (sec.name !== want.name || sec.stage !== want.stage || sec.palette !== want.palette || !same(sec.music, want.music)) {
+      bad.push('section ' + i + ': ' + JSON.stringify({ name: sec.name, stage: sec.stage, palette: sec.palette, music: sec.music }));
+    }
+  });
+  if (two.boss.kind !== 'ratchet') bad.push('the boss of Level 2 is ' + two.boss.kind);
+  if (one.boss.kind !== 'baron' || one.arena.music.phase3 !== undefined) bad.push('Level 1: boss ' + one.boss.kind + ', phase3 ' + JSON.stringify(one.arena.music.phase3));
+  return bad.length ? bad.join('; ') : true;
+});
+
+// =================================================================================================
+// Lady Ratchet's sounds (LEVEL2 10.4, 10.5, 10.7, 11.3)
+// =================================================================================================
+//
+// The simulation is not loaded here. TG.Audio reads whose fight it is from TG.Game.state.level.boss.kind
+// and the volley from TG.Game.state.boss.volley, so a stand-in TG.Game holds both, and the boss events are
+// emitted by hand as js/boss.js emits them.
+
+const G5 = 440 * Math.pow(2, 10 / 12), D5 = 440 * Math.pow(2, 5 / 12), C5 = 440 * Math.pow(2, 3 / 12), E5 = 440 * Math.pow(2, 7 / 12);
+const SFX_LEAD = 0.003;   // s, a sound effect starts this far ahead of the audio clock
+
+// A game in the arena. `kind` is the boss kind of the level data: undefined for a level with no boss
+// block, null for no level at all. `hits` of the `thrown` entries of the volley were typed.
+function arena(env, kind, hits, thrown) {
+  const toLaunch = [];
+  for (let i = 0; i < (thrown || 0); i++) toLaunch.push('rock');
+  env.TG.Game = { state: {
+    screen: 'boss', entities: [],
+    level: kind === null ? null : kind === undefined ? {} : { boss: { kind: kind } },
+    boss: { phase: 1, volley: { toLaunch: toLaunch, launched: toLaunch.length, sinceLaunch: 0, hits: hits || 0 } }
+  } };
+  return env;
+}
+
+// What the sources made since node `from` play, in the order they were made, with every time counted
+// from `t0`: the voice (p12, p25, p50, triangle, nz-l, nz-s), the pitch events (the frequency of an
+// oscillator, the rate of a noise) and the notes. A note runs from an envelope's start at zero to the
+// event before the next start: [at, length, peak].
+function shapeSince(env, from, t0) {
+  const g = env.TG.Audio._internals.graph();
+  const r = function (x) { return Math.round(x * 1e6) / 1e6; };
+  return createdSince(env, from).filter(function (n) { return n.kind === 'oscillator' || n.kind === 'bufferSource'; }).map(function (n) {
+    const voice = n.kind === 'bufferSource' ? (n.buffer === g.noise.short ? 'nz-s' : 'nz-l')
+      : n.periodicWave === g.waves.p12 ? 'p12' : n.periodicWave === g.waves.p25 ? 'p25' : n.periodicWave === g.waves.p50 ? 'p50' : n.type;
+    const pitch = (n.kind === 'oscillator' ? n.frequency : n.playbackRate).events.map(function (e) {
+      return [e.type.replace('ValueAtTime', '').replace('RampTo', ''), r(e.value), r(e.time - t0)];
+    });
+    const ev = n.connections[0].gain.events;
+    const notes = [];
+    ev.forEach(function (e, i) {
+      if (e.type === 'setValueAtTime' && e.value === 0) notes.push({ at: e.time, end: e.time, peak: 0 });
+      const note = notes[notes.length - 1];
+      note.end = e.time;
+      note.peak = Math.max(note.peak, e.value);
+      if (i === ev.length - 1 && e.value !== 0) note.peak = NaN;      // an envelope must end at zero
+    });
+    return { voice: voice, pitch: pitch, notes: notes.map(function (x) { return [r(x.at - t0), r(x.end - x.at), r(x.peak)]; }), events: ev };
+  });
+}
+
+// The shape of one sound played with TG.Audio.sfx in a fresh context, and the level of its voice.
+function shapeOf(name, opts) {
+  const env = unlocked();
+  const from = nodeCount(env);
+  env.TG.Audio.sfx(name, opts);
+  const nodes = createdSince(env, from);
+  const shape = shapeSince(env, from, SFX_LEAD);
+  const voice = voiceGainOf(nodes, env.TG.Audio._internals.levelOf(name));
+  return { shape: shape, text: JSON.stringify(shape.map(function (s) { return [s.voice, s.pitch, s.notes]; })), level: voice ? voice.gain.value : null };
+}
+
+// The low points of a tremolo between the first and the last event of an envelope: [times, values].
+function lows(events, t0) {
+  const times = [], values = [];
+  for (let i = 1; i < events.length - 1; i++) {
+    if (events[i].value < events[i - 1].value && events[i].value < events[i + 1].value) {
+      times.push(events[i].time - t0);
+      values.push(events[i].value);
+    }
+  }
+  return [times, values];
+}
+
+check('toot is a whistle: one P25 note held on G5 for 120 ms that falls to D5 over the next 80 ms with no break, over a 60 ms puff of long noise; click is 15 ms of P12 at 1200 Hz; both at the sound effect level', function () {
+  const toot = shapeOf('toot'), click = shapeOf('click');
+  const want = JSON.stringify([
+    ['p25', [['set', Math.round(G5 * 1e6) / 1e6, 0], ['set', Math.round(G5 * 1e6) / 1e6, 0.12], ['exponential', Math.round(D5 * 1e6) / 1e6, 0.2]], [[0, 0.2, 1]]],
+    ['nz-l', [['set', 1, 0]], [[0, 0.06, 0.5]]]
+  ]);
+  if (toot.text !== want) return 'toot is ' + toot.text;
+  // One attack and one release: the whistle does not dip between the held note and the fall.
+  const zeros = toot.shape[0].events.filter(function (e) { return e.value === 0; }).length;
+  if (zeros !== 2) return 'the whistle\'s envelope touches zero ' + zeros + ' times';
+  if (click.text !== JSON.stringify([['p12', [['set', 1200, 0]], [[0, 0.015, 1]]]])) return 'click is ' + click.text;
+  const last = click.shape[0].events[click.shape[0].events.length - 1];
+  if (last.type !== 'linearRampToValueAtTime' || click.shape[0].events.length !== 3) return 'click does not decay: ' + JSON.stringify(click.shape[0].events);
+  return (Math.abs(toot.level - 0.30) < 1e-9 && Math.abs(click.level - 0.30) < 1e-9) || 'levels ' + toot.level + ' and ' + click.level;
+});
+
+check('the ratchet variants of the six boss sounds are the recipes of LEVEL2 11.3: the cackle, the three clicks and the whirr for the telegraph time, the spring, the gear clunk, the blow with the tink and the clatter, the wind-down and the spring of the key', function () {
+  const bad = [];
+  const is = function (name, got, want) { if (got !== JSON.stringify(want)) bad.push(name + ' is ' + got); };
+  const r = function (x) { return Math.round(x * 1e6) / 1e6; };
+
+  // boss_laugh: P50 C5 D5 E5 D5 C5, 40 ms on and 30 ms off.
+  const notes = [C5, D5, E5, D5, C5];
+  is('boss_laugh', shapeOf('boss_laugh', RATCHET).text, [['p50',
+    notes.map(function (hz, i) { return ['set', r(hz), r(0.07 * i)]; }),
+    notes.map(function (hz, i) { return [r(0.07 * i), 0.04, 1]; })]]);
+
+  // boss_telegraph: three clicks 120 ms apart, each the sound `click`, then a P12 whirr at 440 Hz that
+  // pulses 20 times a second for the rest of the telegraph time. The level data's telegraphs are 1.4,
+  // 1.0 and 0.7 s and its double attack gaps 1.2 and 0.9 s (nominal; longer under a lower assist).
+  const click = shapeOf('click').shape[0];
+  [0.7, 0.9, 1.0, 1.2, 1.4, 2.0].forEach(function (seconds) {
+    const t = shapeOf('boss_telegraph', { variant: 'ratchet', duration: seconds });
+    const label = 'boss_telegraph for ' + seconds + ' s';
+    if (t.shape.length !== 2 || t.shape[0].voice !== 'p12' || t.shape[1].voice !== 'p12') { bad.push(label + ' is ' + t.text); return; }
+    const clicks = t.shape[0], whirr = t.shape[1];
+    if (JSON.stringify(clicks.notes) !== JSON.stringify([[0, 0.015, 1], [0.12, 0.015, 1], [0.24, 0.015, 1]]) ||
+        JSON.stringify(clicks.pitch) !== JSON.stringify([['set', 1200, 0], ['set', 1200, 0.12], ['set', 1200, 0.24]])) bad.push(label + ': clicks ' + JSON.stringify([clicks.pitch, clicks.notes]));
+    // Each click has the envelope of `click`, moved to its place.
+    const shapeAt = function (events, t0) { return JSON.stringify(events.map(function (e) { return [e.type, r(e.value), r(e.time - t0)]; })); };
+    for (let k = 0; k < 3; k++) {
+      if (shapeAt(clicks.events.slice(3 * k, 3 * k + 3), SFX_LEAD + 0.12 * k) !== shapeAt(click.events, SFX_LEAD)) bad.push(label + ': click ' + k + ' is not the sound click');
+    }
+    if (JSON.stringify(whirr.pitch) !== JSON.stringify([['set', 440, 0.36]]) || JSON.stringify(whirr.notes) !== JSON.stringify([[0.36, r(seconds - 0.36), 1]])) {
+      bad.push(label + ': whirr ' + JSON.stringify([whirr.pitch, whirr.notes]));
+    }
+    const low = lows(whirr.events, SFX_LEAD);
+    const gaps = low[0].slice(1).map(function (at, i) { return r(at - low[0][i]); });
+    if (low[0].length < 20 * (seconds - 0.36) - 2 || gaps.some(function (gap) { return gap !== 0.05; }) || low[1].some(function (v) { return v !== 0; })) {
+      bad.push(label + ': the whirr has ' + low[0].length + ' pulses, ' + JSON.stringify(gaps.slice(0, 3)) + ' apart, down to ' + low[1][0]);
+    }
+  });
+  // No duration: 1 s, as the Baron's.
+  const plain = shapeOf('boss_telegraph', RATCHET).shape[1];
+  if (!plain || JSON.stringify(plain.notes) !== JSON.stringify([[0.36, 0.64, 1]])) bad.push('boss_telegraph with no duration: the whirr is ' + (plain ? JSON.stringify(plain.notes) : 'missing'));
+
+  // boss_throw: a spring, P25 300 to 900 Hz over 80 ms.
+  is('boss_throw', shapeOf('boss_throw', RATCHET).text, [['p25', [['set', 300, 0], ['exponential', 900, 0.08]], [[0, 0.08, 1]]]]);
+
+  // boss_stomp: a gear clunk, 80 ms of long noise at a low rate and a 60 ms triangle at 90 Hz.
+  is('boss_stomp', shapeOf('boss_stomp', RATCHET).text, [['nz-l', [['set', 0.15, 0]], [[0, 0.08, 1]]], ['triangle', [['set', 90, 0]], [[0, 0.06, 1]]]]);
+
+  // boss_hit: 100 ms of long noise, then a glass tink (P12 2093 Hz, 200 ms, an exponential decay) over a
+  // gear clatter (120 ms of short noise that steps down).
+  const hit = shapeOf('boss_hit', RATCHET);
+  is('boss_hit', hit.text, [
+    ['nz-l', [['set', 0.5, 0]], [[0, 0.1, 1]]],
+    ['p12', [['set', 2093, 0.1]], [[0.1, 0.2, 0.7]]],
+    ['nz-s', [['set', 1, 0.1], ['set', 0.7, 0.14], ['set', 0.5, 0.18]], [[0.1, 0.12, 0.5]]]
+  ]);
+  if (hit.shape[1] && !hit.shape[1].events.some(function (e) { return e.type === 'exponentialRampToValueAtTime'; })) bad.push('the tink of boss_hit does not ring out');
+
+  // boss_defeat: a P50 whirr winding down from 600 to 60 Hz over 1.2 s with a 10 Hz tremolo, then SPROING,
+  // P25 200 to 1600 Hz over 120 ms.
+  const defeat = shapeOf('boss_defeat', RATCHET);
+  is('boss_defeat', defeat.text, [
+    ['p50', [['set', 600, 0], ['exponential', 60, 1.2]], [[0, 1.2, 1]]],
+    ['p25', [['set', 200, 1.2], ['exponential', 1600, 1.32]], [[1.2, 0.12, 1]]]
+  ]);
+  if (defeat.shape[0]) {
+    const low = lows(defeat.shape[0].events, SFX_LEAD);
+    const gaps = low[0].slice(1).map(function (at, i) { return r(at - low[0][i]); });
+    if (low[0].length < 10 || gaps.some(function (gap) { return gap !== 0.1; }) || low[1].some(function (v) { return !(v > 0 && v < 1); })) {
+      bad.push('the tremolo of boss_defeat: ' + low[0].length + ' lows ' + JSON.stringify(gaps.slice(0, 3)) + ' apart, down to ' + low[1][0]);
+    }
+  }
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('each ratchet variant is another sound than the Baron\'s at the same level; the Baron\'s is what plays with no variant, with his kind, with a kind that has no variants and for a sound that has none', function () {
+  const bad = [];
+  VARIANT_SOUNDS.forEach(function (name) {
+    const baron = shapeOf(name, {}), hers = shapeOf(name, RATCHET);
+    if (hers.text === baron.text) bad.push(name + ': the ratchet variant is the Baron\'s');
+    if (hers.level !== baron.level || Math.abs(hers.level - 0.30) > 1e-9) bad.push(name + ' plays at ' + hers.level + ', the Baron\'s at ' + baron.level);
+    ['baron', 'mole', 'toString', '__proto__', 7, null].forEach(function (variant) {
+      if (shapeOf(name, { variant: variant }).text !== baron.text) bad.push(name + ' with variant ' + String(variant) + ' is not the Baron\'s');
+    });
+  });
+  // The boss sounds with no variant, and a sound that is not a boss's.
+  ['boss_rumble', 'boss_weak', 'boss_stun', 'jump'].forEach(function (name) {
+    if (shapeOf(name, RATCHET).text !== shapeOf(name, {}).text) bad.push(name + ' has a ratchet variant');
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+// The boss events that play one of the six sounds: [event, payload, sound, the options it is played with].
+const BOSS_EVENTS = [
+  ['attack:spawn', { id: 40, kind: 'shock', action: 'jump' }, 'boss_stomp', {}],
+  ['boss:attack', { kind: 'shock', telegraph: 0.7 }, 'boss_telegraph', { duration: 0.7 }],
+  ['boss:attack', { kind: 'pick', telegraph: 1.2 }, 'boss_telegraph', { duration: 1.2 }],
+  ['boss:throw', { kind: 'rock', x: 0, y: 0 }, 'boss_throw', {}],
+  ['boss:throw', { kind: 'pick', x: 0, y: 0 }, 'boss_throw', {}],
+  ['boss:weakopen', { id: 1, word: 'escapement', window: 4 }, 'boss_laugh', {}],
+  ['boss:weakclose', { completed: false }, 'boss_laugh', {}],
+  ['boss:hit', { health: 5, maxHealth: 6, phase: 1, x: 0, y: 0 }, 'boss_hit', {}],
+  ['boss:defeat', { x: 0, y: 0 }, 'boss_defeat', {}]
+];
+
+check('in a level whose boss kind is ratchet the boss events play her variants; with the kind baron, with no kind, no level or no game they play the Baron\'s, note for note as before', function () {
+  const bad = [];
+  // [what TG.Game is, the variant expected]
+  const games = [
+    ['kind ratchet', function (env) { arena(env, 'ratchet', 0, 2); }, RATCHET],
+    ['kind baron', function (env) { arena(env, 'baron', 0, 2); }, {}],
+    ['a kind with no variants', function (env) { arena(env, 'mole', 0, 2); }, {}],
+    ['a level with no boss block', function (env) { arena(env, undefined, 0, 2); }, {}],
+    ['no level', function (env) { arena(env, null, 0, 2); }, {}],
+    ['a game with no state', function (env) { env.TG.Game = {}; }, {}],
+    ['no game', function () {}, {}]
+  ];
+  games.forEach(function (game) {
+    BOSS_EVENTS.forEach(function (row) {
+      const env = unlocked();
+      game[1](env);
+      const from = nodeCount(env);
+      emit(env, row[0], row[1]);
+      const got = JSON.stringify(shapeSince(env, from, SFX_LEAD).map(function (s) { return [s.voice, s.pitch, s.notes]; }));
+      const want = shapeOf(row[2], Object.assign({}, row[3], game[2])).text;
+      if (got !== want) bad.push(game[0] + ', ' + row[0] + ' ' + JSON.stringify(row[1]) + ': ' + got.slice(0, 120));
+      if (env.warnings.length || env.errors.length) bad.push(game[0] + ', ' + row[0] + ' wrote to the console: ' + env.warnings.concat(env.errors)[0]);
+    });
+  });
+  return bad.length ? bad.length + ' differ: ' + bad.slice(0, 4).join('; ') : true;
+});
+
+check('the gauge\'s whistle: on boss:weakopen after a volley whose every entry was typed, toot plays 0.3 s after her laugh and boss_weak does not; after a volley with a miss, with nothing thrown, and in the Baron\'s fight, boss_weak plays as before', function () {
+  // [boss kind, entries typed, entries thrown, the sound 0.3 s after the laugh]
+  const cases = [
+    ['ratchet', 2, 2, 'toot'],
+    ['ratchet', 5, 5, 'toot'],
+    ['ratchet', 3, 2, 'toot'],            // the rule of openWeakPoint in js/boss.js is hits >= length
+    ['ratchet', 1, 2, 'boss_weak'],
+    ['ratchet', 0, 3, 'boss_weak'],
+    ['ratchet', 0, 0, 'boss_weak'],       // and length > 0
+    ['baron', 2, 2, 'boss_weak'],         // Level 1 has the same window rule and no gauge
+    ['baron', 1, 2, 'boss_weak'],
+    [undefined, 2, 2, 'boss_weak']
+  ];
+  const bad = [];
+  cases.forEach(function (c) {
+    const env = arena(unlocked(), c[0], c[1], c[2]);
+    const I = env.TG.Audio._internals;
+    const label = String(c[0]) + ' ' + c[1] + '/' + c[2];
+    const t0 = env.audio.contexts[0].currentTime;
+    emit(env, 'boss:weakopen', { id: 1, word: 'escapement', window: 4 });
+    if (!same(Array.prototype.slice.call(I.sfxLog), ['boss_laugh'])) bad.push(label + ' at once: ' + I.sfxLog.join(','));
+    const from = nodeCount(env);
+    run(env, 60);
+    if (!same(Array.prototype.slice.call(I.sfxLog), ['boss_laugh', c[3]])) bad.push(label + ': ' + I.sfxLog.join(','));
+    const want = shapeOf(c[3], {}).text;
+    const got = JSON.stringify(shapeSince(env, from, t0 + 0.3).map(function (s) { return [s.voice, s.pitch, s.notes]; }));
+    if (got !== want) bad.push(label + ': 0.3 s after the laugh ' + got.slice(0, 100));
+  });
+  // A boss with no volley yet, and a state with no boss: boss_weak, and nothing thrown or logged.
+  [function (s) { s.boss.volley = null; }, function (s) { s.boss = null; }].forEach(function (change, i) {
+    const env = arena(unlocked(), 'ratchet', 2, 2);
+    change(env.TG.Game.state);
+    emit(env, 'boss:weakopen', { id: 1, word: 'escapement', window: 4 });
+    run(env, 60);
+    if (!same(Array.prototype.slice.call(env.TG.Audio._internals.sfxLog), ['boss_laugh', 'boss_weak']) || env.errors.length || env.warnings.length) {
+      bad.push('guard ' + i + ': ' + env.TG.Audio._internals.sfxLog.join(',') + ' ' + env.errors.concat(env.warnings).join(';'));
+    }
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('each letter of Lady Ratchet\'s finisher word plays click, before the letter\'s own sound: the first, the ones between and the last; no other word clicks, and the Baron\'s finisher does not', function () {
+  const hit = function (kind, index, length) {
+    return { target: {}, id: 1, kind: kind, ch: 'a', index: index, length: length, complete: index === length - 1, x: 0, y: 0 };
+  };
+  // [boss kind, payload, the sounds]
+  const cases = [
+    ['ratchet', hit('finisher', 0, 12), ['click']],
+    ['ratchet', hit('finisher', 5, 12), ['click', 'key_ok']],
+    ['ratchet', hit('finisher', 11, 12), ['click', 'word_clear']],
+    ['ratchet', hit('core', 5, 10), ['key_ok']],
+    ['ratchet', hit('core', 9, 10), ['word_clear']],
+    ['ratchet', hit('rock', 3, 6), ['key_ok']],
+    ['ratchet', hit('digby', 0, 6), []],
+    ['baron', hit('finisher', 0, 12), []],
+    ['baron', hit('finisher', 5, 12), ['key_ok']],
+    ['baron', hit('finisher', 11, 12), ['word_clear']],
+    [null, hit('finisher', 5, 12), ['key_ok']]
+  ];
+  const bad = [];
+  cases.forEach(function (c) {
+    const env = arena(unlocked(), c[0], 0, 0);
+    const I = env.TG.Audio._internals;
+    emit(env, 'type:hit', c[1]);
+    if (!same(Array.prototype.slice.call(I.sfxLog), c[2])) bad.push(String(c[0]) + ' ' + c[1].kind + ' letter ' + c[1].index + ': ' + (I.sfxLog.join(',') || 'nothing'));
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('click has the takeover priority of the sounds that repeat all the time: it is not played over three rewards, and the letter\'s key_ok takes its voice when the other two are busy', function () {
+  const env = arena(unlocked(), 'ratchet', 0, 0);
+  const I = env.TG.Audio._internals;
+  const a = playVoice(env, 'one_up'), b = playVoice(env, 'streak'), c = playVoice(env, 'checkpoint');
+  if (!a || !b || !c) return 'voice gains not found';
+  I.sfxLog.length = 0;
+  env.TG.Audio.sfx('click');
+  if (I.sfxLog.length || fadedToZero(a) || fadedToZero(b) || fadedToZero(c)) return 'click played over three rewards';
+  // The finisher's own sound (boss_stun) and one more hold two voices: click takes the third and key_ok,
+  // asked for after it in the same step, takes that voice from it. The typing sound is the one heard.
+  const env2 = arena(unlocked(), 'ratchet', 0, 0);
+  const I2 = env2.TG.Audio._internals;
+  const stun = playVoice(env2, 'boss_stun'), rumble = playVoice(env2, 'boss_rumble');
+  I2.sfxLog.length = 0;
+  const from = nodeCount(env2);
+  emit(env2, 'type:hit', { target: {}, id: 1, kind: 'finisher', ch: 'a', index: 3, length: 12, complete: false, x: 0, y: 0 });
+  if (!same(Array.prototype.slice.call(I2.sfxLog), ['click', 'key_ok'])) return 'the letter played ' + I2.sfxLog.join(',');
+  // A voice that was taken over: a gain made at the sound effect level and then faded from it to zero.
+  const faded = createdSince(env2, from).filter(function (n) {
+    return n.kind === 'gain' && fadedToZero(n) && n.gain.events[0].type === 'setValueAtTime' && Math.abs(n.gain.events[0].value - 0.30) < 1e-9;
+  });
+  if (faded.length !== 1) return faded.length + ' voices made by the letter were taken over, 1 expected (click\'s)';
+  return (fadedToZero(stun) === 0 && fadedToZero(rumble) === 0) || 'key_ok took the voice of a boss sound';
+});
+
+// The boss intro as js/game.js and js/boss.js run it: one frame of 1/60 s moves boss.stateT on by as much.
+function introFrames(env, frames) {
+  const boss = env.TG.Game.state.boss;
+  for (let i = 0; i < frames; i++) {
+    boss.stateT += 1 / 60;
+    run(env, 1);
+  }
+}
+
+// A game in the boss intro of `seconds`, at its start.
+function intro(env, kind, seconds) {
+  arena(env, kind, 0, 0);
+  const s = env.TG.Game.state;
+  s.screen = 'bossIntro';
+  Object.assign(s.boss, { state: 'intro', stateT: 0, introTime: seconds });
+  return env;
+}
+
+check('in Lady Ratchet\'s long intro her key clicks three times, at 0.55, 0.6 and 0.65 of the intro (2.2, 2.4 and 2.6 s of its 4); a pause adds none; the short intro after a continue, the Baron\'s intro and the fight have none; the next long intro has three again', function () {
+  const bad = [];
+  const env = intro(unlocked(), 'ratchet', 4);
+  const I = env.TG.Audio._internals;
+  if (!same(Array.prototype.slice.call(I.INTRO_CLICKS), [0.55, 0.6, 0.65])) return 'the clicks are at ' + JSON.stringify(I.INTRO_CLICKS);
+  const t0 = env.audio.contexts[0].currentTime;
+  const from = nodeCount(env);
+  introFrames(env, 135);                     // 2.25 s: past the first click
+  if (played(env, 'click') !== 1) bad.push(played(env, 'click') + ' clicks by 2.25 s');
+  // The pause screen: the simulation stands still and so does boss.stateT.
+  env.TG.Game.state.screen = 'paused';
+  run(env, 90);
+  env.TG.Game.state.screen = 'bossIntro';
+  if (played(env, 'click') !== 1) bad.push('a click on the pause screen');
+  introFrames(env, 105);                     // to the end of the 4 s
+  if (!same(Array.prototype.slice.call(I.sfxLog), ['click', 'click', 'click'])) bad.push('the intro played ' + (I.sfxLog.join(',') || 'nothing'));
+  // Each on the frame the intro passes its mark, 132, 144 and 156 frames in (or the frame after: sixty
+  // sixtieths do not add up to exactly 1), with the 1.5 s of the pause before the second and the third
+  // and the 3 ms lead of every sound effect.
+  const starts = createdSince(env, from).filter(function (n) { return n.kind === 'oscillator'; }).map(function (n) { return n.startTime - t0 - SFX_LEAD; });
+  [132 / 60, 144 / 60 + 1.5, 156 / 60 + 1.5].forEach(function (at, k) {
+    if (!(starts[k] > at - 1e-6 && starts[k] < at + 1 / 60 + 1e-6)) bad.push('click ' + k + ' at ' + (starts[k] === undefined ? 'no time' : starts[k].toFixed(4)) + ' s, expected ' + at.toFixed(4));
+  });
+  // The fight that follows: none, wherever boss.stateT stands.
+  Object.assign(env.TG.Game.state, { screen: 'boss' });
+  Object.assign(env.TG.Game.state.boss, { state: 'volley', stateT: 0 });
+  introFrames(env, 240);
+  if (played(env, 'click') !== 3) bad.push('a click in the fight');
+  // A continue: the short intro has no gesture.
+  Object.assign(env.TG.Game.state, { screen: 'bossIntro' });
+  Object.assign(env.TG.Game.state.boss, { state: 'intro', stateT: 0, introTime: env.TG.C.BOSS_INTRO_SHORT });
+  introFrames(env, 90);
+  if (played(env, 'click') !== 3) bad.push('a click in the short intro');
+  // The next run's long intro: three more.
+  Object.assign(env.TG.Game.state.boss, { state: 'intro', stateT: 0, introTime: env.TG.C.BOSS_INTRO_TIME });
+  introFrames(env, 240);
+  if (played(env, 'click') !== 6) bad.push(played(env, 'click') + ' clicks after a second long intro, 6 expected');
+  // The Baron's intro, and an intro with no game behind it.
+  [['baron', 4], [undefined, 4], [null, 4]].forEach(function (c) {
+    const other = intro(unlocked(), c[0], c[1]);
+    introFrames(other, 240);
+    if (other.TG.Audio._internals.sfxLog.length) bad.push('the intro of ' + String(c[0]) + ' played ' + other.TG.Audio._internals.sfxLog.join(','));
+  });
+  if (env.warnings.length || env.errors.length) bad.push('console: ' + env.warnings.concat(env.errors)[0]);
+  return bad.length ? bad.join('; ') : true;
+});
+
+// The three moments are written twice: in js/audio.js, which plays the clicks, and in js/render.js, which
+// steps her key at them (LEVEL2 10.1). Neither file loads the other, so this reads the list from the
+// source of js/render.js. If the gesture's timing changes there, change INTRO_CLICKS in js/audio.js with it.
+(function () {
+  const title = 'the clicks of Lady Ratchet\'s intro are at the moments js/render.js steps her key: INTRO_CLICKS is the same list in both files';
+  let text;
+  try { text = require('fs').readFileSync(require('path').join(stubs.ROOT, 'js', 'render.js'), 'utf8'); } catch (e) { text = null; }
+  if (text === null) { console.log('skip - ' + title + ' (js/render.js is not present)'); return; }
+  check(title, function () {
+    const m = /\bvar INTRO_CLICKS = \[([^\]]*)\]/.exec(text);
+    if (!m) return 'js/render.js has no "var INTRO_CLICKS = [...]": the clicks of js/audio.js have nothing to follow';
+    const drawn = m[1].split(',').map(function (x) { return Number(x.trim()); });
+    const env = stubs.load({ files: FILES });
+    const heard = Array.prototype.slice.call(env.TG.Audio._internals.INTRO_CLICKS);
+    return same(drawn, heard) || 'js/render.js steps the key at ' + JSON.stringify(drawn) + ' and js/audio.js clicks at ' + JSON.stringify(heard);
+  });
+})();
+
+check('boss:defeat starts the victory fanfare when the defeat sound ends: 1.22 s after the Baron\'s and 1.82 s after Lady Ratchet\'s, and after the same wait with sound effects off', function () {
+  const bad = [];
+  // [boss kind, sound effects on, seconds from boss:defeat to the fanfare]
+  [['baron', true, 1.22 + SFX_LEAD], ['ratchet', true, 1.82 + SFX_LEAD], ['baron', false, 1.22], ['ratchet', false, 1.82], [null, true, 1.22 + SFX_LEAD]].forEach(function (c) {
+    const env = arena(unlocked(), c[0], 0, 0);
+    const I = env.TG.Audio._internals;
+    run(env, 30);
+    env.TG.Audio.setEnabled('sfx', c[1]);
+    const t0 = env.audio.contexts[0].currentTime;
+    const from = nodeCount(env);
+    emit(env, 'boss:defeat', { x: 0, y: 0 });
+    const s = I.sequencer('loop');
+    const label = String(c[0]) + (c[1] ? '' : ' with sound effects off');
+    if (s.name !== 'victory' || !s.playing || Math.abs(s.nextTime - t0 - c[2]) > 1e-6) bad.push(label + ': victory at +' + (s.nextTime - t0).toFixed(4) + ' s');
+    if (!c[1] && createdSince(env, from).some(function (n) { return n.kind === 'oscillator' || n.kind === 'bufferSource'; })) bad.push(label + ': a sound was played');
+    // The fanfare's first note is at that moment and not before.
+    run(env, 60 * 3);
+    const first = Math.min.apply(null, musicNotes(env, createdSince(env, from)).map(function (n) { return n.startTime; }));
+    if (Math.abs(first - t0 - c[2]) > 1e-6) bad.push(label + ': the first note of the fanfare at +' + (first - t0).toFixed(4) + ' s');
+  });
+  return bad.length ? bad.join('; ') : true;
 });
 
 // =================================================================================================

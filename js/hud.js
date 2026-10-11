@@ -598,25 +598,32 @@
 
   // Speech plate during the boss intro (CONTRACT 4.18): INK with a WHITE border, centred at x 192,
   // top at y 40, text at 1x, from the second half of the intro. The text appears letter by letter, at 30
-  // letters a second, or faster when the line would not be whole before the intro ends at that rate
-  // (LEVEL2 10.1: the short intro after a continue leaves 0.75 s). The faster rate spreads the line and
-  // two letters more over the half intro, and not the line alone as 10.1 writes it: the last frame of the
-  // intro is drawn one step before its end, and the line has to be whole on it. Two letters are enough
-  // for the widest line the screen holds (47), which is typed at just over one letter a step in 0.75 s.
-  // Level 1's 20 letters keep 30 a second on both of its intros.
+  // letters a second. A line that would not be whole before the intro ends at that rate (LEVEL2 10.1: the
+  // short intro after a continue leaves 0.75 s, and Lady Ratchet's line has 27 letters) is typed over the
+  // first half of the time it has and stands whole for the other half. The test for "would not be whole"
+  // counts two letters more than the line: the last frame of the intro is drawn one step before its end,
+  // and the line has to be whole on it. Level 1's 20 letters keep 30 a second on both of its intros.
+  // The clock. A pause starts screenT again from 0 while the intro goes on from where it was (js/game.js).
+  // The Baron's plate is timed by screenT, as Level 1 was released: after a pause in his intro his line
+  // comes late, is cut short or does not come back. Any other boss's plate is timed by the boss's own intro
+  // clock, as Lady Ratchet's intro is drawn, and a pause leaves her line where it was. Giving the Baron
+  // that clock too is a change to one line here; it changes Level 1's picture after such a pause, and
+  // waits for the owner's word.
   function drawSpeech(c, state) {
     if (state.screen !== 'bossIntro' || !state.boss) return;
-    var speech = state.level && state.level.boss && state.level.boss.speech ? String(state.level.boss.speech) : '';
+    var data = state.level ? state.level.boss : null;
+    var speech = data && data.speech ? String(data.speech) : '';
     if (!speech) return;
     var intro = num(state.boss.introTime, num(TG.C.BOSS_INTRO_TIME, 4));
-    var since = num(state.screenT, 0) - intro / 2;
+    var baron = !data.kind || data.kind === 'baron';
+    var since = num(baron ? state.screenT : state.boss.stateT, 0) - intro / 2;
     if (since < 0) return;
     var n = speech.length;
     var w = 8 * n + 5, h = 13;
     var x = Math.floor(TG.C.W / 2 - w / 2), y = 40;
     rect(c, x, y, w, h, WHITE);
     rect(c, x + 1, y + 1, w - 2, h - 2, INK);
-    var rate = intro > 0 ? Math.max(30, (n + 2) / (intro / 2)) : 30;
+    var rate = intro > 0 && (n + 2) / 30 > intro / 2 ? n / (intro / 4) : 30;
     var shown = clamp(Math.floor(since * rate), 0, n);
     text(c, speech.slice(0, shown), x + 3, y + 3, WHITE);
   }

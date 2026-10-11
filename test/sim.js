@@ -184,7 +184,8 @@ function loadEnv(files) {
 //                  emitted in an earlier step and at least that telegraph span earlier on the world
 //                  clock (config.boss.telegraph for the first attack of a round, doubleGap for the second)
 //   weak-window    every weak-point window is exposeFactor x the base budget of its word, plus
-//                  exposeBonus when every entry of the volley was typed (world seconds, via boss.windowWs)
+//                  exposeBonus when every entry of the volley was typed (world seconds, via boss.windowWs);
+//                  boss.volley.hits and toLaunch then hold that count (the gauge of LEVEL2 10.4 reads them)
 // Added for the Pocket Watch (LEVEL2 6.3). The `watch-freeze` check follows the whole rule on a test level;
 // this asserts three parts of it in every run of the matrix that types a watch crate:
 //   watch          on a step that starts with a watch running, the world clock does not move, no threat or
@@ -459,6 +460,12 @@ class Checker {
         this.fail('weak-window', '"' + p.word + '" window ' + fmt(s.boss.windowWs, 3) + ' ws, expected ' + fmt(want, 3) + ' (volley ' + this.volleyHits + '/' + this.volleySize + ' typed)');
       }
       if (len < b.coreLen[0] || len > b.coreLen[1]) this.fail('weak-window', '"' + p.word + '" is not ' + b.coreLen.join('-') + ' letters');
+      // The gauge (LEVEL2 10.4): Lady Ratchet's needle and her whistle read boss.volley, so at this moment it
+      // holds the count the window was set from.
+      const v = s.boss.volley;
+      if (v.hits !== this.volleyHits || v.toLaunch.length !== this.volleySize) {
+        this.fail('weak-window', 'boss.volley has ' + v.hits + ' of ' + v.toLaunch.length + ' typed at boss:weakopen, ' + this.volleyHits + ' of ' + this.volleySize + ' were');
+      }
     }
   }
 
@@ -3262,12 +3269,17 @@ CHECKS['targets'] = function (ctx) {
 // Whose fight it is comes from BOSS_EXPECTED for the level: the boss kind, the health and the minion on
 // each difficulty, and the sprite every minion carries (LEVEL2 13.5 for Level 2: kind `ratchet`, health
 // 3 / 6 / 7, the minion on every difficulty with skin en_baronet). The round machine is the same code for
-// every boss (LEVEL2 10.5), so the rest of the trace is the same for every level.
+// every boss (LEVEL2 10.5), so the rest of the trace is the same for every level: the states from intro to
+// defeated, the lamp or the lenses RED from phase 2 and not before, each entry thrown as the threat of
+// ENTRY_SPAWN, every kind of entry and both attacks seen in the fight, and the finisher's quarter speed
+// measured on the time scale and on the world clock.
 const BOSS_NEXT = {
   intro: ['volley'], volley: ['telegraph'], telegraph: ['attack'], attack: ['taunt'],
   taunt: ['recoil', 'laugh'], recoil: ['volley', 'transition', 'finisher'], laugh: ['volley'],
   transition: ['volley', 'transition'], finisher: ['defeated'], defeated: []
 };
+// What each entry of a volley is thrown as: the kind and the side of its threat:spawn (CONTRACT 5.7).
+const ENTRY_SPAWN = { rock: 'rock:right', rockhigh: 'rock:above', minion: 'digby:below' };
 
 function expectedVolley(cfg, phase) {
   const n = cfg.boss.rocks[phase - 1];
@@ -3289,7 +3301,7 @@ function traceBossFight(levelId, difficulty, profile, seed) {
     const phases = [];
     const minionSkins = [];
     let round = null;
-    let prevState = null;
+    let prevState = null, firstState = null;
     let lastLaunch = null;
     let defeats = 0, clears = 0, finisherWord = null, arenaAt = null;
     if (b.health !== expected.health[difficulty] || b.minion !== expected.minion[difficulty]) {
@@ -3300,11 +3312,15 @@ function traceBossFight(levelId, difficulty, profile, seed) {
       if (name === 'boss:enter') arenaAt = s.time;
       if (!s.boss) return;
       if (name === 'threat:spawn' && p.kind === 'digby') minionSkins.push('skin' in p.entity ? p.entity.skin : null);
+      if (name === 'threat:spawn' && round) round.spawned.push(p.kind + ':' + p.from);
       if (name === 'boss:state') {
         if (prevState && BOSS_NEXT[prevState].indexOf(p.state) === -1) errs.push('state ' + prevState + ' -> ' + p.state);
+        if (firstState === null) firstState = p.state;
         prevState = p.state;
+        // The lamp (CONTRACT 5.7), and her lenses (LEVEL2 10.7): RED from phase 2, and not in phase 1.
+        if (s.boss.lampRed !== (s.boss.phase >= 2)) errs.push('lampRed is ' + s.boss.lampRed + ' in phase ' + s.boss.phase + ', at ' + p.state);
         if (p.state === 'volley') {
-          round = { phase: p.phase, volley: [], attacks: [] };
+          round = { phase: p.phase, volley: [], attacks: [], spawned: [] };
           rounds.push(round);
           lastLaunch = null;
         }
@@ -3337,6 +3353,10 @@ function traceBossFight(levelId, difficulty, profile, seed) {
       }
     });
     let riseStart = null, riseEnd = null;
+    // The finisher at 25% (DESIGN 11.6; LEVEL2 10.7). fightScale: the time scale of the last step before the
+    // finisher; slow: the steps of the finisher after the one that entered it, whose world step was
+    // already taken at the fight's scale; offScale: the first such step that is not a quarter of it.
+    let fightScale = null, worldBefore = null, slow = 0, offScale = null;
     while (session.tick()) {
       const s = TG.Game.state;
       if (!s.boss) continue;
@@ -3345,7 +3365,17 @@ function traceBossFight(levelId, difficulty, profile, seed) {
       if (s.boss.state === 'finisher' && s.screen === 'boss') {
         if (s.entities.some((e) => !e.dead)) errs.push('something is live during the finisher');
         if (s.finisherScale !== C.FINISHER_SCALE) errs.push('finisherScale ' + s.finisherScale + ' during the finisher');
+        if (worldBefore !== null) {
+          slow++;
+          const moved = s.worldTime - worldBefore;
+          if (offScale === null && (Math.abs(s.timeScale - 0.25 * fightScale) > 1e-9 || Math.abs(moved - 0.25 * fightScale * C.DT) > 1e-9)) {
+            offScale = 'time scale ' + fmt(s.timeScale, 4) + ' and a world step of ' + fmt(moved / C.DT, 4) + ' x DT in the finisher, a quarter of ' + fmt(fightScale, 4) + ' expected';
+          }
+        }
+      } else if (s.screen === 'boss') {
+        fightScale = s.timeScale;
       }
+      worldBefore = s.boss.state === 'finisher' && s.screen === 'boss' ? s.worldTime : null;
       if (s.screen === 'levelComplete') {
         if (riseStart === null) riseStart = s.boss.rise;
         riseEnd = s.boss.rise;
@@ -3355,11 +3385,18 @@ function traceBossFight(levelId, difficulty, profile, seed) {
     const s = TG.Game.state;
     if (session.report.error) errs.push(session.report.error);
 
+    // The states from the intro to the defeat.
+    if (firstState !== 'intro' || prevState !== 'defeated') errs.push('the states ran from ' + firstState + ' to ' + prevState + ', expected intro to defeated');
     // Volleys and attacks.
     let singles = [];
+    const thrown = {}, attacked = {};
     for (const r of rounds) {
       const want = expectedVolley(cfg, r.phase);
       if (r.volley.join() !== want.join()) errs.push('phase ' + r.phase + ' volley ' + r.volley.join('+') + ', expected ' + want.join('+'));
+      const wantSpawned = r.volley.map((entry) => ENTRY_SPAWN[entry]);
+      if (r.spawned.join() !== wantSpawned.join()) errs.push('phase ' + r.phase + ' volley ' + r.volley.join('+') + ' was thrown as ' + r.spawned.join('+') + ', expected ' + wantSpawned.join('+'));
+      r.volley.forEach((entry) => { thrown[entry] = true; });
+      r.attacks.forEach((kind) => { attacked[kind] = true; });
       if (r.phase === 1 && r.attacks.join() !== 'shock') errs.push('phase 1 attacks ' + r.attacks.join('+'));
       else if (r.phase === 3 && b.doubleAttack) {
         if (r.attacks.join() !== 'shock,pick') errs.push('phase 3 attacks ' + r.attacks.join('+') + ', expected shock+pick');
@@ -3370,6 +3407,14 @@ function traceBossFight(levelId, difficulty, profile, seed) {
     }
     if (singles.length && singles[0] !== 'pick') errs.push('phase 2 opened with ' + singles[0]);
     for (let i = 1; i < singles.length; i++) if (singles[i] === singles[i - 1]) errs.push('attacks do not alternate: ' + singles.join(','));
+    // Every kind of entry and both attacks are met in the fight: rocks, a high rock, the minion where the
+    // difficulty has one, the shockwave and the pickaxe.
+    const wantThrown = ['rock', 'rockhigh'].concat(expected.minion[difficulty] ? ['minion'] : []);
+    if (Object.keys(thrown).sort().join() !== wantThrown.sort().join()) errs.push('entries thrown: ' + Object.keys(thrown).sort().join(',') + ', expected ' + wantThrown.join(','));
+    if (Object.keys(attacked).sort().join() !== 'pick,shock') errs.push('attacks: ' + (Object.keys(attacked).sort().join(',') || 'none') + ', expected pick and shock');
+    // The finisher at a quarter of the speed.
+    if (offScale) errs.push(offScale);
+    else if (slow < 2) errs.push('the finisher lasted ' + slow + ' steps: its speed was not measured');
     // Health, phases, finisher, defeat.
     const wantHits = [];
     for (let h = b.health - 1; h >= 0; h--) wantHits.push(h);
@@ -3425,7 +3470,7 @@ CHECKS['boss-fight'] = function (ctx) {
 
 // --- boss-continue ------------------------------------------------------------------------------
 // The level can always be completed. A medium run reaches phase 2, stops typing and loses every life
-// in the arena; missed weak-point windows cost no life. After continueRun the Baron is back at the
+// in the arena; missed weak-point windows cost no life. After continueRun the level's boss is back at the
 // start of phase 2 after the short intro, Pip is at the boss checkpoint with the starting lives and the
 // banked score, and the fight is then won. Restart from checkpoint on the pause menu does the same.
 CHECKS['boss-continue'] = function (ctx) {
@@ -3450,7 +3495,8 @@ CHECKS['boss-continue'] = function (ctx) {
       const s = TG.Game.state;
       if (!after) {
         after = { screen: s.screen, x: s.player.x, lives: s.player.lives, score: s.score, phase: s.boss.phase, health: s.boss.health,
-          state: s.boss.state, intro: s.boss.introTime, live: s.entities.filter((e) => !e.dead).length, section: s.section };
+          state: s.boss.state, intro: s.boss.introTime, live: s.entities.filter((e) => !e.dead).length, section: s.section,
+          kind: s.boss.kind, lampRed: s.boss.lampRed };
       }
     });
     while (!after && session.tick()) { /* run to the game over and the continue */ }
@@ -3460,7 +3506,9 @@ CHECKS['boss-continue'] = function (ctx) {
     if (weakMisses < 1) bad.push('no weak-point window ran out');
     if (Object.keys(causes).some((k) => k !== 'threat' && k !== 'attack')) bad.push('lives lost to ' + JSON.stringify(causes));
     if (after.screen !== 'bossIntro' || after.state !== 'intro' || after.intro !== C.BOSS_INTRO_SHORT) bad.push('after the continue: ' + after.screen + ', ' + after.state + ', intro ' + after.intro);
-    if (after.phase !== 2 || after.health !== TG.Boss.phaseStartHealth(cfg, 2)) bad.push('the Baron restarted in phase ' + after.phase + ' with health ' + after.health);
+    if (after.phase !== 2 || after.health !== TG.Boss.phaseStartHealth(cfg, 2)) bad.push('the boss restarted in phase ' + after.phase + ' with health ' + after.health);
+    // It is still the level's boss, and in phase 2 its lamp (or her lenses) is already RED.
+    if (after.kind !== BOSS_EXPECTED[ctx.levelId].kind || after.lampRed !== true) bad.push('after the continue the boss is ' + after.kind + ' with lampRed ' + after.lampRed);
     if (after.x !== over.cp.x || after.lives !== cfg.lives || after.score !== over.cp.score || after.live !== 0 || after.section !== 3) {
       bad.push('Pip at ' + after.x + ' (checkpoint ' + over.cp.x + '), lives ' + after.lives + ', score ' + after.score + ' (banked ' + over.cp.score + '), ' + after.live + ' live, section ' + after.section);
     }
@@ -3470,6 +3518,7 @@ CHECKS['boss-continue'] = function (ctx) {
     const r = session.run();
     const s = TG.Game.state;
     if (!r.finished || s.run.continues !== 1) bad.push('the fight was not won after the continue (' + (r.error || s.screen) + ', continues ' + s.run.continues + ')');
+    else if (s.result.levelId !== ctx.levelId) bad.push('result.levelId ' + s.result.levelId + ' after the continue');
     return bad.length ? result(false, bad.join('; ')) : result(true, 'game over in phase 2 after ' + weakMisses + ' missed windows; continue: phase 2, health ' + after.health + ', ' +
       after.lives + ' lives, score ' + after.score + '; won ' + fmt(s.time - t0, 0) + ' s later');
   });

@@ -1460,6 +1460,7 @@ check('a cleared or knocked-away creature has the look of its skin: the sprite a
     const env = loadEnv();
     const TG = env.TG;
     TG.Remaps.scratch = { 14: 16, 30: 18 };
+    TG.Sprites.define('x_mole', TG.Sprites.get('en_digby'));
     const scene = kind === 'under' ? 'digby' : kind;
     const s = handState(TG, scene === 'rock' ? 'boss' : 'playing');
     s.entities = [];
@@ -1496,8 +1497,9 @@ check('a cleared or knocked-away creature has the look of its skin: the sprite a
   for (const kind of Object.keys(KIND_SPRITES).concat(['under'])) {
     const scene = kind === 'under' ? 'digby' : kind;
     const sprite = KIND_SPRITES[scene];
-    // A Digby is drawn cut at the ground line, which needs a sprite that is defined: the Baronet's.
-    const other = scene === 'digby' ? 'en_baronet' : 'x_' + kind;
+    // A Digby is drawn cut at the ground line, which needs a sprite that is defined: a copy of its own under
+    // another name (record). The Baronet's sprite would bring the Baronet's own clear with it (LEVEL2 4.4).
+    const other = scene === 'digby' ? 'x_mole' : 'x_' + kind;
     const plain = record(kind, null, null);
     const mine = plain.filter(function (c) { return c.name === sprite; });
     // The plain one must draw the kind's sprite, and white in the flash. Underground the mound flashes.
@@ -1622,6 +1624,670 @@ check('Effects without TG.Game, TG.Gfx or TG.Font: the clears and the hits of a 
   if (TG.Effects._list().some(function (f) { return f.type === 'clear'; })) return 'a clear sequence did not end';
   if (env.errors.length) return env.errors[0];
 });
+
+// --- Lady Ratchet's effects and the Baronet's clear (LEVEL2 2, 4.4, 10.1, 10.4 and 10.7; milestone M4) ---
+//
+// TG.Effects chooses a boss's effects by state.boss.kind (BOSS_FX in js/effects.js). The cases below put
+// kind 'ratchet' on the hand-built boss, who stands at screen x 296 with her feet on the floor line, and
+// follow what TG.Effects draws step by step, the view scrolling under her as it does in the arena. Each
+// case also asks that the Baron's side is as it was.
+
+const BOSS_SX = 296;                 // HERO_SCREEN_X + BOSS_DX: where the boss stands in the view
+
+// A hand-built fight with a boss of this kind and nothing else in it. edit(s) changes the state first.
+// One update seats the camera in TG.Effects, so that what follows the view does so from the first step.
+function bossFight(TG, kind, edit) {
+  const s = handState(TG, 'boss');
+  s.entities = [];
+  s.boss.word = null;
+  s.boss.kind = kind;
+  if (edit) edit(s);
+  withGame(TG, s);
+  TG.Effects.reset();
+  TG.Effects.update(1 / 60);
+  return s;
+}
+
+// Follows the effects for `steps` steps: look(i, pic) sees what is drawn after i updates and returns a
+// string to stop with. The view, Pip and the boss move `scroll` px on each step.
+function watchEffects(TG, env, s, steps, scroll, look) {
+  for (let i = 0; i < steps; i++) {
+    const bad = look(i, effectsPicture(TG, env, s));
+    if (bad) return 'step ' + i + ': ' + bad;
+    s.camera.x += scroll;
+    s.player.x += scroll;
+    s.boss.x += scroll;
+    TG.Effects.update(1 / 60);
+  }
+  return null;
+}
+
+// What TG.Effects writes in the world in one draw: every popup as { text, x, y, color } and every letter
+// particle as { ch, x, y }.
+function writingDrawn(TG, env, s) {
+  const out = { popups: [], letters: [] };
+  const draw = TG.Font.draw, glyph = TG.Font.drawGlyph;
+  TG.Font.draw = function (ctx, str, x, y, o) {
+    out.popups.push({ text: str, x: x, y: y, color: o ? o.color : null });
+    return draw.apply(TG.Font, arguments);
+  };
+  TG.Font.drawGlyph = function (ctx, ch, x, y) {
+    out.letters.push({ ch: ch, x: x, y: y });
+    return glyph.apply(TG.Font, arguments);
+  };
+  try { TG.Effects.draw(env.canvas.getContext('2d'), 'world', s.camera.x); } finally { TG.Font.draw = draw; TG.Font.drawGlyph = glyph; }
+  return out;
+}
+
+// The draws of one sprite over a watch, as { step, x, y, frame } in order, from the list `seen` that a
+// look() fills with every call.
+function drawsOf(seen, name) {
+  return seen.filter(function (c) { return c.name === name; });
+}
+
+// The square particles alive now (the sparks and the dust), in screen px.
+function squaresOf(TG) {
+  return TG.Effects._list().filter(function (f) { return f.type === 'part' && !f.kind; });
+}
+
+// The puffs among the draws of a watch, in the order they begin: each fx_poof as { x, y, from, to, x1, y1,
+// frames }: where and at which step it begins, the last step it is drawn on and where, and its frames as
+// a string. A puff moves less than a pixel a step, and no two that are out together are that close.
+function puffsOf(seen) {
+  const out = [];
+  drawsOf(seen, 'fx_poof').forEach(function (c) {
+    const run = out.filter(function (r) { return r.to === c.step - 1 && Math.abs(r.x1 - c.x) <= 1 && Math.abs(r.y1 - c.y) <= 1; })[0];
+    if (run) { run.to = c.step; run.x1 = c.x; run.y1 = c.y; run.frames += c.frame; }
+    else out.push({ x: c.x, y: c.y, from: c.step, to: c.step, x1: c.x, y1: c.y, frames: String(c.frame) });
+  });
+  return out;
+}
+
+// fx_poof plays its three frames once, in a quarter of a second: 14 or 15 steps, or 16 with the step it
+// is made on.
+function playsOnce(r) {
+  return /^0{4,5}1{5}2{5,6}$/.test(r.frames);
+}
+
+// True when `step` is `want` or the step after: a delay that is a whole number of steps ends on one or
+// the other, as the sum of the steps falls.
+function about(step, want) {
+  return step === want || step === want + 1;
+}
+
+check('boss:hit knocks the goggles off her brow where the Baron loses his monocle, their lenses RED under lampred when hers are, and she loses count: "1..." in WHITE beside her snout from 0.2 s on, rising with her as the view scrolls. Not on her last weak point, and never for the Baron (LEVEL2 2, 10.5)', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const G = TG.C.GROUND_Y;
+  const hit = function (kind, health, lampRed) {
+    const s = bossFight(TG, kind, function (st) { st.boss.lampRed = lampRed; });
+    TG.Events.emit('boss:hit', { health: health, maxHealth: 6, phase: 2, x: s.boss.x, y: s.boss.y - 32 });
+    const seen = [], popups = [];
+    const bad = watchEffects(TG, env, s, 90, 2, function (i, pic) {
+      pic.sprites.forEach(function (c) { if (/^boss/.test(c.name)) seen.push(Object.assign({ step: i }, c)); });
+      writingDrawn(TG, env, s).popups.forEach(function (p) { popups.push(Object.assign({ step: i }, p)); });
+    });
+    if (bad) throw new Error(bad);
+    return { seen: seen, popups: popups };
+  };
+  // What flies off, from where and under which remap, and that it goes to Pip's side and comes down on the floor.
+  const flies = function (got, name, x0, y0, remap) {
+    const d = drawsOf(got.seen, name);
+    if (d.length !== got.seen.length || d.length < 40) return 'the sprites thrown are ' + got.seen.map(function (c) { return c.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; }).join(', ');
+    if (d.some(function (c) { return c.remap !== remap; })) return name + ' is drawn under ' + d[0].remap + ', want ' + remap;
+    if (d[0].step !== 0 || d[0].x !== x0 || d[0].y !== y0) return name + ' starts at step ' + d[0].step + ' at ' + d[0].x + ',' + d[0].y + ', want ' + x0 + ',' + y0;
+    // It is at the floor, or a few px from it, when it blinks out, as the monocle has always been.
+    const low = Math.max.apply(null, d.map(function (c) { return c.y; }));
+    if (low > G - 4 || low < G - 12 || !(d[d.length - 1].x < x0 - 20)) return name + ' ends at x ' + d[d.length - 1].x + ' and comes down to y ' + low;
+    return null;
+  };
+
+  let got = hit('ratchet', 3, false);
+  let bad = flies(got, 'boss2_goggles', BOSS_SX - 5, G - 53, null);
+  if (bad) return 'her hit: ' + bad;
+  const p = got.popups;
+  if (!p.length || p.some(function (t) { return t.text !== '1...' || t.color !== 4 || t.x !== BOSS_SX - 36; })) return 'her popups: ' + JSON.stringify(p.slice(0, 3));
+  // It rises 12 px over half a second from 10 px over the point of the hit, and is there for 0.8 s.
+  const ys = p.map(function (t) { return t.y; });
+  if (!about(p[0].step, 12) || ys[0] < G - 43 || ys[0] > G - 42 || Math.min.apply(null, ys) !== G - 54) return 'the popup starts at step ' + p[0].step + ' at y ' + ys[0] + ' and rises to ' + Math.min.apply(null, ys);
+  if (p.length < 40 || p[p.length - 1].step > 12 + 50) return 'the popup is drawn ' + p.length + ' times, to step ' + p[p.length - 1].step;
+
+  // From phase 2 her lenses are RED (boss.lampRed), and so are those of the pair that flies off.
+  got = hit('ratchet', 0, true);
+  if ((bad = flies(got, 'boss2_goggles', BOSS_SX - 5, G - 53, 'lampred'))) return 'her last hit: ' + bad;
+  if (got.popups.length) return 'she counts again after her last weak point: ' + JSON.stringify(got.popups[0]);
+
+  for (const kind of ['baron', 'nobody']) {
+    got = hit(kind, 3, true);
+    if ((bad = flies(got, 'boss_monocle', BOSS_SX - 10, G - 40, null))) return 'a hit on the ' + kind + ': ' + bad;
+    if (got.popups.length) return 'a popup for the ' + kind + ': ' + JSON.stringify(got.popups[0]);
+  }
+  if (env.errors.length || env.warnings.length) return env.errors.concat(env.warnings)[0];
+});
+
+check('the burst of boss:throw and the dust of boss:phase are brass in her hall (GOLD, BRONZE, WHITE; BRONZE, GOLD, STONE) and soil in the Baron\'s dig as before (SAND, CLAY, WHITE; SAND, CLAY, STONE)', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  // The colours of the square particles of an event over 30 steps, and the most drawn at once.
+  const colors = function (kind, event, payload) {
+    const s = bossFight(TG, kind);
+    TG.Events.emit(event, payload(s));
+    const set = {};
+    let most = 0;
+    for (let i = 0; i < 30; i++) {
+      const c = particleColors(TG, env, s);
+      most = Math.max(most, c.length);
+      c.forEach(function (v) { set[v] = true; });
+      TG.Effects.update(1 / 60);
+    }
+    return { set: Object.keys(set).map(Number).sort(function (a, b) { return a - b; }), most: most };
+  };
+  const thrown = function (s) { return { kind: 'rock', x: s.player.x + 190, y: 144 }; };
+  const phase = function () { return { phase: 2 }; };
+  const within = function (set, allowed) { return set.length >= 2 && set.every(function (c) { return allowed.indexOf(c) !== -1; }); };
+  const GOLD = 18, BRONZE = 16, WHITE = 4, STONE = 2, SAND = 23, CLAY = 22;
+  let got = colors('ratchet', 'boss:throw', thrown);
+  if (got.most !== 5 || !within(got.set, [GOLD, BRONZE, WHITE])) return 'her throw: ' + got.most + ' particles in ' + got.set.join(' ');
+  got = colors('ratchet', 'boss:phase', phase);
+  if (got.most !== 24 || got.set.join(' ') !== [STONE, BRONZE, GOLD].join(' ')) return 'her dust: ' + got.most + ' particles in ' + got.set.join(' ');
+  for (const kind of ['baron', 'nobody']) {
+    got = colors(kind, 'boss:throw', thrown);
+    if (got.most !== 5 || !within(got.set, [SAND, CLAY, WHITE])) return 'the throw of the ' + kind + ': ' + got.most + ' particles in ' + got.set.join(' ');
+    got = colors(kind, 'boss:phase', phase);
+    if (got.most !== 24 || got.set.join(' ') !== [STONE, CLAY, SAND].join(' ')) return 'the dust of the ' + kind + ': ' + got.most + ' particles in ' + got.set.join(' ');
+  }
+});
+
+check('her intro (LEVEL2 10.1): from boss:enter a puff of dust at the hatch as the Baronet drops in, at 0.24 of the intro, and steam from the ends of the engine at 0.29, 0.36 and 0.43, rising; each keeps its place by her as the view scrolls. The Baron\'s intro has none', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const G = TG.C.GROUND_Y;
+  const puffs = function (kind, introTime) {
+    const s = bossFight(TG, kind, function (st) { st.boss.state = 'intro'; st.boss.stateT = 0; st.boss.introTime = introTime; st.boss.rise = 40; });
+    TG.Events.emit('boss:enter', {});
+    const seen = [];
+    watchEffects(TG, env, s, 130, 2, function (i, pic) {
+      pic.sprites.forEach(function (c) { seen.push(Object.assign({ step: i }, c)); });
+    });
+    return puffsOf(seen);
+  };
+  for (const len of [4, 2]) {
+    const got = puffs('ratchet', len);
+    const want = [[BOSS_SX, 0.24], [BOSS_SX - 19, 0.29], [BOSS_SX + 19, 0.36], [BOSS_SX - 19, 0.43]];
+    if (got.length !== 4) return 'an intro of ' + len + ' s has ' + got.length + ' puffs: ' + JSON.stringify(got);
+    for (let k = 0; k < 4; k++) {
+      const r = got[k], what = 'an intro of ' + len + ' s, puff ' + k + ': ';
+      if (r.x !== want[k][0] || r.x1 !== r.x || !about(r.from, Math.ceil(want[k][1] * len * 60 - 1e-6))) return what + 'at x ' + r.x + ' from step ' + r.from;
+      if (!playsOnce(r)) return what + 'frames ' + r.frames;
+      // The dust stays over the hatch; the steam starts at the top of the engine and rises.
+      if (k === 0 ? (r.y !== G - 14 || r.y1 !== G - 14) : (r.y < G - 19 || r.y > G - 17 || !(r.y - r.y1 >= 4))) return what + 'y ' + r.y + ' to ' + r.y1;
+    }
+  }
+  for (const kind of ['baron', 'nobody']) {
+    if (puffs(kind, 4).length) return 'the intro of the ' + kind + ' has a puff';
+  }
+  if (env.errors.length || env.warnings.length) return env.errors.concat(env.warnings)[0];
+});
+
+check('her engine and its gauge: in phase 3 steam from both ends as each round starts (LEVEL2 10.7), and steam blown to the left of the dial 0.3 s after a weak-point window opens when the whole volley was cleared (10.4). No steam in phases 1 and 2, none in another state, none after a volley with a cog missed, and none for the Baron', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const G = TG.C.GROUND_Y;
+  const puffs = function (kind, event, payload, edit) {
+    const s = bossFight(TG, kind, edit);
+    TG.Events.emit(event, payload);
+    const seen = [];
+    watchEffects(TG, env, s, 50, 2, function (i, pic) {
+      pic.sprites.forEach(function (c) { seen.push(Object.assign({ step: i }, c)); });
+    });
+    return puffsOf(seen);
+  };
+  const round = function (kind, phase, state) {
+    return puffs(kind, 'boss:state', { state: state, phase: phase, round: 2 }, function (s) { s.boss.phase = phase; s.boss.state = state; });
+  };
+  let got = round('ratchet', 3, 'volley');
+  if (got.length !== 2 || got[0].x !== BOSS_SX - 19 || got[0].from !== 0 || got[1].x !== BOSS_SX + 19 || !about(got[1].from, 5)) return 'the steam of a round in phase 3: ' + JSON.stringify(got);
+  for (const r of got) {
+    if (!playsOnce(r) || r.y < G - 19 || r.y > G - 17 || !(r.y - r.y1 >= 4) || r.x1 !== r.x) return 'the steam of a round: ' + JSON.stringify(r);
+  }
+  for (const c of [['ratchet', 1, 'volley'], ['ratchet', 2, 'volley'], ['ratchet', 3, 'telegraph'], ['ratchet', 3, 'taunt'], ['baron', 3, 'volley'], ['nobody', 3, 'volley']]) {
+    if (round(c[0], c[1], c[2]).length) return 'steam for ' + c.join(' ');
+  }
+
+  const toot = function (kind, thrown, hits) {
+    return puffs(kind, 'boss:weakopen', { id: 999, word: 'monocle', window: 6.3 }, function (s) {
+      s.boss.volley = { toLaunch: thrown, launched: thrown.length, sinceLaunch: 0, hits: hits };
+    });
+  };
+  got = toot('ratchet', ['rock', 'rockhigh', 'rock'], 3);
+  // One puff, from 0.3 s on, beside the dial (its centre is 18 px left of her and 10 px up), going left.
+  if (got.length !== 1 || !about(got[0].from, 18) || !playsOnce(got[0])) return 'the toot: ' + JSON.stringify(got);
+  if (got[0].x > BOSS_SX - 28 || got[0].x < BOSS_SX - 32 || got[0].y < G - 14 || got[0].y > G - 11 || !(got[0].x1 <= got[0].x - 4)) return 'the toot goes from ' + got[0].x + ',' + got[0].y + ' to x ' + got[0].x1;
+  if (toot('ratchet', ['rock', 'rockhigh', 'rock'], 2).length) return 'a toot after a volley with a cog missed';
+  if (toot('ratchet', [], 0).length) return 'a toot with no volley';
+  if (toot('baron', ['rock', 'rock'], 2).length || toot('nobody', ['rock', 'rock'], 2).length) return 'a toot for the Baron';
+  if (env.errors.length || env.warnings.length) return env.errors.concat(env.warnings)[0];
+});
+
+check('each letter of her finisher word throws three sparks from the key in her back, up and away behind her, in GOLD, CREAM or WHITE (LEVEL2 10.7), the last letter too; a letter of a weak-point word throws none, and the Baron\'s finisher none', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const G = TG.C.GROUND_Y;
+  const letter = function (kind, wordKind, complete) {
+    const s = bossFight(TG, kind);
+    const word = { id: 999, kind: wordKind, word: 'clockwork', typable: true, typed: 3, x: s.boss.x, y: s.boss.y - 32 };
+    TG.Events.emit('type:hit', { target: word, id: 999, kind: wordKind, ch: 'c', index: 3, length: 9, complete: complete, x: word.x, y: word.y });
+    const start = squaresOf(TG);
+    // The ink bolt of a completed word draws its trail in squares too, in AQUA and index 6.
+    const colors = particleColors(TG, env, s).filter(function (c) { return c !== 11 && c !== 6; });
+    for (let i = 0; i < 6; i++) TG.Effects.update(1 / 60);
+    return { start: start, colors: colors, later: squaresOf(TG).slice(0, start.length) };
+  };
+  for (const complete of [false, true]) {
+    const got = letter('ratchet', 'finisher', complete);
+    if (got.start.length !== 3 || got.colors.length !== 3) return 'a finisher letter' + (complete ? ', the last,' : '') + ' throws ' + got.start.length + ' sparks';
+    if (!got.colors.every(function (c) { return [18, 19, 4].indexOf(c) !== -1; })) return 'the sparks are in ' + got.colors.join(' ');
+    // They start 4 px behind the key (her key is at +14, -30) and 5 px over it, and go up and to the right.
+    for (let k = 0; k < 3; k++) {
+      const a = got.start[k], b = got.later[k];
+      if (a.x !== BOSS_SX + 18 || a.y !== G - 35) return 'a spark starts at ' + a.x + ',' + a.y;
+      if (!(b.x > a.x + 1.5) || !(b.y < a.y - 1)) return 'a spark is at ' + b.x.toFixed(1) + ',' + b.y.toFixed(1) + ' after 6 steps';
+    }
+  }
+  if (letter('ratchet', 'core', false).start.length) return 'a letter of a weak-point word throws sparks';
+  if (letter('baron', 'finisher', false).start.length || letter('nobody', 'finisher', false).start.length) return 'the Baron\'s finisher throws sparks';
+  if (env.errors.length || env.warnings.length) return env.errors.concat(env.warnings)[0];
+});
+
+check('her defeat (LEVEL2 2, 10.7): the freeze and the flash as the Baron\'s; at 0.55 s the key shoots out of her back, turning, clatters on the floor behind her and lies still there, and her goggles fly off; at 1.2 s the hatch bursts in steam and sparks and the letter fountain erupts from it; 14 fx_cogbit rain down and bounce; and 16 fx_flake drift down the shaft over her, more of them until the results come', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const C = TG.C;
+  const G = C.GROUND_Y;
+  const STEPS = 240;                 // LEVEL_COMPLETE_TIME
+  const SCROLL = 1;
+  // Everything of a defeat: the sprites, the first letter of the fountain, the sparks, the flash, and the
+  // tracks of the cogs and the flakes as TG.Effects lists them, which is in the order they were made.
+  const defeat = function (kind) {
+    const s = bossFight(TG, kind, function (st) { st.screen = 'levelComplete'; st.boss.state = 'defeated'; st.boss.pose = 'dizzy'; });
+    TG.Events.emit('boss:defeat', { x: s.boss.x, y: s.boss.y });
+    const d = { seen: [], letter: null, letters: TG.Effects._list().filter(function (f) { return f.type === 'letter'; }).length,
+      sparks: null, flash: [], cogs: [], flakes: [] };
+    const bad = watchEffects(TG, env, s, STEPS, SCROLL, function (i, pic) {
+      pic.sprites.forEach(function (c) { d.seen.push(Object.assign({ step: i }, c)); });
+      if (!d.letter) {
+        const l = writingDrawn(TG, env, s).letters[0];
+        if (l) d.letter = Object.assign({ step: i }, l);
+      }
+      if (!d.sparks) {
+        const colors = particleColors(TG, env, s);
+        if (colors.length) d.sparks = { step: i, colors: colors };
+      }
+      if (TG.Effects.flash() !== null) d.flash.push(i);
+      const list = TG.Effects._list();
+      list.filter(function (f) { return f.kind === 'fx_cogbit'; }).forEach(function (f, k) { (d.cogs[k] = d.cogs[k] || []).push(f.y); });
+      list.filter(function (f) { return f.kind === 'fx_flake'; }).forEach(function (f, k) { (d.flakes[k] = d.flakes[k] || []).push(f.y); });
+    });
+    if (bad) throw new Error(bad);
+    return d;
+  };
+  const d = defeat('ratchet');
+  const names = {};
+  d.seen.forEach(function (c) { names[c.name] = true; });
+  if (Object.keys(names).sort().join(' ') !== 'boss2_goggles boss2_key fx_cogbit fx_flake fx_poof') return 'her defeat draws ' + Object.keys(names).sort().join(' ');
+  if (d.flash.length !== 2 || !about(d.flash[0], 30)) return 'the flash is at steps ' + d.flash.join(' ');
+
+  // The key: out of her back, where TG.Render draws it (14 px behind her middle, 30 px up).
+  const key = drawsOf(d.seen, 'boss2_key');
+  if (!key.length || !about(key[0].step, 33) || Math.abs(key[0].x - (BOSS_SX + 14)) > 2 || key[0].y > G - 30 || key[0].y < G - 36) return 'the key starts at step ' + (key[0] || {}).step + ' at ' + (key[0] || {}).x + ',' + (key[0] || {}).y;
+  const top = Math.min.apply(null, key.map(function (c) { return c.y; }));
+  if (!(top < G - 80) || top < C.PLAY_TOP + 20) return 'the key goes up to y ' + top;
+  // On the floor from its first touch: three bounces, then still. Its bottom row is the tip of its stem.
+  const touch = key.filter(function (c) { return c.y === G - 1; });
+  if (!touch.length || key.some(function (c) { return c.y > G - 1; })) return 'the key does not come down on the floor';
+  const air = key.filter(function (c) { return c.step < touch[0].step; });
+  for (const fr of [0, 1, 2, 3]) if (!air.some(function (c) { return c.frame === fr; })) return 'the key does not turn through frame ' + fr + ' in the air';
+  let bounces = 0;
+  for (let k = 1; k < key.length; k++) if (key[k - 1].y === G - 1 && key[k].y < G - 1) bounces++;
+  if (bounces !== 3) return 'the key bounces ' + bounces + ' times';
+  let lastUp = 0;
+  key.forEach(function (c, k) { if (c.y < G - 1) lastUp = k; });
+  const rest = key.slice(lastUp + 1);
+  const lies = rest[0];
+  if (rest.length < 30 || !(lies.x > BOSS_SX + 24) || lies.x > 380) return 'the key lies at x ' + (lies || {}).x + ' for ' + rest.length + ' draws';
+  // At rest it shows its first frame and stays where it lies while the view scrolls on.
+  for (const c of rest) {
+    if (c.frame !== 0 || c.x !== lies.x - SCROLL * (c.step - lies.step)) return 'at rest the key is in frame ' + c.frame + ' at x ' + c.x + ' at step ' + c.step + ', from ' + lies.x + ' at step ' + lies.step;
+  }
+
+  // The goggles, from her brow as on a hit.
+  const gog = drawsOf(d.seen, 'boss2_goggles');
+  if (!gog.length || !about(gog[0].step, 33) || Math.abs(gog[0].x - (BOSS_SX - 5)) > 2 || gog[0].y > G - 53 || gog[0].y < G - 58) return 'the goggles start at step ' + (gog[0] || {}).step + ' at ' + (gog[0] || {}).x + ',' + (gog[0] || {}).y;
+  if (!(gog[gog.length - 1].x < BOSS_SX - 25)) return 'the goggles end at x ' + gog[gog.length - 1].x;
+  // The hand-built boss is in phase 2 with her lenses RED.
+  if (gog.some(function (c) { return c.remap !== 'lampred'; }) || key.some(function (c) { return c.remap !== null; })) return 'the goggles are drawn under ' + gog[0].remap + ' and the key under ' + key[0].remap;
+
+  // The puffs: one at her back with the key; at 1.2 s one over the hatch, then steam at each end of the engine.
+  const poofs = puffsOf(d.seen);
+  const wantPoofs = [[BOSS_SX + 14, 33], [BOSS_SX, 72], [BOSS_SX - 19, 74], [BOSS_SX + 19, 76]];
+  if (poofs.length !== 4 || poofs.some(function (r, k) { return r.x !== wantPoofs[k][0] || !about(r.from, wantPoofs[k][1]) || !playsOnce(r); })) return 'the puffs: ' + JSON.stringify(poofs);
+  if (!d.sparks || !about(d.sparks.step, 72) || d.sparks.colors.length !== 10 || !d.sparks.colors.every(function (c) { return [18, 19, 4].indexOf(c) !== -1; })) return 'the sparks of the hatch: ' + JSON.stringify(d.sparks);
+  // The fountain: Level 1's 24 letters, from the middle of the hatch (its dark is 12 px under the engine's top).
+  if (d.letters !== 24 || !d.letter || !about(d.letter.step, 72)) return 'the fountain has ' + d.letters + ' letters, the first at step ' + (d.letter || {}).step;
+  if (Math.abs(d.letter.x - BOSS_SX) > 4 || d.letter.y > G - 12 || d.letter.y < G - 20) return 'the fountain starts at ' + d.letter.x + ',' + d.letter.y;
+
+  // The cogs: none before she has gone up, then all 14, in both frames, from above the playfield.
+  const cog = drawsOf(d.seen, 'fx_cogbit');
+  if (cog[0].step < 99 || cog[0].step > 101 || cog[0].y > C.PLAY_TOP) return 'the first cog is drawn at step ' + cog[0].step + ' at y ' + cog[0].y;
+  const at160 = cog.filter(function (c) { return c.step === 160; });
+  if (at160.length !== 14 || at160.filter(function (c) { return c.frame === 0; }).length !== 7) return at160.length + ' cogs at step 160';
+  if (cog.some(function (c) { return c.y > G - 4 || c.x < BOSS_SX - 140 || c.x > BOSS_SX + 100; })) return 'a cog is under the floor or far from her';
+  // Each lands on the floor, and the first is seen to bounce: up again by 10 px or more, and down.
+  if (d.cogs.length !== 14) return d.cogs.length + ' cogs listed';
+  const up = function (ys) {
+    const landed = ys.indexOf(G - 4);
+    return landed === -1 ? -1 : G - 4 - Math.min.apply(null, ys.slice(landed));
+  };
+  for (let k = 0; k < 8; k++) if (up(d.cogs[k]) < 10) return 'cog ' + k + ' rises ' + up(d.cogs[k]) + ' px after it lands';
+  if (d.cogs[0][d.cogs[0].length - 1] !== G - 4) return 'the first cog ends at y ' + d.cogs[0][d.cogs[0].length - 1];
+
+  // The snow: from the fanfare on (1.8 s), one flake after another to the end, down the shaft over her.
+  const flake = drawsOf(d.seen, 'fx_flake');
+  if (flake[0].step < 108 || flake[0].step > 110) return 'the first flake is drawn at step ' + flake[0].step;
+  const counts = [150, 190, STEPS - 1].map(function (st) { return flake.filter(function (c) { return c.step === st; }).length; });
+  if (!(counts[0] >= 4 && counts[1] > counts[0] + 2 && counts[2] === 16)) return 'flakes at steps 150, 190 and 239: ' + counts.join(' ');
+  if (flake.some(function (c) { return Math.abs(c.x - BOSS_SX) > 16 || c.y > G - 40; })) return 'a flake is out of the shaft or down at her engine';
+  if (!flake.some(function (c) { return c.frame === 0; }) || !flake.some(function (c) { return c.frame === 1; })) return 'the flakes do not turn';
+  if (d.flakes.length !== 16) return d.flakes.length + ' flakes listed';
+  for (const ys of d.flakes) for (let k = 1; k < ys.length; k++) if (ys[k] < ys[k - 1]) return 'a flake goes up';
+  // The first has come 2.2 s down at 34 to 52 px a second: well into the playfield.
+  const far = d.flakes[0][d.flakes[0].length - 1];
+  if (far < C.PLAY_TOP + 60 || far > C.PLAY_TOP + 115) return 'the first flake is at y ' + far.toFixed(1) + ' at the end';
+  if (TG.Effects.count() > 256) return TG.Effects.count() + ' effects';
+
+  // The Baron's: his helmet at 0.55 s, three puffs, the fountain from the hole in his mound at 2.2 s.
+  for (const kind of ['baron', 'nobody']) {
+    const b = defeat(kind);
+    const bn = {};
+    b.seen.forEach(function (c) { bn[c.name] = true; });
+    if (Object.keys(bn).sort().join(' ') !== 'boss_helmet fx_poof') return 'the defeat of the ' + kind + ' draws ' + Object.keys(bn).sort().join(' ');
+    if (!about(drawsOf(b.seen, 'boss_helmet')[0].step, 33) || b.sparks) return 'the helmet of the ' + kind + ' at step ' + drawsOf(b.seen, 'boss_helmet')[0].step + (b.sparks ? ', with sparks' : '');
+    if (b.letters !== 24 || !about(b.letter.step, 132) || Math.abs(b.letter.x - (BOSS_SX - 4)) > 4) return 'the fountain of the ' + kind + ' starts at step ' + b.letter.step + ' at x ' + b.letter.x;
+  }
+  if (env.errors.length || env.warnings.length) return env.errors.concat(env.warnings)[0];
+});
+
+check('the Baronet\'s clear (LEVEL2 4.4): a digby in the skin en_baronet loses his spare helmet, boss_helmet, and his monocle, which flies off to Pip\'s side from over his eye; he spins down bare, and where a mole leaves a daisy a cog grows: the collar of fx_cogbit, then the cog. Underground he pops out of the mound first. A plain mole and a mole in another skin keep fx_helmet and the daisy; a Baronet that reaches Pip is knocked away with nothing more', function () {
+  const cleared = function (skin, elev, event) {
+    const env = loadEnv();
+    const TG = env.TG;
+    TG.Sprites.define('x_mole', TG.Sprites.get('en_digby'));
+    const s = handState(TG, 'boss');
+    s.entities = [];
+    s.boss.word = null;
+    withGame(TG, s);
+    const p = clearOf(s, 'digby', 180, TG.C.GROUND_Y - elev);
+    if (skin) s.entities.push(removed(entity(TG, s, 'digby', 'gear', 84, elev, { id: p.id, skin: skin, phase: elev < 0 ? 'mound' : 'up' }), event ? 'hit' : 'cleared'));
+    if (event) TG.Events.emit(event, { id: p.id, kind: 'digby', word: 'gear', typed: 0, x: s.player.x + 13, y: s.player.y });
+    else TG.Events.emit('word:clear', p);
+    const seen = [];
+    for (let i = 0; i < 200; i++) {
+      effectsPicture(TG, env, s).sprites.forEach(function (c) { seen.push(Object.assign({ step: i }, c)); });
+      TG.Effects.update(1 / 60);
+    }
+    if (env.errors.length || env.warnings.length) throw new Error(env.errors.concat(env.warnings)[0]);
+    return seen;
+  };
+  const has = function (seen, name) { return drawsOf(seen, name).length > 0; };
+  const G = stubs.load({ files: ['js/core.js'] }).TG.C.GROUND_Y;
+
+  for (const elev of [0, -16]) {
+    const where = elev < 0 ? 'underground' : 'above ground';
+    const seen = cleared('en_baronet', elev, null);
+    if (has(seen, 'en_digby') || has(seen, 'fx_helmet') || has(seen, 'fx_daisy')) return where + ': the Baronet is cleared as a mole';
+    const him = drawsOf(seen, 'en_baronet');
+    if (!him.some(function (c) { return c.frame === 'up'; }) || !him.some(function (c) { return c.frame === 'spin'; })) return where + ': he is drawn in ' + him.map(function (c) { return c.frame; }).filter(function (f, i, a) { return a.indexOf(f) === i; }).join(' ');
+    // The helmet and the monocle go together: after the ink bolt and the white flash (9 steps), and
+    // underground after the 0.1 s in which he pops out of the mound.
+    const helmet = drawsOf(seen, 'boss_helmet'), monocle = drawsOf(seen, 'boss_monocle');
+    const from = elev < 0 ? 15 : 9;
+    if (!helmet.length || !monocle.length || !about(helmet[0].step, from) || monocle[0].step !== helmet[0].step) return where + ': the helmet from step ' + (helmet[0] || {}).step + ', the monocle from ' + (monocle[0] || {}).step;
+    // The monocle starts over his left eye (3 px left of his middle, 9 up), flies 20 px or more to the left
+    // and lands; the helmet goes the other way.
+    if (Math.abs(monocle[0].x - 177) > 2 || monocle[0].y > G - 9 || monocle[0].y < G - 14) return where + ': the monocle starts at ' + monocle[0].x + ',' + monocle[0].y;
+    if (!(monocle[monocle.length - 1].x < 157) || Math.max.apply(null, monocle.map(function (c) { return c.y; })) !== G - 4) return where + ': the monocle ends at x ' + monocle[monocle.length - 1].x;
+    if (!(helmet[helmet.length - 1].x > 190)) return where + ': the helmet ends at x ' + helmet[helmet.length - 1].x;
+    // The cog, where he went down: the collar for 0.15 s, 1 px lower so that it stands on the floor, then
+    // the cog of eight teeth for the rest of the daisy's 1.8 s.
+    const cog = drawsOf(seen, 'fx_cogbit');
+    const end = elev < 0 ? 40 : 34;                  // the ink bolt, the flash and the 0.42 or 0.52 s of the mole's clear
+    const looks = runsOf(cog.map(function (c) { return c.frame + '@' + c.x + ',' + c.y; }));
+    if (!cog.length || !about(cog[0].step, end) || looks.length !== 2 || looks[0][0] !== '1@180,' + (G - 3) || looks[1][0] !== '0@180,' + (G - 4)) return where + ': the cog from step ' + (cog[0] || {}).step + ': ' + JSON.stringify(looks);
+    if (Math.abs(looks[0][1] - 9) > 1 || looks[1][1] < 85 || cog[cog.length - 1].step > end + 110) return where + ': the collar for ' + looks[0][1] + ' steps, the cog for ' + looks[1][1] + ', to step ' + cog[cog.length - 1].step;
+  }
+
+  // A mole, and a mole in a skin that is not the Baronet's, as before.
+  for (const skin of [null, 'x_mole']) {
+    const seen = cleared(skin, 0, null);
+    if (!has(seen, 'fx_helmet') || !has(seen, 'fx_daisy') || !has(seen, skin || 'en_digby')) return 'a mole in ' + skin + ' has no fx_helmet or no daisy';
+    if (has(seen, 'boss_helmet') || has(seen, 'boss_monocle') || has(seen, 'fx_cogbit')) return 'a mole in ' + skin + ' is cleared as the Baronet';
+  }
+  // Knocked away: the Baronet as he was drawn, and nothing of his clear.
+  const hit = cleared('en_baronet', 0, 'threat:hit');
+  if (!has(hit, 'en_baronet') || has(hit, 'boss_helmet') || has(hit, 'boss_monocle') || has(hit, 'fx_cogbit')) return 'a Baronet that reaches Pip: ' + hit.map(function (c) { return c.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; }).join(' ');
+});
+
+check('a Baronet cleared on his way up stays in sight (LEVEL2 4.4), as TG.Render drew him: through the ink bolt and the white flash the rows that were out of the ground stand in front of his mound in the frame he had, white in the flash; then he comes out the rest of the way from there, the mound behind him, in the peek frame until 12 rows are out; with 11 or 15 rows out as with 3. A mole is its mound alone until it pops out from behind it, all 16 px, and with its feet less than 6 px under the floor it is drawn whole at once', function () {
+  const G = stubs.load({ files: ['js/core.js'] }).TG.C.GROUND_Y;
+  // What TG.Effects draws of the creature and its mound on each step of a clear at this elev, to the step
+  // before its spin frame: 'mound', and the creature as 'frame top rows' with top from the ground line,
+  // joined in the order drawn; ':w' marks the white remap.
+  const watch = function (skin, elev) {
+    const env = loadEnv();
+    const TG = env.TG;
+    TG.Sprites.define('x_mole', TG.Sprites.get('en_digby'));
+    const s = handState(TG, 'boss');
+    s.entities = [];
+    s.boss.word = null;
+    withGame(TG, s);
+    const p = clearOf(s, 'digby', 180, G - elev);
+    if (skin) s.entities.push(removed(entity(TG, s, 'digby', 'gear', 84, elev, { id: p.id, skin: skin, phase: 'up' }), 'cleared'));
+    TG.Events.emit('word:clear', p);
+    const name = skin || 'en_digby';
+    const ctx = env.canvas.getContext('2d');
+    const draw = TG.Gfx.draw, get = TG.Gfx.get, drawImage = ctx.drawImage;
+    const cut = new Map();
+    const looks = [];
+    let row = null;
+    TG.Gfx.draw = function (c, n, frame, x, y, o) {
+      if (n === 'en_mound') row.push('mound' + (o && o.remap === 'white' ? ':w' : ''));
+      return draw.apply(TG.Gfx, arguments);
+    };
+    TG.Gfx.get = function (n, frame, o) {
+      const cv = get.apply(TG.Gfx, arguments);
+      if (cv && n === name) cut.set(cv, frame + (o && o.remap === 'white' ? ':w' : ''));
+      return cv;
+    };
+    ctx.drawImage = function (cv, sx, sy, sw, sh, dx, dy) {
+      if (arguments.length === 9 && cut.has(cv)) row.push(cut.get(cv) + ' ' + (dy - G) + ' ' + sh);
+      return drawImage.apply(ctx, arguments);
+    };
+    try {
+      for (let i = 0; i < 40; i++) {
+        row = [];
+        TG.Effects.draw(ctx, 'world', s.camera.x);
+        if (row.some(function (r) { return r.indexOf('spin') === 0; })) break;
+        looks.push(row.join('|'));
+        TG.Effects.update(1 / 60);
+      }
+    } finally { TG.Gfx.draw = draw; TG.Gfx.get = get; ctx.drawImage = drawImage; }
+    if (env.errors.length || env.warnings.length) throw new Error(env.errors.concat(env.warnings)[0]);
+    return runsOf(looks);
+  };
+  // The bolt for 6 steps and the flash for 3, give or take one as the sum of the steps falls.
+  const still = function (runs, plain, white) {
+    return runs.length >= 2 && runs[0][0] === plain && Math.abs(runs[0][1] - 6) <= 1 && runs[1][0] === white && Math.abs(runs[1][1] - 3) <= 1;
+  };
+
+  // The Baronet with 8 rows out: they stay, and he comes up from there in about 0.1 s.
+  const him = watch('en_baronet', -8);
+  if (!still(him, 'mound|peek -8 8', 'mound:w|peek:w -8 8')) return 'the Baronet through the bolt and the flash: ' + JSON.stringify(him.slice(0, 3));
+  const out = him.slice(2);
+  let rows = 8, steps = 0;
+  for (const r of out) {
+    const m = /^mound\|(peek|up) (-\d+) (\d+)$/.exec(r[0]);
+    if (!m || Number(m[3]) < rows || Number(m[2]) !== -Number(m[3]) || m[1] !== (Number(m[3]) < 12 ? 'peek' : 'up')) return 'the Baronet coming out: ' + JSON.stringify(out);
+    rows = Number(m[3]);
+    steps += r[1];
+  }
+  if (rows < 14 || steps < 5 || steps > 7) return 'the Baronet comes out to ' + rows + ' rows in ' + steps + ' steps';
+  // With 3 rows out it is the same picture, lower.
+  if (!still(watch('en_baronet', -13), 'mound|peek -3 3', 'mound:w|peek:w -3 3')) return 'the Baronet with 3 rows out is not drawn through the bolt and the flash';
+  // Nearly out, where a mole's clear draws it whole at once: he stays where he was, in the frame he had,
+  // and comes up the last rows from there. [elev, his frame, rows out]
+  for (const c of [[-5, 'peek', 11], [-4, 'up', 12], [-1, 'up', 15]]) {
+    const near = watch('en_baronet', c[0]);
+    const look = c[1] + ' -' + c[2] + ' ' + c[2], white = c[1] + ':w -' + c[2] + ' ' + c[2];
+    if (!still(near, 'mound|' + look, 'mound:w|' + white)) return 'the Baronet with ' + c[2] + ' rows out, through the bolt and the flash: ' + JSON.stringify(near.slice(0, 3));
+    let was = c[2];
+    for (const r of near.slice(2)) {
+      const m = /^mound\|(peek|up) (-\d+) (\d+)$/.exec(r[0]);
+      if (!m || Number(m[3]) < was || Number(m[3]) > was + 3 || Number(m[2]) !== -Number(m[3])) return 'the Baronet with ' + c[2] + ' rows out, coming out: ' + JSON.stringify(near.slice(2));
+      was = Number(m[3]);
+    }
+    if (was < 15) return 'the Baronet with ' + c[2] + ' rows out comes out to ' + was + ' rows';
+  }
+  // Fully out, there is nothing to come up: he is drawn whole, with no mound, as a mole is.
+  if (!still(watch('en_baronet', 0), 'up -16 16', 'up:w -16 16')) return 'the Baronet cleared above ground: ' + JSON.stringify(watch('en_baronet', 0).slice(0, 3));
+
+  // A mole and a mole in another skin: the mound alone, then out from behind it in the up frame.
+  for (const skin of [null, 'x_mole']) {
+    const mole = watch(skin, -8);
+    if (!still(mole, 'mound', 'mound:w')) return 'a mole in ' + skin + ' through the bolt and the flash: ' + JSON.stringify(mole.slice(0, 3));
+    const up = mole.slice(2).filter(function (r) { return r[0] !== 'mound'; });
+    if (!up.length || !up.every(function (r) { return /^up -\d+ \d+\|mound$/.test(r[0]); })) return 'a mole in ' + skin + ' coming out: ' + JSON.stringify(mole.slice(2));
+    if (!/^up -[1-3] [1-3]\|mound$/.test(up[0][0])) return 'a mole in ' + skin + ' does not come out from under the ground: ' + up[0][0];
+    // With its feet 5 px under the floor a mole is cleared as one above ground, as in Level 1: whole at once.
+    const near = watch(skin, -5);
+    if (!still(near, 'up -16 16', 'up:w -16 16')) return 'a mole in ' + skin + ' with its feet 5 px under the floor: ' + JSON.stringify(near.slice(0, 3));
+  }
+});
+
+check('Effects without TG.Gfx or TG.Font: the events of her fight, her intro, her defeat and the Baronet\'s clear do not throw, and never more than 256 effects are live', function () {
+  const env = stubs.load({ files: ['js/core.js'].concat(WPF_FILES), canvas: 'soft' });
+  const TG = env.TG;
+  TG.Events.clear();
+  TG.Effects.init();
+  const s = handState(TG, 'boss');
+  s.entities = [];
+  s.boss.kind = 'ratchet';
+  s.boss.phase = 3;
+  s.boss.volley = { toLaunch: ['rock', 'rockhigh', 'minion'], launched: 3, sinceLaunch: 0, hits: 3 };
+  TG.Game = { state: s };
+  const word = { id: 1000, kind: 'finisher', word: 'synchronisation', typable: true, typed: 0, x: s.boss.x, y: s.boss.y - 32 };
+  const baronet = removed(entity(TG, s, 'digby', 'gear', 84, 0, { skin: 'en_baronet', phase: 'up' }), 'cleared');
+  s.entities.push(baronet);
+  let most = 0;
+  const run = function (steps) {
+    for (let i = 0; i < steps; i++) {
+      TG.Effects.update(1 / 60);
+      most = Math.max(most, TG.Effects.count());
+      TG.Effects.draw(env.canvas.getContext('2d'), 'world', s.camera.x);
+      TG.Effects.draw(env.canvas.getContext('2d'), 'screen', 0);
+    }
+  };
+  TG.Events.emit('boss:enter', {});
+  run(120);
+  TG.Events.emit('boss:state', { state: 'volley', phase: 3, round: 1 });
+  TG.Events.emit('boss:throw', { kind: 'rock', x: s.player.x + 190, y: 144 });
+  TG.Events.emit('word:clear', Object.assign(clearOf(s, 'digby', 180, TG.C.GROUND_Y), { id: baronet.id }));
+  TG.Events.emit('boss:weakopen', { id: 999, word: 'monocle', window: 6.3 });
+  TG.Events.emit('boss:hit', { health: 2, maxHealth: 6, phase: 3, x: s.boss.x, y: s.boss.y - 32 });
+  TG.Events.emit('boss:phase', { phase: 3 });
+  run(40);
+  for (let k = 0; k < 15; k++) {
+    TG.Events.emit('type:hit', { target: word, id: 1000, kind: 'finisher', ch: 's', index: k, length: 15, complete: k === 14, x: word.x, y: word.y });
+    run(4);
+  }
+  TG.Events.emit('boss:defeat', { x: s.boss.x, y: s.boss.y });
+  run(250);
+  if (most > 256) return most + ' effects at once';
+  if (most < 60) return 'only ' + most + ' effects at once: the defeat was not played';
+  if (env.errors.length) return env.errors[0];
+});
+
+if (!(SIM_PRESENT && fs.existsSync(path.join(stubs.ROOT, 'js/levels/level2.js')))) {
+  skip('in the game, Lady Ratchet\'s fight plays her effects from its own events', 'the simulation files are not all present');
+} else {
+  check('in the game, Lady Ratchet\'s fight plays her effects from its own events: the four puffs of her intro at boss:enter, the goggles at every boss:hit and "1..." at every hit but the last, steam at each round of phase 3 and at each window after a volley cleared whole, three sparks for each letter of the finisher, and at boss:defeat the key, the goggles, 24 letters, 14 cogs and 16 flakes; the Baronet loses his helmet and his monocle and leaves a cog; never more than 256 effects, and no console output', function () {
+    const G = 184;
+    const seen = { enter: [], hits: [], rounds: [], windows: [], letters: [], defeat: null, baronet: null, most: 0 };
+    let boss = null;
+    const res = simulate({ difficulty: 'medium', profile: 'target', until: 'results', seed: 1, levelId: 2 }, function (TG, s, env, n) {
+      if (n === 1) {
+        // Listeners added here are called after those of TG.Effects, which has made its effects by then.
+        // Each looks at the effects in screen px, near the boss where the kind of an effect alone would not tell.
+        const list = function () { return TG.Effects._list(); };
+        const count = function (kind) { return list().filter(function (f) { return f.kind === kind; }).length; };
+        const puffsAt = function (dx, dy) {
+          const st = TG.Game.state;
+          const bx = st.boss.x - st.camera.x;
+          return list().filter(function (f) { return f.kind === 'fx_poof' && Math.abs(f.x - (bx + dx)) < 0.01 && Math.abs(f.y - (G + dy)) < 0.01; }).length;
+        };
+        TG.Events.on('boss:enter', function () {
+          seen.enter.push([puffsAt(0, -14), puffsAt(-19, -17), puffsAt(19, -17)].join(' '));
+        });
+        TG.Events.on('boss:hit', function (p) {
+          seen.hits.push(p.health + ':' + count('boss2_goggles') + ':' + count('1...') + ':' + count('boss_monocle'));
+        });
+        TG.Events.on('boss:state', function (p) {
+          if (p.state === 'volley') seen.rounds.push(p.phase + ':' + puffsAt(-19, -17) + puffsAt(19, -17));
+        });
+        TG.Events.on('boss:weakopen', function () {
+          const v = TG.Game.state.boss.volley;
+          seen.windows.push((v.hits >= v.toLaunch.length ? 'whole' : 'part') + ':' + puffsAt(-30, -12));
+        });
+        TG.Events.on('type:hit', function (p) {
+          if (p.kind !== 'finisher') return;
+          const st = TG.Game.state;
+          const bx = st.boss.x - st.camera.x;
+          seen.letters.push(list().filter(function (f) { return f.type === 'part' && !f.kind && Math.abs(f.x - (bx + 18)) < 0.01 && f.y === G - 35; }).length);
+        });
+        TG.Events.on('boss:defeat', function () {
+          seen.defeat = ['boss2_key', 'boss2_goggles', 'fx_cogbit', 'fx_flake', 'boss_helmet'].map(count).join(' ') + ' ' +
+            list().filter(function (f) { return f.type === 'letter' && f.layer === 'world'; }).length;
+        });
+        TG.Events.on('word:clear', function (p) {
+          const e = (TG.Game.state.entities || []).filter(function (x) { return x.id === p.id; })[0];
+          if (e && e.skin === 'en_baronet') seen.baronet = {};
+        });
+      }
+      if (s.boss) boss = s.boss.kind;
+      seen.most = Math.max(seen.most, TG.Effects.count());
+      // What the Baronet's clear throws and leaves, in the steps after it and before her defeat.
+      if (seen.baronet && !seen.defeat) {
+        TG.Effects._list().forEach(function (f) { if (/^(boss_helmet|boss_monocle|fx_cogbit|fx_helmet|fx_daisy)$/.test(String(f.kind))) seen.baronet[f.kind] = true; });
+      }
+      return null;
+    });
+    if (res.problem) return res.problem;
+    if (res.report.error) return res.report.error;
+    if (!res.report.finished || boss !== 'ratchet') return 'the run did not finish her fight';
+    if (seen.enter.join('|') !== '1 2 1') return 'at boss:enter the puffs at the hatch, the left end and the right end are ' + seen.enter.join('|');
+    // One pair of goggles for each weak point, down to health 0, and a popup for each but that one.
+    const hits = seen.hits.map(function (h, k) { return (seen.hits.length - 1 - k) + ':1:' + (k < seen.hits.length - 1 ? 1 : 0) + ':0'; });
+    if (seen.hits.length < 3 || seen.hits.join(' ') !== hits.join(' ')) return 'at each boss:hit, health:goggles:popups:monocles are ' + seen.hits.join(' ');
+    const rounds3 = seen.rounds.filter(function (r) { return r.charAt(0) === '3'; });
+    if (!rounds3.length || seen.rounds.some(function (r) { return r !== (r.charAt(0) === '3' ? '3:11' : r.charAt(0) + ':00'); })) return 'at each round, phase:steam is ' + seen.rounds.join(' ');
+    if (seen.windows.indexOf('whole:1') === -1 || seen.windows.some(function (w) { return w !== 'whole:1' && w !== 'part:0'; })) return 'at each window: ' + seen.windows.join(' ');
+    if (seen.letters.length < 10 || seen.letters.some(function (k) { return k !== 3; })) return 'the sparks at each finisher letter: ' + seen.letters.join(' ');
+    if (seen.defeat !== '1 1 14 16 0 24') return 'at boss:defeat the key, goggles, cogs, flakes, helmets and fountain letters are ' + seen.defeat;
+    if (!seen.baronet) return 'the bot did not clear the Baronet';
+    if (Object.keys(seen.baronet).sort().join(' ') !== 'boss_helmet boss_monocle fx_cogbit') return 'the Baronet\'s clear makes ' + Object.keys(seen.baronet).sort().join(' ');
+    if (seen.most > 256) return seen.most + ' effects at once';
+    if (res.env.errors.length || res.env.warnings.length) return 'console: ' + res.env.errors.concat(res.env.warnings)[0];
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // 5. TG.Hud (CONTRACT 4.18, DESIGN 13)
@@ -1801,10 +2467,14 @@ check('the speech plate shows in the second half of the boss intro, and the tuto
   const seen = [];
   const draw = TG.Font.draw;
   TG.Font.draw = function (ctx, text) { seen.push(String(text)); return draw.apply(TG.Font, arguments); };
+  // The boss's intro clock, boss.stateT, runs with screenT until a pause; which of the two times the plate
+  // is in the speech plate's own check below.
   const s = handState(TG, 'bossIntro', { screenT: 1.0 });
+  Object.assign(s.boss, { state: 'intro', stateT: 1.0 });
   TG.Hud.draw(env.canvas.getContext('2d'), s);
   if (seen.some(function (t) { return t.indexOf('MY MEADOW') === 0; })) return 'speech in the first half';
   const t = handState(TG, 'bossIntro', { screenT: 3.5 });
+  Object.assign(t.boss, { state: 'intro', stateT: 3.5 });
   TG.Hud.draw(env.canvas.getContext('2d'), t);
   if (!seen.some(function (x) { return x === 'MY MEADOW! MY WORDS!'; })) return 'no speech in the second half';
   const u = handState(TG, 'playing');
@@ -2743,16 +3413,20 @@ function speechShown(TG, env, s) {
 
 const BARON_LINE = 'MY MEADOW! MY WORDS!', RATCHET_LINE = 'TICK TOCK! WORDS INTO COGS!';      // Level 1's, and LEVEL2 10.6's
 
-check('the speech plate types 30 letters a second, and faster when the line would not be whole before the intro ends: both of Level 1\'s intros stay at 30', function () {
+check('the speech plate types 30 letters a second; a line that would not be whole before the intro ends is typed over the first half of its time and stands for the rest: both of Level 1\'s intros stay at 30; Lady Ratchet\'s plate runs on boss.stateT, so a pause does not start it again, and the Baron\'s on screenT, as Level 1 was released', function () {
   const env = loadEnv();
   const TG = env.TG;
   const C = TG.C;
-  const shown = function (speech, introTime, since) {
-    const s = handState(TG, 'bossIntro', { screenT: introTime / 2 + since });
+  // `since` s after the half of an intro of introTime s, on the boss's intro clock. screenT, which a pause
+  // sets back to 0, is given apart where it is to differ, and the level's boss kind where it is not the Baron.
+  const shown = function (speech, introTime, since, screenT, kind) {
+    const s = handState(TG, 'bossIntro', { screenT: screenT !== undefined ? screenT : introTime / 2 + since });
     s.level.boss.speech = speech;
-    s.boss.introTime = introTime;
+    if (kind) s.level.boss.kind = kind;
+    Object.assign(s.boss, { state: 'intro', introTime: introTime, stateT: introTime / 2 + since });
     return speechShown(TG, env, s);
   };
+  const line = function (n) { return 'TICK TOCK! '.repeat(5).slice(0, n); };
   if (BARON_LINE.length !== 20 || RATCHET_LINE.length !== 27) return 'the lines changed length';
   for (const intro of [C.BOSS_INTRO_TIME, C.BOSS_INTRO_SHORT]) {
     for (const since of [0, 0.125, 0.25, 0.5, 0.625, 0.75]) {       // eighths, so that the sums are exact
@@ -2760,42 +3434,63 @@ check('the speech plate types 30 letters a second, and faster when the line woul
       if (shown(BARON_LINE, intro, since) !== want) return 'Level 1, intro ' + intro + ' s, ' + since + ' s in: ' + shown(BARON_LINE, intro, since) + ' letters, want ' + want;
     }
   }
-  // 27 letters: the 4 s intro has 2 s for them, so 30 a second. The 1.5 s intro has 0.75 s, so the line
-  // and two letters more go into it: 29 / 0.75 = 38.67 a second.
+  // 27 letters: the 4 s intro has 2 s for them, so 30 a second. The 1.5 s intro has 0.75 s, which 30 a
+  // second would not fill in time: the line is typed over the first 0.375 s, 72 a second, and then stands.
+  const SHORT = [[0, 0], [0.125, 9], [0.25, 18], [0.375, 27], [0.5, 27], [0.625, 27]];
   if (shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5) !== 15) return '27 letters in the long intro: ' + shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5);
-  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0) !== 0) return '27 letters in the short intro at its half: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0);
-  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25) !== 9) return '27 letters in the short intro after 0.25 s: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25);
-  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.5) !== 19) return '27 letters in the short intro after 0.5 s: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.5);
+  for (const c of SHORT) {
+    if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, c[0]) !== c[1]) return '27 letters in the short intro, ' + c[0] + ' s after its half: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, c[0]) + ', want ' + c[1];
+  }
+  // Where the rule changes. With the two letters more, 20 letters are the most that 30 a second types in
+  // the 0.75 s (22 / 30 = 0.733 s); 21 are typed over 0.375 s. The 4 s intro types every line the screen
+  // holds (8 px a letter and 5 px of plate: 47 letters) at 30 a second.
+  if (shown(line(20), C.BOSS_INTRO_SHORT, 0.25) !== 7 || shown(line(21), C.BOSS_INTRO_SHORT, 0.25) !== 14 || shown(line(21), C.BOSS_INTRO_SHORT, 0.375) !== 21) {
+    return 'lines of 20 and 21 letters in the short intro: ' + [shown(line(20), C.BOSS_INTRO_SHORT, 0.25), shown(line(21), C.BOSS_INTRO_SHORT, 0.25), shown(line(21), C.BOSS_INTRO_SHORT, 0.375)].join(', ');
+  }
+  if (shown(line(47), C.BOSS_INTRO_TIME, 0.5) !== 15) return '47 letters in the long intro: ' + shown(line(47), C.BOSS_INTRO_TIME, 0.5);
   // The last frame of an intro is drawn one step before its end: the step that reaches the end changes
-  // the screen. Every line the screen holds (8 px a letter and 5 px of plate: 47 letters) is whole on it.
+  // the screen. Every line the screen holds is whole on it.
   for (const intro of [C.BOSS_INTRO_TIME, C.BOSS_INTRO_SHORT]) {
     for (let n = 1; n <= 47; n++) {
-      const got = shown('TICK TOCK! '.repeat(5).slice(0, n), intro, intro / 2 - C.DT);
+      const got = shown(line(n), intro, intro / 2 - C.DT);
       if (got !== n) return 'a line of ' + n + ' letters on the last frame of the ' + intro + ' s intro: ' + got + ' letters';
     }
   }
   if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, -0.1) !== -1) return 'a plate before the half';
+  // A pause and resume set screenT back to 0 and leave boss.stateT. Lady Ratchet's plate goes on from where
+  // it was, and is not there before the half of her intro whatever screenT says.
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5, 0, 'ratchet') !== 15) return 'her plate with screenT back at 0, 0.5 s after the half: ' + shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5, 0, 'ratchet') + ' letters';
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_TIME, -0.5, 3, 'ratchet') !== -1) return 'her plate in the first half of the intro, because screenT is past the half';
+  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25, 0, 'ratchet') !== 18) return 'her plate in the short intro with screenT back at 0: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25, 0, 'ratchet') + ' letters';
+  // The Baron's plate follows screenT, as Level 1 was released: after a pause it is gone until screenT is
+  // past the half of the intro's length again, and then it starts from its first letter.
+  if (shown(BARON_LINE, C.BOSS_INTRO_TIME, 0.5, 0) !== -1) return 'the Baron\'s plate with screenT back at 0, 0.5 s after the half: ' + shown(BARON_LINE, C.BOSS_INTRO_TIME, 0.5, 0) + ' letters';
+  if (shown(BARON_LINE, C.BOSS_INTRO_TIME, 1.5, 2.25) !== 7) return 'the Baron\'s plate with screenT at 2.25 s, 1.5 s after the half: ' + shown(BARON_LINE, C.BOSS_INTRO_TIME, 1.5, 2.25) + ' letters';
 });
 
 if (!SIM_PRESENT) {
   skip('in the game, the last frame of the boss intro shows the whole speech line', 'the simulation files are not all present');
 } else {
-  check('in the game, the last frame of the boss intro shows the whole speech line, in the 4 s intro and in the 1.5 s intro after a continue: 20 letters and 27', function () {
-    for (const speech of [BARON_LINE, RATCHET_LINE]) {
+  check('in the game, the last frame of the boss intro shows the whole speech line, in the 4 s intro and in the 1.5 s intro after a continue: 20 letters and 27; a pause in Lady Ratchet\'s 4 s intro does not start her line again; in the 1.5 s intro the 27 letters stand whole for a third of a second, and the 20 as long as before', function () {
+    // [the line, the level's boss kind, the frame of the 4 s intro after which the game is paused and resumed]
+    for (const c of [[BARON_LINE, 'baron', undefined], [RATCHET_LINE, 'ratchet', 150]]) {
+      const speech = c[0];
       const env = loadEnv({ sim: true });
       const TG = env.TG;
       const C = TG.C;
-      // Level 1 with this line, started a few steps before the arena flag.
+      // Level 1 with this line and this boss, started a few steps before the arena flag.
       const data = JSON.parse(JSON.stringify(TG.Levels[1]));
       data.boss.speech = speech;
+      data.boss.kind = c[1];
       TG.Levels.scratch = data;
       TG.Input.clear();
       TG.Game.init();
       const s0 = TG.Game.newRun({ difficulty: 'medium', seed: 1, levelId: 'scratch', adaptive: false, assist: 1, tutorial: false });
       s0.player.x = s0.level.arenaX - 8;
       s0.camera.x = Math.max(0, s0.player.x - C.HERO_SCREEN_X);
-      // Steps to the end of the next boss intro. Returns the letters shown on each of its frames.
-      const intro = function () {
+      // Steps to the end of the next boss intro. Returns the letters shown on each of its frames. After
+      // frame pauseAt, if given, the game is paused and resumed, which sets screenT back to 0.
+      const intro = function (pauseAt) {
         const shown = [];
         for (let i = 0; i < 2000; i++) {
           const was = TG.Game.state.screen;
@@ -2805,13 +3500,23 @@ if (!SIM_PRESENT) {
           TG.Hud.update(C.DT, s);
           if (s.screen === 'bossIntro') shown.push(speechShown(TG, env, s));
           else if (was === 'bossIntro') return shown;
+          if (shown.length === pauseAt && !(TG.Game.pause() && TG.Game.resume() && s.screenT === 0)) return [];
         }
         return shown;
       };
-      const long = intro();
+      // Her intro is paused 0.5 s after its half, with the line 14 or 15 letters in, and the line goes on
+      // from there. The Baron's is left to run: after a pause his plate follows screenT, as Level 1 was
+      // released (the check above), and the line is not whole on the last frame.
+      const long = intro(c[2]);
+      if (c[2] && long[c[2] - 1] !== 14 && long[c[2] - 1] !== 15) return 'the 4 s intro, frame ' + c[2] + ': ' + long[c[2] - 1] + ' letters';
       if (TG.Game.state.screen !== 'boss' || !TG.Game.pause() || !TG.Game.continueRun()) return 'the run did not reach the fight and continue from it';
       if (TG.Game.state.boss.introTime !== C.BOSS_INTRO_SHORT) return 'the intro after the continue is ' + TG.Game.state.boss.introTime + ' s';
       const short = intro();
+      // How long the whole line stands in the 0.75 s of the short intro. 20 letters at 30 a second are whole
+      // 0.667 s in, for the last 4 or 5 frames, as they were before the 27 had a rule of their own; the 27
+      // are whole 0.375 s in, for 22 frames.
+      const whole = short.filter(function (n) { return n === speech.length; }).length;
+      if (speech === BARON_LINE ? (whole < 4 || whole > 5) : (whole < 21 || whole > 23)) return speech.length + ' letters stand whole for ' + whole + ' frames of the 1.5 s intro';
       for (const frames of [['4 s', long, C.BOSS_INTRO_TIME], ['1.5 s', short, C.BOSS_INTRO_SHORT]]) {
         const shown = frames[1];
         if (Math.abs(shown.length - frames[2] / C.DT) > 1) return frames[0] + ' intro: ' + shown.length + ' frames';
@@ -3740,6 +4445,688 @@ if (!SIM_PRESENT) {
       if (bolts < 5) return what + ': the ink bolt was seen on ' + bolts + ' steps';
       if (env.errors.length || env.warnings.length) return what + ': console: ' + env.errors.concat(env.warnings)[0];
     }
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// 10. Lady Ratchet as TG.Render draws her (LEVEL2 10.1, 10.3, 10.4, 10.7 and 4.4; milestone M4, the
+//     renderer's cases of 13.5)
+// ---------------------------------------------------------------------------------------------
+//
+// The states are built by hand: the arena of handState with level.boss as LEVEL2 10.6 has it and a boss
+// of kind 'ratchet'. She stands where the Baron stands: bx 296, by 184.
+
+const RATCHET_BX = 296, RATCHET_BY = 184;
+const RATCHET_SPRITES = /^(boss2_|en_baronet$)/;
+
+// A hand-built arena with Lady Ratchet in it, nothing thrown and no word open. `boss` is put over state.boss.
+function ratchetState(TG, screen, boss) {
+  const s = handState(TG, screen || 'boss');
+  s.level.boss = { kind: 'ratchet', label: 'RATCHET', speech: RATCHET_LINE, tips: { shock: 'JUMP THE GEAR', pick: 'DUCK THE PENDULUM' },
+    minionSkin: 'en_baronet' };
+  s.entities = [];
+  Object.assign(s.boss, { kind: 'ratchet', state: 'volley', stateT: 1, phase: 1, pose: 'idle', rise: 0, lampRed: false, flashT: 0, word: null,
+    volley: { toLaunch: ['rock', 'rock'], launched: 0, sinceLaunch: 0, hits: 0 } }, boss || {});
+  return s;
+}
+
+// Her sprites and the Baronet's as TG.Render.draw draws them for the state, in order. A part cut at the
+// ground line (TG.Gfx.get and the 9-argument drawImage) is { name, frame, remap, flipX, left, top, rows };
+// one drawn whole (TG.Gfx.draw) is { name, frame, remap, flipX, x, y }. A part cut on its sides or at its
+// top as well, the Baronet in the hatch, also has cols, the columns drawn, and sx, sy, where in the frame
+// they start.
+function ratchetDrawn(TG, env, s) {
+  const ctx = env.canvas.getContext('2d');
+  const out = [], cut = new Map();
+  const draw = TG.Gfx.draw, get = TG.Gfx.get, drawImage = ctx.drawImage;
+  TG.Gfx.draw = function (c, name, frame, x, y, o) {
+    if (RATCHET_SPRITES.test(name)) out.push({ name: name, frame: frame, remap: (o && o.remap) || null, flipX: !!(o && o.flipX), x: x, y: y });
+    return draw.apply(TG.Gfx, arguments);
+  };
+  TG.Gfx.get = function (name, frame, o) {
+    const cv = get.apply(TG.Gfx, arguments);
+    if (cv && RATCHET_SPRITES.test(name)) cut.set(cv, { name: name, frame: frame, remap: (o && o.remap) || null, flipX: !!(o && o.flipX) });
+    return cv;
+  };
+  ctx.drawImage = function (cv, sx, sy, sw, sh, dx, dy) {
+    if (arguments.length === 9 && cut.has(cv)) {
+      const part = Object.assign({}, cut.get(cv), { left: dx, top: dy, rows: sh });
+      if (sx !== 0 || sy !== 0 || sw !== cv.width) Object.assign(part, { cols: sw, sx: sx, sy: sy });
+      out.push(part);
+    }
+    return drawImage.apply(ctx, arguments);
+  };
+  try { TG.Render.draw(s); } finally { TG.Gfx.draw = draw; TG.Gfx.get = get; ctx.drawImage = drawImage; }
+  return out;
+}
+
+// LEVEL2 10.1's table: each part's anchor from bx, by, with the sprite's size and anchor (Appendix C). The
+// far arm is flipped; the anchor of a 16 px arm is in its middle either way.
+const RATCHET_PARTS = {
+  body: { name: 'boss2_body', dx: 0, dy: -8, flipX: false, w: 48, h: 32, ax: 24, ay: 32 },
+  far: { name: 'boss2_arm', dx: 20, dy: -26, flipX: true, w: 16, h: 16, ax: 8, ay: 8 },
+  key: { name: 'boss2_key', dx: 14, dy: -30, flipX: false, w: 16, h: 16, ax: 8, ay: 8 },
+  head: { name: 'boss2_head', dx: -2, dy: -34, flipX: false, w: 32, h: 24, ax: 16, ay: 24 },
+  near: { name: 'boss2_arm', dx: -20, dy: -26, flipX: false, w: 16, h: 16, ax: 8, ay: 8 }
+};
+
+// What ratchetDrawn is to give for her: body, far arm at rest, key, head and near arm in the order of 10.1,
+// each `down` px below its place and cut at the ground line (a part with no row above the line is not
+// drawn), then the engine. o: { down, body, key, head, near, engine } with the frames (key null: no key;
+// the defaults are b0, k0, normal, rest and shut), remap for the parts and headRemap for the head where it
+// differs, flip for a flipped body, shake for the engine's px to the right, gone for no part of her at all.
+function ratchetWant(o) {
+  const list = [];
+  const part = function (p, frame, remap, flipX) {
+    const top = RATCHET_BY + p.dy + (o.down || 0) - p.ay;
+    const rows = Math.min(p.h, RATCHET_BY - top);
+    if (rows > 0) list.push({ name: p.name, frame: frame, remap: remap || null, flipX: flipX, left: RATCHET_BX + p.dx - p.ax, top: top, rows: rows });
+  };
+  if (!o.gone) {
+    part(RATCHET_PARTS.body, o.body || 0, o.remap, !!o.flip);
+    part(RATCHET_PARTS.far, 'rest', o.remap, true);
+    if (o.key !== null) part(RATCHET_PARTS.key, o.key || 0, o.remap, false);
+    part(RATCHET_PARTS.head, o.head || 'normal', o.headRemap !== undefined ? o.headRemap : o.remap, false);
+    part(RATCHET_PARTS.near, o.near || 'rest', o.remap, false);
+  }
+  list.push({ name: 'boss2_engine', frame: o.engine || 'shut', remap: null, flipX: false, x: RATCHET_BX + (o.shake || 0), y: RATCHET_BY });
+  return list;
+}
+
+// null when the two lists are the same, else both as text.
+function ratchetDiffers(got, want) {
+  return JSON.stringify(got) === JSON.stringify(want) ? null : JSON.stringify(got) + ', want ' + JSON.stringify(want);
+}
+
+check('Lady Ratchet is put together as LEVEL2 10.1 has it: body, far arm at rest, key, head, near arm and engine, in every pose, with rise 0, 13 and 40; at rise 40 nothing of her shows', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  if (Math.floor(ratchetState(TG).boss.x - ratchetState(TG).camera.x) !== RATCHET_BX || TG.C.GROUND_Y !== RATCHET_BY) return 'the hand-built boss is not at 296, 184';
+  // [boss.pose, boss.state, the near arm, the head]. The near arm holds her watch up through a taunt.
+  const POSES = [['idle', 'volley', 'rest', 'normal'], ['raise', 'telegraph', 'raise', 'normal'], ['stomp', 'attack', 'raise', 'normal'],
+    ['stomp', 'transition', 'raise', 'normal'], ['throw', 'volley', 'throw', 'normal'], ['throw', 'attack', 'throw', 'normal'],
+    ['laugh', 'taunt', 'watch', 'laugh'], ['laugh', 'laugh', 'rest', 'laugh'], ['hurt', 'recoil', 'rest', 'hurt'], ['dizzy', 'finisher', 'rest', 'dizzy']];
+  for (const rise of [0, 13, 40]) {
+    for (const p of POSES) {
+      // boss.rise is floored. At 13.6 s the body is b1 at its 1 frame a second, b0 at the 4 a second of a
+      // taunt and b1 in the finisher; the key is on step 27 of 2 a second (k3), on step 217 of 16 a second
+      // with her arm up (k1), and still at k0 in a recoil, a laugh and the finisher with no letter typed.
+      const s = ratchetState(TG, 'boss', { pose: p[0], state: p[1], rise: rise + 0.6 });
+      s.time = 13.6;
+      const want = ratchetWant({ down: rise + (p[0] === 'stomp' ? 2 : 0), body: p[1] === 'taunt' ? 0 : 1,
+        key: p[0] === 'raise' ? 1 : (p[1] === 'recoil' || p[1] === 'laugh' || p[1] === 'finisher' ? 0 : 3), head: p[3], near: p[2] });
+      const differs = ratchetDiffers(ratchetDrawn(TG, env, s), want);
+      if (differs) return p[0] + ' in ' + p[1] + ', rise ' + rise + ': ' + differs;
+    }
+  }
+  // On the canvas. At rise 40 only the top 18 rows of her head are above the ground line, and the engine
+  // covers them: the picture is the one at rise 60, where no part has a row left. At rise 0 she is there.
+  const picture = function (rise) {
+    TG.Render.draw(ratchetState(TG, 'boss', { rise: rise }));
+    return env.canvas.toRGBA();
+  };
+  const hidden = picture(60), at40 = picture(40), up = picture(0);
+  const TEAL = paletteSet(TG)[10];
+  let differ = 0, teal = 0;
+  for (let i = 0; i < hidden.length; i++) if (hidden[i] !== at40[i]) differ++;
+  for (let y = 126; y < 168; y++) for (let x = 272; x < 320; x++) if (pixel(up, 384, x, y) === TEAL && pixel(hidden, 384, x, y) !== TEAL) teal++;
+  if (differ !== 0) return 'at rise 40 the picture differs from the one with her out of sight';
+  if (teal < 100) return 'at rise 0 her waistcoat has ' + teal + ' TEAL pixels above the engine';
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('her body taps its foot at 4 frames a second through a taunt and stands at 1 a second otherwise, and holds b1 once she is wound down; her head takes lampred alone, flashes its lenses as a taunt begins, and all of her but the engine is WHITE in a hit\'s flash', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const drawn = function (boss, time, screen) {
+    const s = ratchetState(TG, screen || 'boss', boss);
+    s.time = time;
+    return ratchetDrawn(TG, env, s);
+  };
+  const body = function (boss, time, screen) { return named(drawn(boss, time, screen), 'boss2_body')[0].frame; };
+  // [state, pose, time, frame]
+  const BODY = [['volley', 'idle', 20.3, 0], ['volley', 'idle', 21.3, 1], ['telegraph', 'raise', 21.9, 1], ['recoil', 'hurt', 22.1, 0],
+    ['taunt', 'laugh', 20.1, 0], ['taunt', 'laugh', 20.3, 1], ['taunt', 'laugh', 20.6, 0], ['taunt', 'laugh', 20.8, 1],
+    ['finisher', 'dizzy', 20.3, 1], ['finisher', 'dizzy', 21.6, 1]];
+  for (const c of BODY) {
+    const got = body({ state: c[0], pose: c[1] }, c[2]);
+    if (got !== c[3]) return 'the body in ' + c[0] + ' at ' + c[2] + ' s is frame ' + got + ', want ' + c[3];
+  }
+  if (body({ state: 'defeated', pose: 'dizzy' }, 20.3, 'levelComplete') !== 1) return 'the body of the defeat is not b1';
+  // The head's remap; the other parts have none.
+  let differs = ratchetDiffers(drawn({ lampRed: true, phase: 2 }, 20.1), ratchetWant({ key: 0, headRemap: 'lampred' }));
+  if (differs) return 'lampRed: ' + differs;
+  // The first 0.6 s of a taunt: on the even fifteenths of a second the lenses have the other colour.
+  const FLASH = [[false, 0.3, 2.0, 'lampred'], [false, 0.3, 2.07, null], [true, 0.3, 2.0, null], [true, 0.3, 2.07, 'lampred'],
+    [false, 0.7, 2.0, null], [true, 0.7, 2.0, 'lampred']];
+  for (const c of FLASH) {
+    const head = named(drawn({ state: 'taunt', pose: 'laugh', lampRed: c[0], stateT: c[1] }, c[2]), 'boss2_head')[0];
+    if (head.remap !== c[3] || head.frame !== 'laugh') return 'a taunt ' + c[1] + ' s old at ' + c[2] + ' s, lampRed ' + c[0] + ': the head is ' + JSON.stringify(head);
+  }
+  differs = ratchetDiffers(drawn({ flashT: 0.1, lampRed: true }, 20.1), ratchetWant({ key: 0, remap: 'white' }));
+  if (differs) return 'the flash of a hit: ' + differs;
+  // On the canvas the lenses are the only RED of her: none without lampRed, some with it, all in the head's box.
+  const reds = function (lampRed) {
+    TG.Render.draw(ratchetState(TG, 'boss', { lampRed: lampRed }));
+    const rgba = env.canvas.toRGBA(), RED = paletteSet(TG)[25];
+    let inHead = 0, elsewhere = 0;
+    for (let y = 110; y < 184; y++) {
+      for (let x = 260; x < 332; x++) {
+        if (pixel(rgba, 384, x, y) !== RED) continue;
+        if (x >= 278 && x < 310 && y >= 126 && y < 150) inHead++; else elsewhere++;
+      }
+    }
+    return [inHead, elsewhere];
+  };
+  const plain = reds(false), red = reds(true);
+  if (plain[0] !== 0 || plain[1] !== 0) return 'RED on her without lampRed: ' + plain.join(' and ');
+  if (red[0] < 8 || red[1] !== 0) return 'with lampRed: ' + red[0] + ' RED pixels in the head\'s box and ' + red[1] + ' elsewhere';
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('her key is drawn after the far arm and before the head at bx + 14, by - 30 + rise, cut at the ground line; it steps forward 2, 4 and 8 times a second by phase and 16 while her arm is up, is still in a recoil and a laugh, and goes one step back for each letter of the finisher (LEVEL2 10.3, 10.7)', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const key = function (boss, time) {
+    const s = ratchetState(TG, 'boss', boss);
+    s.time = time;
+    const k = named(ratchetDrawn(TG, env, s), 'boss2_key');
+    return k.length === 1 ? k[0] : null;
+  };
+  // Sixteenths and sixty-fourths of a second from 20 s, so that every product is exact.
+  for (const phase of [1, 2, 3]) {
+    const rate = [2, 4, 8][phase - 1];
+    const seen = {};
+    for (let i = 0; i < 32; i++) {
+      const time = 20 + i / 16;
+      const k = key({ phase: phase }, time);
+      if (!k || k.frame !== Math.floor(time * rate) % 4) return 'phase ' + phase + ' at ' + time + ' s: ' + JSON.stringify(k) + ', want frame ' + Math.floor(time * rate) % 4;
+      seen[k.frame] = true;
+    }
+    if (Object.keys(seen).length !== 4) return 'phase ' + phase + ': 2 s show the frames ' + Object.keys(seen).join(' ');
+    for (const state of ['telegraph', 'attack']) {
+      for (let i = 0; i < 16; i++) {
+        const time = 20 + i / 64;
+        const k = key({ phase: phase, state: state, pose: 'raise' }, time);
+        if (!k || k.frame !== Math.floor(time * 16) % 4) return 'her arm up in ' + state + ', phase ' + phase + ', at ' + time + ' s: ' + JSON.stringify(k);
+      }
+    }
+  }
+  // One step is the next frame: k0, k1, k2, k3 and k0 again, never backwards.
+  const run = [0, 1, 2, 3, 4].map(function (i) { return key({ phase: 1 }, 20 + i / 2).frame; });
+  if (run.join('') !== '01230') return 'five steps of phase 1: ' + run.join(' ');
+  for (const c of [['recoil', 'hurt'], ['laugh', 'laugh']]) {
+    for (const time of [20, 20.3, 20.55, 21.9]) {
+      const k = key({ state: c[0], pose: c[1], phase: 3 }, time);
+      if (!k || k.frame !== 0) return 'in ' + c[0] + ' at ' + time + ' s the key is ' + JSON.stringify(k);
+    }
+  }
+  // The finisher: no step of its own, whatever the clock; one frame back for each letter typed.
+  const cranked = [];
+  for (let typed = 0; typed <= 9; typed++) {
+    const word = { id: 4242, kind: 'finisher', word: 'clockwork', typable: true, priority: 0, eta: Infinity, x: 0, y: 0, shownAt: 0, lost: false,
+      typed: typed, errors: 0, firstKeyAt: null, lastKeyAt: null };
+    cranked.push(key({ state: 'finisher', pose: 'dizzy', phase: 3, word: word }, 20 + typed * 0.37).frame);
+  }
+  if (cranked.join('') !== '0321032103') return 'the finisher, letter by letter: ' + cranked.join(' ');
+  if (key({ state: 'finisher', pose: 'dizzy', phase: 3 }, 20.3).frame !== 0) return 'the finisher before its word is not at k0';
+  // Its place, between the far arm and the head, and its cut at the ground line.
+  const s = ratchetState(TG, 'boss', { rise: 30 });
+  s.time = 20;
+  const list = ratchetDrawn(TG, env, s);
+  const order = list.map(function (c) { return c.name + (c.flipX ? ' flipped' : ''); }).join(', ');
+  if (order !== 'boss2_body, boss2_arm flipped, boss2_key, boss2_head, boss2_arm, boss2_engine') return 'at rise 30: ' + order;
+  const k = named(list, 'boss2_key')[0];
+  if (k.left !== RATCHET_BX + 14 - 8 || k.top !== RATCHET_BY - 30 + 30 - 8 || k.rows !== 8) return 'the key at rise 30: ' + JSON.stringify(k);
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('the needle of the boiler gauge (LEVEL2 10.4): 4 px from the dial\'s centre at bx - 18, by - 10, from the left over the top to the right by the part of the volley that was cleared; RED while a weak-point word is open; at empty with no volley and once she is wound down; it moves with the engine when the engine shakes', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const CX = RATCHET_BX - 18, CY = RATCHET_BY - 10;
+  // The needle's pixels as [dx, dy up] from the centre. A third is the mirror of two thirds.
+  const LEFT = [[0, 0], [-1, 0], [-2, 0], [-3, 0]], UP = [[0, 0], [0, 1], [0, 2], [0, 3]], RIGHT = [[0, 0], [1, 0], [2, 0], [3, 0]];
+  const THIRD = [[0, 0], [0, 1], [-1, 2], [-1, 3]], TWO_THIRDS = [[0, 0], [0, 1], [1, 2], [1, 3]];
+  const QUARTER = [[0, 0], [-1, 1], [-2, 2]], THREE_QUARTERS = [[0, 0], [1, 1], [2, 2]];
+  const word = { id: 4243, kind: 'core', word: 'ratchet', typable: true, priority: 0, eta: 3, x: 0, y: 0, shownAt: 0, lost: false, typed: 0, errors: 0,
+    firstKeyAt: null, lastKeyAt: null };
+  const volley = function (n, hits) { return { toLaunch: new Array(n).fill('rock'), launched: n, sinceLaunch: 0, hits: hits }; };
+  // The dial's 7 x 6 px with the needle on them. A RED needle is read whole, the engine having no RED of
+  // its own; an INK one is read at its own places and by the WHITE it leaves.
+  // shake: px the engine is drawn to the right, and the dial with it.
+  const needle = function (boss, color, want, shake) {
+    TG.Render.draw(ratchetState(TG, 'boss', boss));
+    const rgba = env.canvas.toRGBA();
+    const cx = CX + (shake || 0);
+    for (const p of want) if (pixel(rgba, 384, cx + p[0], CY - p[1]) !== pal[color]) return 'no colour ' + color + ' at ' + p.join(',') + ' from the centre';
+    let red = 0, white = 0;
+    for (let dy = -2; dy <= 3; dy++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const c = pixel(rgba, 384, cx + dx, CY - dy);
+        if (c === pal[25]) red++;
+        if (c === pal[4]) white++;
+      }
+    }
+    if (red !== (color === 25 ? want.length : 0)) return red + ' RED pixels on the dial';
+    // The dial has 34 WHITE pixels, and every pixel of the needle lies on one of them.
+    if (white !== 34 - want.length) return white + ' WHITE pixels left on the dial, want ' + (34 - want.length);
+    return null;
+  };
+  const CASES = [[2, 0, LEFT], [2, 1, UP], [2, 2, RIGHT], [3, 0, LEFT], [3, 1, THIRD], [3, 2, TWO_THIRDS], [3, 3, RIGHT], [4, 1, QUARTER],
+    [4, 2, UP], [4, 3, THREE_QUARTERS], [5, 0, LEFT], [5, 5, RIGHT], [3, 7, RIGHT]];
+  for (const c of CASES) {
+    let bad = needle({ volley: volley(c[0], c[1]) }, 0, c[2]);
+    if (bad) return c[1] + ' of ' + c[0] + ' cleared: ' + bad;
+    // The same place in RED while the window of a taunt is open, and INK again in the taunt before its word.
+    bad = needle({ state: 'taunt', pose: 'laugh', word: word, windowWs: 5, volley: volley(c[0], c[1]) }, 25, c[2]);
+    if (bad) return c[1] + ' of ' + c[0] + ' cleared, in a taunt: ' + bad;
+  }
+  let bad = needle({ state: 'taunt', pose: 'laugh', word: null, volley: volley(2, 1) }, 0, UP);
+  if (bad) return 'a taunt with no word yet: ' + bad;
+  // Empty: before the first volley, and in the finisher and the defeat whatever the last volley was.
+  bad = needle({ state: 'intro', introTime: 4, stateT: 3.9, pose: 'laugh', volley: { toLaunch: [], launched: 0, sinceLaunch: 0, hits: 0 } }, 0, LEFT) ||
+    needle({ state: 'finisher', pose: 'dizzy', volley: volley(2, 2) }, 0, LEFT);
+  if (bad) return 'with no volley, and in the finisher: ' + bad;
+  // While she rises the engine shakes 1 px to the right on the odd twentieths of a second (10.1), and the
+  // needle stays on its dial: 1.25 s into the long intro is the 25th twentieth, 1.5 s the 30th.
+  const rising = function (t) {
+    return { state: 'intro', introTime: 4, stateT: t, rise: 40 * (1 - t / 2), pose: 'idle', volley: { toLaunch: [], launched: 0, sinceLaunch: 0, hits: 0 } };
+  };
+  bad = needle(rising(1.25), 0, LEFT, 1) || needle(rising(1.5), 0, LEFT, 0);
+  if (bad) return 'while the engine shakes: ' + bad;
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+// The state of her intro `t` s in, as js/boss.js gives it: rise from 40 to 0 over the first half, the laugh
+// pose from the half.
+function ratchetIntro(TG, introTime, t) {
+  const s = ratchetState(TG, 'bossIntro', { state: 'intro', introTime: introTime, stateT: t, rise: 40 * Math.max(0, 1 - t / (introTime / 2)),
+    pose: t >= introTime / 2 ? 'laugh' : 'idle', volley: { toLaunch: [], launched: 0, sinceLaunch: 0, hits: 0 } });
+  s.screenT = t;
+  return s;
+}
+
+check('her long intro is the one timeline of LEVEL2 10.1: the Baronet hops in from the left edge to the open hatch in six hops and drops in, with her out of sight; the hatch shuts, the engine shakes and she rises from the quarter to the half; she holds her watch up and her key steps three times; she laughs from 0.7', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const at = function (u, edit) {
+    const s = ratchetIntro(TG, 4, 4 * u);
+    if (edit) edit(s);
+    return ratchetDrawn(TG, env, s);
+  };
+  // The cameo. He is at the hatch after nine tenths of it. A twelfth of that run at a time: on the ground at
+  // the start of each hop, 6 px up in its middle, 304 px from the hatch at first. She is 40 px down whatever
+  // boss.rise says (it is 40 to 20 here).
+  for (let k = 0; k <= 11; k++) {
+    const sx = RATCHET_BX - Math.round(304 * (1 - k / 12));
+    const want = ratchetWant({ down: 40, engine: 'open' }).concat([{ name: 'en_baronet', frame: 'up', remap: null, flipX: true, x: sx, y: RATCHET_BY - (k % 2 === 1 ? 6 : 0) }]);
+    const differs = ratchetDiffers(at(0.25 * 0.9 * k / 12), want);
+    if (differs) return 'the cameo, ' + k + ' twelfths of his run in: ' + differs;
+  }
+  if (RATCHET_BX - Math.round(304 * 1) !== -8) return 'the Baronet does not start at screen x -8';
+  // Over the last tenth he goes down in the hatch, at the hatch's x: still the up frame, so that he keeps
+  // his helmet (the spin frame is his bare head), turned over on the odd twentieths of a second, and drawn
+  // only in the opening, the 10 px between the jambs from 12 px above the ground line down to it. So the
+  // gauge and the jambs are never behind him. [the part of the cameo, px he has fallen, turned over]
+  const HATCH = { left: RATCHET_BX - 5, cols: 10, top: RATCHET_BY - 12 };
+  for (const c of [[0.925, 1, false], [0.95, 4, true], [0.975, 9, true], [0.98, 10, true]]) {
+    const top = Math.max(HATCH.top, RATCHET_BY + c[1] - 16);
+    const want = ratchetWant({ down: 40, engine: 'open' }).concat([{ name: 'en_baronet', frame: 'up', remap: null, flipX: c[2], left: HATCH.left, top: top,
+      rows: RATCHET_BY - top, cols: HATCH.cols, sx: 3, sy: top - (RATCHET_BY + c[1] - 16) }]);
+    const differs = ratchetDiffers(at(0.25 * c[0]), want);
+    if (differs) return 'his drop, ' + c[0] + ' of the cameo: ' + differs;
+  }
+  // On the canvas, through the drop: the engine's 48 x 16 px outside the opening are as they are with nobody
+  // there, the dial of the gauge among them, and something of him shows in the opening.
+  const engineBox = function (u) {
+    TG.Render.draw(ratchetIntro(TG, 4, 4 * u));
+    const rgba = env.canvas.toRGBA();
+    const out = { round: [], opening: [] };
+    for (let y = RATCHET_BY - 16; y < RATCHET_BY; y++) {
+      for (let x = RATCHET_BX - 24; x < RATCHET_BX + 24; x++) {
+        const inside = x >= HATCH.left && x < HATCH.left + HATCH.cols && y >= HATCH.top;
+        (inside ? out.opening : out.round).push(pixel(rgba, 384, x, y));
+      }
+    }
+    return out;
+  };
+  // Nobody there: at the very end of the cameo he is under the ground line.
+  const empty = engineBox(0.25 * 0.9999);
+  if (named(at(0.25 * 0.9999), 'en_baronet').length !== 0) return 'the Baronet is still drawn at the very end of the cameo';
+  for (const q of [0.91, 0.93, 0.95, 0.97]) {
+    const got = engineBox(0.25 * q);
+    if (JSON.stringify(got.round) !== JSON.stringify(empty.round)) return 'the Baronet is over the engine outside the opening, ' + q + ' of the way through the cameo';
+    if (JSON.stringify(got.opening) === JSON.stringify(empty.opening)) return 'nothing of the Baronet in the opening, ' + q + ' of the way through the cameo';
+  }
+  // A pause holds the picture: the boss's state says where the intro is, not the screen.
+  let differs = ratchetDiffers(at(0.125, function (s) { s.screen = 'paused'; s.screenT = 0; }), at(0.125));
+  if (differs) return 'paused in the cameo: ' + differs;
+  // From the quarter she rises, 40 px over the second quarter, and the engine is shut and shakes 1 px to
+  // the right on the odd twentieths of a second. At the quarter itself she has not moved.
+  differs = ratchetDiffers(at(0.25), ratchetWant({ down: 40 }));
+  if (differs) return 'at the quarter: ' + differs;
+  for (const c of [[0.3125, 30, 1], [0.375, 20, 0], [0.4375, 10, 1]]) {
+    differs = ratchetDiffers(at(c[0]), ratchetWant({ down: c[1], shake: c[2] }));
+    if (differs) return 'her rise at ' + c[0] + ': ' + differs;
+  }
+  // The gesture, from the half to 0.7: the watch held up and the head not yet laughing, though the pose
+  // is; the key one frame on at 0.55, 0.6 and 0.65, each step looked at just before and just after its
+  // moment. Then the laugh, the arm down and the key where it stopped.
+  for (const c of [[0.5, 0], [0.5469, 0], [0.5499, 0], [0.5501, 1], [0.5625, 1], [0.5938, 1], [0.5999, 1], [0.6001, 2], [0.625, 2], [0.6406, 2],
+    [0.6499, 2], [0.6501, 3], [0.6563, 3], [0.6875, 3]]) {
+    differs = ratchetDiffers(at(c[0]), ratchetWant({ key: c[1], near: 'watch', head: 'normal' }));
+    if (differs) return 'the gesture at ' + c[0] + ': ' + differs;
+  }
+  for (const u of [0.7031, 0.75, 0.9375]) {
+    differs = ratchetDiffers(at(u), ratchetWant({ key: 3, head: 'laugh' }));
+    if (differs) return 'the laugh at ' + u + ': ' + differs;
+  }
+  // TG.Effects' part of the intro falls inside the renderer's: its puff of dust at the hatch starts while
+  // the Baronet is in his drop, the hatch still open, and each of its three puffs of steam while she is on
+  // her way up through the engine.
+  const first = ratchetIntro(TG, 4, 0);
+  withGame(TG, first);
+  TG.Effects.reset();
+  TG.Events.emit('boss:enter', {});
+  const puffs = TG.Effects._list().filter(function (f) { return f.kind === 'fx_poof'; }).map(function (f) { return f.delay; }).sort(function (a, b) { return a - b; });
+  TG.Effects.reset();
+  if (puffs.length !== 4) return 'TG.Effects makes ' + puffs.length + ' puffs on boss:enter';
+  const dust = at(puffs[0] / 4);
+  const dropping = named(dust, 'en_baronet');
+  if (named(dust, 'boss2_engine')[0].frame !== 'open' || dropping.length !== 1 || dropping[0].cols !== HATCH.cols) return 'the puff of dust at ' + puffs[0] + ' s is not in his drop';
+  for (const t of puffs.slice(1)) {
+    const up = at(t / 4);
+    const down = named(up, 'boss2_head')[0].top - (RATCHET_BY - 58);
+    if (named(up, 'boss2_engine')[0].frame !== 'shut' || !(down > 0 && down < 40)) return 'the steam at ' + t + ' s: she is ' + down + ' px down';
+  }
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('her short intro after a continue has no cameo and no gesture: she rises as boss.rise says, with the engine shut and shaking, and laughs from the half, her key still', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const SHORT = TG.C.BOSS_INTRO_SHORT;
+  if (SHORT !== 1.5) return 'BOSS_INTRO_SHORT is ' + SHORT;
+  // [s into the intro, px she is down (boss.rise, floored), the engine's shake]
+  for (const c of [[0, 40, 0], [0.1875, 30, 1], [0.375, 20, 1], [0.5625, 10, 1]]) {
+    const differs = ratchetDiffers(ratchetDrawn(TG, env, ratchetIntro(TG, SHORT, c[0])), ratchetWant({ down: c[1], shake: c[2] }));
+    if (differs) return c[0] + ' s in: ' + differs;
+  }
+  for (const t of [0.75, 0.9, 1.2, 1.45]) {
+    const differs = ratchetDiffers(ratchetDrawn(TG, env, ratchetIntro(TG, SHORT, t)), ratchetWant({ head: 'laugh' }));
+    if (differs) return t + ' s in: ' + differs;
+  }
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('the hatch is open while she sends the minion out, and shut for a cog: the throw pose of a volley whose last launch was the minion', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const hatch = function (boss) { return named(ratchetDrawn(TG, env, ratchetState(TG, 'boss', boss)), 'boss2_engine')[0].frame; };
+  const volley = function (launched) { return { toLaunch: ['rock', 'rockhigh', 'minion'], launched: launched, sinceLaunch: 0, hits: 0 }; };
+  const cases = [[{ state: 'volley', pose: 'throw', volley: volley(3) }, 'open'], [{ state: 'volley', pose: 'throw', volley: volley(2) }, 'shut'],
+    [{ state: 'volley', pose: 'throw', volley: volley(1) }, 'shut'], [{ state: 'volley', pose: 'idle', volley: volley(3) }, 'shut'],
+    [{ state: 'volley', pose: 'idle', volley: volley(0) }, 'shut'], [{ state: 'attack', pose: 'throw', volley: volley(3) }, 'shut']];
+  for (const c of cases) {
+    if (hatch(c[0]) !== c[1]) return JSON.stringify(c[0]) + ': the hatch is ' + hatch(c[0]) + ', want ' + c[1];
+  }
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('her defeat (LEVEL2 10.7): the picture of the finisher until 0.55 s; then her key is gone and her head is the one without goggles; from 1.2 s the hatch is open and she goes straight up at 480 px a second, her body flipped on the odd twentieths of a second, until she is off the screen; boss.rise does not bring her back; TG.Effects throws her key and her goggles at the same 0.55 s and starts the letter fountain at the same 1.2 s', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const at = function (t, rise) {
+    const s = ratchetState(TG, 'levelComplete', { state: 'defeated', pose: 'dizzy', rise: rise || 0 });
+    s.screenT = t;
+    return ratchetDrawn(TG, env, s);
+  };
+  // [screenT, what is wanted]. 1.251 s and 1.501 s are 24 and 144 px up, in the 25th and the 30th twentieth.
+  const CASES = [[0.02, { body: 1, key: 0, head: 'dizzy' }], [0.54, { body: 1, key: 0, head: 'dizzy' }], [0.55, { body: 1, key: null, head: 'hurt' }],
+    [1.19, { body: 1, key: null, head: 'hurt' }], [1.2, { body: 1, key: null, head: 'hurt', engine: 'open' }],
+    [1.251, { body: 1, key: null, head: 'hurt', engine: 'open', down: -24, flip: true }],
+    [1.501, { body: 1, key: null, head: 'hurt', engine: 'open', down: -144, flip: false }],
+    [1.59, { gone: true, engine: 'open' }], [2.5, { gone: true, engine: 'open' }]];
+  for (const c of CASES) {
+    const differs = ratchetDiffers(at(c[0]), ratchetWant(c[1]));
+    if (differs) return c[0] + ' s: ' + differs;
+  }
+  // The last second, in which js/boss.js sinks a defeated boss into its base.
+  for (const c of [[3.2, 8], [3.6, 24], [3.98, 39.2]]) {
+    const differs = ratchetDiffers(at(c[0], c[1]), ratchetWant({ gone: true, engine: 'open' }));
+    if (differs) return c[0] + ' s with boss.rise ' + c[1] + ': ' + differs;
+  }
+  // What she loses is TG.Effects' from the moment the renderer stops drawing it: her key and her goggles
+  // leave her at 0.55 s. The fountain that launches her is TG.Effects' too: its first letter leaves the
+  // hatch when the renderer opens it.
+  const s = ratchetState(TG, 'levelComplete', { state: 'defeated', pose: 'dizzy' });
+  withGame(TG, s);
+  TG.Effects.reset();
+  TG.Events.emit('boss:defeat', { x: s.boss.x, y: s.boss.y });
+  const letters = TG.Effects._list().filter(function (f) { return f.type === 'letter'; }).map(function (f) { return f.delay; });
+  const thrown = TG.Effects._list().filter(function (f) { return f.kind === 'boss2_key' || f.kind === 'boss2_goggles'; }).map(function (f) { return f.kind + ' at ' + f.delay; }).sort();
+  TG.Effects.reset();
+  if (JSON.stringify(thrown) !== JSON.stringify(['boss2_goggles at 0.55', 'boss2_key at 0.55'])) return 'TG.Effects throws ' + JSON.stringify(thrown);
+  if (letters.length === 0 || Math.abs(Math.min.apply(null, letters) - 1.2) > 1e-9) return 'the first letter of the fountain leaves at ' + (letters.length ? Math.min.apply(null, letters) : 'no time');
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('stars circle her head while she is wound down (LEVEL2 10.7): three fx_star round bx - 2, by - 60 in the finisher and through her defeat until she is launched, moving down with her; none in any other pose, none while she is 30 px or more down, none once she has left the engine', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const stars = function (screen, boss, screenT) {
+    const s = ratchetState(TG, screen, boss);
+    if (screenT !== undefined) s.screenT = screenT;
+    return named(drawCalls(TG, function () { TG.Render.draw(s); }), 'fx_star');
+  };
+  // Three, on a ring 16 px to either side of `cx` and 4 px above and below `cy`.
+  const ring = function (list, cy) {
+    return list.length === 3 && list.every(function (c) { return Math.abs(c.x - (RATCHET_BX - 2)) <= 16 && Math.abs(c.y - cy) <= 4; });
+  };
+  const finisher = function (rise) { return stars('boss', { state: 'finisher', pose: 'dizzy', phase: 3, lampRed: true, rise: rise }); };
+  if (!ring(finisher(0), RATCHET_BY - 60)) return 'the finisher: ' + JSON.stringify(finisher(0));
+  if (!ring(finisher(12.4), RATCHET_BY - 48)) return 'the finisher with her 12 px down: ' + JSON.stringify(finisher(12.4));
+  if (finisher(30).length !== 0 || finisher(40).length !== 0) return 'stars with her 30 px or more down';
+  for (const p of [['idle', 'volley'], ['raise', 'telegraph'], ['stomp', 'attack'], ['throw', 'volley'], ['laugh', 'taunt'], ['laugh', 'laugh'], ['hurt', 'recoil']]) {
+    if (stars('boss', { state: p[1], pose: p[0] }).length !== 0) return 'stars in the pose ' + p[0];
+  }
+  // Her defeat: through the freeze, the flash and the loss of her key, to the launch at 1.2 s.
+  const defeat = function (t) { return stars('levelComplete', { state: 'defeated', pose: 'dizzy' }, t); };
+  for (const t of [0.02, 0.3, 0.8, 1.19]) if (!ring(defeat(t), RATCHET_BY - 60)) return 'her defeat at ' + t + ' s: ' + JSON.stringify(defeat(t));
+  for (const t of [1.25, 1.5, 2.5, 3.9]) if (defeat(t).length !== 0) return 'stars at ' + t + ' s of her defeat, after the launch';
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+check('the Baronet comes up in front of his mound (LEVEL2 4.4): the mound first, then en_baronet cut at the ground line, the peek frame until 12 of his 16 rows are out and the up frame from there, whatever t is; under the ground he is his mound alone', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const C = TG.C;
+  const G = C.GROUND_Y;
+  const ctx = env.canvas.getContext('2d');
+  const drawn = function (elev, t, phase) {
+    const s = handState(TG, 'playing');
+    const mole = s.entities.filter(function (e) { return e.kind === 'digby'; })[0];
+    Object.assign(mole, { skin: 'en_baronet', phase: phase || 'up', elev: elev, y: G - elev, t: t, harmful: true, onScreen: true });
+    const sources = { peek: TG.Gfx.get('en_baronet', 'peek', { flipX: false, remap: null }), up: TG.Gfx.get('en_baronet', 'up', { flipX: false, remap: null }) };
+    const parts = [];
+    const drawImage = ctx.drawImage;
+    ctx.drawImage = function (cv) {
+      for (const frame of ['peek', 'up']) if (cv === sources[frame]) parts.push([frame].concat(Array.prototype.slice.call(arguments, 1)));
+      return drawImage.apply(ctx, arguments);
+    };
+    let calls;
+    try { calls = drawCalls(TG, function () { TG.Render.draw(s); }); } finally { ctx.drawImage = drawImage; }
+    const order = calls.map(function (c) { return c.name; });
+    return { parts: JSON.stringify(parts), x: Math.floor(mole.x - s.camera.x), mound: JSON.stringify(named(calls, 'en_mound').map(function (c) { return [c.frame, c.x, c.y, c.remap]; })),
+      moundFirst: order.indexOf('en_mound') !== -1 && order.indexOf('en_mound') < order.indexOf('en_baronet'), digby: order.indexOf('en_digby') !== -1,
+      baronet: order.indexOf('en_baronet') !== -1 };
+  };
+  const pop = C.DIGBY_POP_T;
+  // [elev, t, frame, rows drawn]. The Digby's rule, the peek frame for 0.05 of t after the pop, is not his.
+  const cases = [[-15, pop + 0.01, 'peek', 1], [-12, pop + 0.04, 'peek', 4], [-5, pop + 0.1, 'peek', 11], [-4.5, pop + 0.1, 'up', 12], [-4, pop + 0.01, 'up', 12],
+    [-1, pop + 0.14, 'up', 15], [0, pop + 0.15, 'up', 16]];
+  for (const c of cases) {
+    const d = drawn(c[0], c[1]);
+    const want = JSON.stringify([[c[2], 0, 0, 16, c[3], d.x - 8, Math.floor(G - c[0]) - 16, 16, c[3]]]);
+    if (d.parts !== want) return 'elev ' + c[0] + ', t ' + c[1].toFixed(2) + ': ' + d.parts + ', want ' + want;
+    if (d.mound !== JSON.stringify([[0, d.x, G, null]])) return 'elev ' + c[0] + ': the mound ' + d.mound;
+    if (!d.moundFirst) return 'elev ' + c[0] + ': the mound is not drawn before the Baronet';
+    if (d.digby) return 'elev ' + c[0] + ': en_digby is drawn for an entity with a skin';
+  }
+  const under = drawn(-16, 0.5, 'mound');
+  if (under.baronet || under.digby || JSON.parse(under.mound).length !== 1) return 'under the ground: ' + JSON.stringify(under);
+  if (env.warnings.length || env.errors.length) return 'console: ' + env.warnings.concat(env.errors)[0];
+});
+
+// Her states of a fight from first to last, for the checks that draw them all.
+function ratchetStates(TG) {
+  const word = function (kind, typed) {
+    return { id: nextId++, kind: kind, word: 'clockwork', typable: true, priority: 0, eta: 3, x: 0, y: 0, shownAt: 0, lost: false, typed: typed, errors: 0,
+      firstKeyAt: 1, lastKeyAt: 2 };
+  };
+  const defeat = function (t) {
+    const s = ratchetState(TG, 'levelComplete', { state: 'defeated', pose: 'dizzy' });
+    s.screenT = t;
+    return s;
+  };
+  return [ratchetIntro(TG, 4, 0.5), ratchetIntro(TG, 4, 0.97), ratchetIntro(TG, 4, 1.4), ratchetIntro(TG, 4, 2.3), ratchetIntro(TG, 4, 3.5),
+    ratchetIntro(TG, 1.5, 0.4), ratchetIntro(TG, 1.5, 1.1), ratchetState(TG, 'boss'),
+    ratchetState(TG, 'boss', { state: 'volley', pose: 'throw', volley: { toLaunch: ['rock', 'minion'], launched: 2, sinceLaunch: 0, hits: 1 } }),
+    ratchetState(TG, 'boss', { state: 'telegraph', pose: 'raise' }), ratchetState(TG, 'boss', { state: 'attack', pose: 'stomp' }),
+    ratchetState(TG, 'boss', { state: 'taunt', pose: 'laugh', stateT: 0.2, word: word('core', 3), windowWs: 5, lampRed: true, phase: 2 }),
+    ratchetState(TG, 'boss', { state: 'recoil', pose: 'hurt', flashT: 0.1 }), ratchetState(TG, 'boss', { state: 'laugh', pose: 'laugh' }),
+    ratchetState(TG, 'boss', { state: 'transition', pose: 'stomp', phase: 3, lampRed: true }),
+    ratchetState(TG, 'boss', { state: 'finisher', pose: 'dizzy', phase: 3, lampRed: true, word: word('finisher', 5) }),
+    defeat(0.02), defeat(0.8), defeat(1.3), defeat(3.9)];
+}
+
+check('TG.Render.draw draws Lady Ratchet from her intro to her defeat with the sprite files, with gfx.js and font.js alone and with only core.js, and writes nothing to a deep-frozen state', function () {
+  for (const variant of [{}, { art: 'gfx' }, { art: false }]) {
+    const env = loadEnv(variant);
+    const TG = env.TG;
+    const states = ratchetStates(TG);
+    for (let i = 0; i < states.length; i++) {
+      const s = states[i];
+      const text = JSON.stringify(s);
+      deepFreeze(s);
+      const before = env.canvasCalls.count;
+      TG.Hud.update(1 / 60, s);
+      TG.Render.draw(s);
+      if (env.canvasCalls.count === before) return 'state ' + i + ' (art ' + JSON.stringify(variant.art) + '): no canvas calls';
+      if (JSON.stringify(s) !== text) return 'state ' + i + ': the state changed';
+    }
+    if (env.errors.length) return 'console.error (art ' + JSON.stringify(variant.art) + '): ' + env.errors[0];
+    // With her art present nothing is missing: no labelled box, no warning.
+    if (variant.art === undefined && env.warnings.length) return 'console.warn: ' + env.warnings[0];
+  }
+});
+
+const LEVEL2_PRESENT = SIM_PRESENT && fs.existsSync(path.join(stubs.ROOT, 'js/levels/level2.js'));
+
+if (!LEVEL2_PRESENT) {
+  skip('in the game, Level 2\'s boss intro is drawn on the timeline of LEVEL2 10.1, and the intro after a continue without the cameo and the gesture', 'the simulation files are not all present');
+} else {
+  check('in the game, Level 2\'s boss intro is drawn on the timeline of LEVEL2 10.1: the Baronet and the open hatch for the first second with her out of sight, her rise over the second, the watch and the three steps of her key from 2 s to 2.8 s, then the laugh; the intro after a continue has no cameo and no gesture; then the fight is hers', function () {
+    const files = ['js/core.js'].concat(ART_FILES, ['js/words.js', 'js/typing.js', 'js/input.js', 'js/entities.js', 'js/level.js', 'js/boss.js',
+      'js/levels/level1.js', 'js/levels/level2.js', 'js/game.js'], WPF_FILES);
+    const env = stubs.load({ files: files, canvas: 'soft', storage: 'memory' });
+    const TG = env.TG;
+    const C = TG.C;
+    TG.Gfx.init(env.document);
+    TG.Events.clear();
+    TG.Effects.init();
+    TG.Hud.init();
+    TG.Render.init(env.canvas);
+    TG.Input.clear();
+    TG.Game.init();
+    const s0 = TG.Game.newRun({ difficulty: 'medium', seed: 1, levelId: 2, adaptive: false, assist: 1, tutorial: false });
+    s0.player.x = s0.level.arenaX - 8;
+    s0.camera.x = Math.max(0, s0.player.x - C.HERO_SCREEN_X);
+    // Steps to the end of the next boss intro. Returns what was drawn of her on each of its frames, with
+    // boss.stateT and boss.rise as they were and bx, the boss's place on the screen.
+    const intro = function () {
+      const frames = [];
+      for (let i = 0; i < 2000; i++) {
+        const was = TG.Game.state.screen;
+        TG.Game.step(C.DT);
+        const s = TG.Game.state;
+        TG.Effects.update(C.DT);
+        TG.Hud.update(C.DT, s);
+        if (s.screen === 'bossIntro') frames.push({ t: s.boss.stateT, rise: s.boss.rise, bx: Math.floor(s.boss.x - s.camera.x), list: ratchetDrawn(TG, env, s) });
+        else if (was === 'bossIntro') return frames;
+      }
+      return frames;
+    };
+    const one = function (f, name) { const l = named(f.list, name); return l.length === 1 ? l[0] : null; };
+    const long = intro();
+    if (TG.Game.state.boss.kind !== 'ratchet' || TG.Game.state.screen !== 'boss') return 'the run did not reach Lady Ratchet\'s fight';
+    if (Math.abs(long.length - 240) > 1) return 'the 4 s intro: ' + long.length + ' frames';
+    let keys = '';
+    for (const f of long) {
+      // A frame on one of the timeline's own moments is on either side of it, by the sum of the steps.
+      if ([0.9, 1, 2, 2.8].some(function (edge) { return Math.abs(f.t - edge) < 1e-6; })) continue;
+      const what = 'the 4 s intro at ' + f.t.toFixed(3) + ' s: ';
+      const head = one(f, 'boss2_head'), near = named(f.list, 'boss2_arm').filter(function (c) { return !c.flipX; })[0] || null;
+      const engine = one(f, 'boss2_engine'), baronet = one(f, 'en_baronet'), key = one(f, 'boss2_key');
+      if (!engine) return what + 'no engine';
+      // To 1 s: the cameo. Her head is the only part with a row above the ground line, and the engine hides it.
+      if (f.t < 1) {
+        if (engine.frame !== 'open' || engine.x !== f.bx) return what + 'the engine is ' + JSON.stringify(engine) + ' with the boss at ' + f.bx;
+        if (!head || head.top !== RATCHET_BY - 18 || f.list.length > 3) return what + 'she is not out of sight: ' + JSON.stringify(f.list);
+        if (!baronet && f.t < 0.99) return what + 'no Baronet';
+        // His up frame throughout, helmet on; from 0.9 s he is in his drop, seen in the hatch's opening alone.
+        if (baronet && (baronet.frame !== 'up' || (baronet.cols === 10) !== (f.t > 0.9))) return what + 'the Baronet is ' + JSON.stringify(baronet);
+        continue;
+      }
+      if (baronet || engine.frame !== 'shut') return what + 'the cameo has not ended: ' + JSON.stringify(f.list);
+      // 1 s to 2 s: she rises 40 px. From 2 s she is up, as boss.rise says too.
+      const down = head ? head.top - (RATCHET_BY - 58) : null;
+      if (f.t < 2) {
+        if (down === null || Math.abs(down - 40 * (2 - f.t)) > 1) return what + 'she is ' + down + ' px down';
+        if (head.frame !== 'normal' || (near && near.frame !== 'rest')) return what + JSON.stringify([head, near]);
+        continue;
+      }
+      if (down !== 0 || f.rise !== 0 || engine.x !== f.bx || !near || !key) return what + 'she is not up and still: ' + JSON.stringify(f.list);
+      // 2 s to 2.8 s: the gesture. Then the laugh.
+      const gesture = f.t < 2.8;
+      if (head.frame !== (gesture ? 'normal' : 'laugh') || near.frame !== (gesture ? 'watch' : 'rest')) return what + JSON.stringify([head, near]);
+      if (keys.charAt(keys.length - 1) !== String(key.frame)) keys += key.frame;
+      if (!gesture && key.frame !== 3) return what + 'the key is at ' + key.frame + ' in the laugh';
+    }
+    if (keys !== '0123') return 'the key through the gesture and the laugh: ' + keys.split('').join(' ');
+    // The Baronet crosses the 304 px to the hatch in the first 0.9 s, 5 or 6 px a frame and never back, and
+    // goes down there: in his drop his middle is at the hatch's on every frame.
+    const xs = long.map(function (f) { const b = one(f, 'en_baronet'); return b ? (b.x !== undefined ? b.x : b.left - b.sx + 8) - f.bx : null; }).filter(function (x) { return x !== null; });
+    if (xs.length < 59 || xs[0] > -298 || xs[xs.length - 1] !== 0) return 'the Baronet from ' + xs[0] + ' px to ' + xs[xs.length - 1] + ' px from the hatch in ' + xs.length + ' frames';
+    for (let i = 1; i < xs.length; i++) {
+      const moved = xs[i] - xs[i - 1];
+      if (xs[i - 1] < 0 ? (moved < 5 || moved > 6) : moved !== 0) return 'the Baronet moves ' + moved + ' px in a frame, ' + xs[i - 1] + ' px from the hatch';
+    }
+    if (xs.filter(function (x) { return x === 0; }).length < 5) return 'the Baronet is at the hatch for ' + xs.filter(function (x) { return x === 0; }).length + ' frames';
+
+    // The first frame of the fight: the key at the pace of phase 1.
+    TG.Game.step(C.DT);
+    let s = TG.Game.state;
+    let key = named(ratchetDrawn(TG, env, s), 'boss2_key')[0];
+    if (!key || key.frame !== Math.floor(s.time * 2) % 4) return 'the key in the first volley: ' + JSON.stringify(key) + ' at ' + s.time;
+
+    if (!TG.Game.pause() || !TG.Game.continueRun()) return 'the run did not continue from the fight';
+    if (TG.Game.state.boss.introTime !== C.BOSS_INTRO_SHORT) return 'the intro after the continue is ' + TG.Game.state.boss.introTime + ' s';
+    const short = intro();
+    if (Math.abs(short.length - 90) > 1) return 'the 1.5 s intro: ' + short.length + ' frames';
+    for (const f of short) {
+      const what = 'the 1.5 s intro at ' + f.t.toFixed(3) + ' s: ';
+      const head = one(f, 'boss2_head'), near = named(f.list, 'boss2_arm').filter(function (c) { return !c.flipX; })[0] || null;
+      const engine = one(f, 'boss2_engine'), key = one(f, 'boss2_key');
+      if (one(f, 'en_baronet') || named(f.list, 'en_baronet').length) return what + 'a Baronet';
+      if (!engine || engine.frame !== 'shut') return what + 'the engine is ' + JSON.stringify(engine);
+      if (!head || head.top - (RATCHET_BY - 58) !== Math.floor(f.rise)) return what + 'her head is at ' + (head ? head.top : null) + ' with boss.rise ' + f.rise;
+      if (Math.abs(f.t - 0.75) < 1e-6) continue;
+      if (head.frame !== (f.t >= 0.75 ? 'laugh' : 'normal') || (near && near.frame !== 'rest') || (key && key.frame !== 0)) return what + JSON.stringify([head, near, key]);
+    }
+    if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
   });
 }
 

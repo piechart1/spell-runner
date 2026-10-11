@@ -2293,10 +2293,12 @@ Recipes are in DESIGN 15.2 and 15.3. `TG.Audio` plays everything in response to 
 | `boss_telegraph` | `boss:attack` with kind `shock` or `pick`, for `telegraph` seconds |
 | `boss_throw` | `boss:throw` |
 | `boss_stomp` | `attack:spawn` with kind `shock` |
-| `boss_weak` | `boss:weakopen`, 0.3 s after `boss_laugh` starts |
+| `boss_weak` | `boss:weakopen`, 0.3 s after `boss_laugh` starts; not when `toot` plays in its place |
 | `boss_hit` | `boss:hit` |
 | `boss_stun` | `boss:finisher` |
 | `boss_defeat` | `boss:defeat` |
+| `toot` | `boss:weakopen` in a level whose boss kind is `ratchet`, when every entry of the volley was typed: `state.boss.volley.hits >= state.boss.volley.toLaunch.length` with at least one entry, read from `TG.Game.state` when the event arrives, which is the rule that gives the long weak-point window (section 5.7). It plays 0.3 s after `boss_laugh` starts, in place of `boss_weak` (LEVEL2 10.4) |
+| `click` | In a level whose boss kind is `ratchet`. `type:hit` with kind `finisher`: every letter of the finisher word, the first and the last too, asked for before the letter's own sound (LEVEL2 10.7). And three times in the long boss intro, when `boss.stateT / boss.introTime` passes 0.55, 0.6 and 0.65 while `boss.state` is `intro` and `boss.introTime` is above `BOSS_INTRO_SHORT`: checked in `TG.Audio.update`, with the guards of `urgent_tick`, at the moments `TG.Render` steps her key (LEVEL2 10.1). It has the takeover priority of the sounds that repeat all the time, as `urgent_tick` has. The three clicks that open the `ratchet` variant of `boss_telegraph` are this sound, played inside that one |
 | `ui_move` | `ui:move` |
 | `ui_select` | `ui:select` |
 | `ui_back` | `ui:back` |
@@ -2305,6 +2307,8 @@ Recipes are in DESIGN 15.2 and 15.3. `TG.Audio` plays everything in response to 
 | `stamp` | `ui:stamp` |
 | `count_tick` | `ui:count`. Higher pitch when `high == true` |
 | `start` | `level:start` with `continued == false` |
+
+Boss sounds by boss kind. `boss_laugh`, `boss_telegraph`, `boss_throw`, `boss_stomp`, `boss_hit` and `boss_defeat` each have a second recipe for the boss kind `ratchet` (LEVEL2 11.3). On each of their events `TG.Audio` reads the kind from `TG.Game.state.level.boss.kind`, taking `baron` where the game, the level or the kind is missing, and plays that kind's recipe under the same name, at the same level and takeover priority; a kind with no recipe of its own plays the Baron's. `TG.Audio.SFX` lists each name once. `TG.Audio.sfx(name, { variant: kind })` plays a kind's recipe directly. `boss_rumble`, `boss_weak` and `boss_stun` are the same for every boss. The `ratchet` `boss_defeat` lasts 1.82 s where the Baron's lasts 1.22 s, and `victory` starts when it ends (section 7.2), or after the same wait when sound effects are off.
 
 ### 7.2 Music tracks and jingles
 

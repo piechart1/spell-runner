@@ -87,7 +87,7 @@
     'shield_up', 'shield_break', 'slow_on', 'slow_off', 'watch_tick', 'watch_off',
     'ink_blast', 'one_up', 'hurt', 'fall',
     'rescue', 'checkpoint', 'warn', 'urgent_tick', 'boss_rumble', 'boss_laugh', 'boss_telegraph',
-    'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat',
+    'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat', 'toot', 'click',
     'ui_move', 'ui_select', 'ui_back', 'pause', 'tally_tick', 'stamp', 'count_tick', 'start'
   ];
 
@@ -813,6 +813,7 @@
     }
     if (spec.from !== undefined && spec.to !== undefined) {
       anchor(param, spec.from, t);
+      if (spec.hold) anchor(param, spec.from, t + spec.hold);     // the sweep begins after `hold` seconds
       if (spec.curve === 'lin') param.linearRampToValueAtTime(spec.to, t + dur);
       else param.exponentialRampToValueAtTime(spec.to, t + dur);
       return;
@@ -821,7 +822,7 @@
   }
 
   // A tone: wave 'p12' | 'p25' | 'p50' | 'tri'. Returns { end, gain, source, cleanup }.
-  // spec: { at, dur, freq | from, to, curve | seq: [[freq, dur, gap, shape, vel], ...] | warble: { hz, from, to },
+  // spec: { at, dur, freq | from, to, curve, hold | seq: [[freq, dur, gap, shape, vel], ...] | warble: { hz, from, to },
   //         vel, shape, vibrato: { hz, cents }, tremolo: { hz, depth }, leadVibrato }
   function scheduleTone(dest, wave, spec, t0) {
     var start = t0 + (spec.at || 0);
@@ -971,6 +972,17 @@
     return out;
   }
 
+  // How long a boss_telegraph lasts: opts.duration in seconds, 6 at most, and 1 when none is given.
+  function telegraphTime(o) {
+    return typeof o.duration === 'number' && o.duration > 0 ? Math.min(o.duration, 6) : 1.0;
+  }
+
+  // One ratchet click of Lady Ratchet's key (LEVEL2 11.3): 15 ms of P12 at 1200 Hz. It is the sound
+  // `click`, and each of the three clicks that open her boss_telegraph, CLICK_GAP apart.
+  var CLICK_HZ = 1200;
+  var CLICK_DUR = 0.015;
+  var CLICK_GAP = 0.12;
+
   // Each recipe: { level: 'sfx' | 'key' | number, play: function (B, opts) } where B is the builder
   // of one voice: B.tone(wave, spec), B.noise(kind, spec), B.silence(seconds).
   var SFX = {
@@ -1109,7 +1121,7 @@
       B.tone('p50', { seq: seqOf([N.A4, N.G4, N.F4, N.E4, N.D4], 0.05, 0.04) });
     } },
     boss_telegraph: { level: 'sfx', play: function (B, o) {
-      var dur = typeof o.duration === 'number' && o.duration > 0 ? Math.min(o.duration, 6) : 1.0;
+      var dur = telegraphTime(o);
       var n = Math.max(1, Math.round(dur / 0.12));
       var seq = [];
       for (var i = 0; i < n; i++) seq.push([440, 0.06, 0.06]);
@@ -1143,6 +1155,16 @@
       B.tone('p50', { from: 600, to: 60, dur: 0.72 });
       B.silence(0.5);
     } },
+    // The whistle of Lady Ratchet's boiler gauge (LEVEL2 10.4, 11.3): G5 held for 120 ms over a puff
+    // of steam, then a fall to D5 over 80 ms.
+    toot: { level: 'sfx', play: function (B) {
+      B.tone('p25', { from: N.G5, to: N.D5, hold: 0.12, dur: 0.2 });
+      B.noise('long', { rate: 1, dur: 0.06, vel: 0.5 });
+    } },
+    // One ratchet click of her key (LEVEL2 11.3).
+    click: { level: 'sfx', play: function (B) {
+      B.tone('p12', { freq: CLICK_HZ, dur: CLICK_DUR, shape: 'decay' });
+    } },
     ui_move: { level: 'sfx', play: function (B) {
       B.tone('p25', { freq: 660, dur: 0.025, shape: 'decay' });
     } },
@@ -1171,6 +1193,49 @@
     } }
   };
 
+  // The boss sounds of a boss other than the Baron, by boss kind and sound name (LEVEL2 11.3). A sound
+  // asked for with opts.variant set to a kind listed here plays the recipe below in place of the one
+  // in SFX, at that sound's level and takeover priority. The Baron has no entry: his sounds are the
+  // recipes of SFX, as is any sound a kind does not list.
+  var BOSS_VARIANTS = {
+    ratchet: {
+      // A brisk high cackle.
+      boss_laugh: function (B) {
+        B.tone('p50', { seq: seqOf([N.C5, N.D5, N.E5, N.D5, N.C5], 0.04, 0.03) });
+      },
+      // Three clicks of her key, then a whirr that pulses 20 times a second for the rest of the
+      // telegraph time (LEVEL2 10.5). The shortest telegraph of the level data is 0.7 s.
+      boss_telegraph: function (B, o) {
+        var whirrAt = 3 * CLICK_GAP;
+        var whirr = telegraphTime(o) - whirrAt;
+        B.tone('p12', { seq: seqOf([CLICK_HZ, CLICK_HZ, CLICK_HZ], CLICK_DUR, CLICK_GAP - CLICK_DUR), shape: 'decay' });
+        if (whirr > 0.05) B.tone('p12', { at: whirrAt, freq: 440, dur: whirr, tremolo: { hz: 20, depth: 1 } });
+      },
+      // A spring.
+      boss_throw: function (B) {
+        B.tone('p25', { from: 300, to: 900, dur: 0.08 });
+      },
+      // A gear clunk.
+      boss_stomp: function (B) {
+        B.noise('long', { rate: 0.15, dur: 0.08 });
+        B.tone('tri', { freq: 90, dur: 0.06, shape: 'decay' });
+      },
+      // The blow, then the glass tink of her goggles over a gear clatter.
+      boss_hit: function (B) {
+        B.noise('long', { rate: 0.5, dur: 0.1 });
+        B.tone('p12', { at: 0.1, freq: 2093, dur: 0.2, shape: 'exp', vel: 0.7 });
+        B.noise('short', { at: 0.1, rates: [[0, 1], [0.04, 0.7], [0.08, 0.5]], dur: 0.12, vel: 0.5 });
+      },
+      // She winds down, then the spring of her key lets go. 1.82 s with the silence: onBossDefeat
+      // waits that long for the fanfare when the sound is not played.
+      boss_defeat: function (B) {
+        B.tone('p50', { from: 600, to: 60, dur: 1.2, tremolo: { hz: 10, depth: 0.5 } });
+        B.tone('p25', { at: 1.2, from: 200, to: 1600, dur: 0.12 });
+        B.silence(0.5);
+      }
+    }
+  };
+
   // --- sound effect voices ---------------------------------------------------------------------
 
   var voices = [];
@@ -1186,7 +1251,7 @@
   // never cut a reward: an extra life, a power-up, a streak or a cleared word.
   var PRIORITY = {
     key_ok: 0, key_bad: 0, lock_on: 0, lock_release: 0, ink_drop: 0, land: 0, slide: 0, urgent_tick: 0,
-    watch_tick: 0, tally_tick: 0, ui_move: 0,
+    watch_tick: 0, click: 0, tally_tick: 0, ui_move: 0,
     word_clear: 2, streak: 2, one_up: 2, power_get: 2, ink_blast: 2, shield_up: 2, checkpoint: 2,
     crate_break: 2, boss_hit: 2, boss_defeat: 2
   };
@@ -1295,7 +1360,10 @@
         B.end += seconds;
       }
     };
-    recipe.play(B, o);
+    // A boss sound asked for in the variant of a boss that has its own recipe for it plays that one.
+    var variant = BOSS_VARIANTS[o.variant];
+    if (variant && variant[name]) variant[name](B, o);
+    else recipe.play(B, o);
     voice.end = B.end;
     sfxLog.push(name);
     if (sfxLog.length > 64) sfxLog.shift();
@@ -1866,17 +1934,52 @@
     if (p.type === 'crate' && ctx) playSfx('crate_break', { at: ctx.currentTime + CRATE_BREAK_AT });
   }
 
+  // --- the boss of the level (LEVEL2 10.4, 10.7, 11.3) ----------------------------------------
+  // Whose fight it is comes from the level data, state.level.boss.kind, read from TG.Game as the
+  // urgent tick reads the entities. It is 'baron' for Level 1 and wherever there is no game or no kind.
+
+  function gameState() {
+    var game = TG.Game;
+    return game && game.state ? game.state : null;
+  }
+
+  function bossKind() {
+    var s = gameState();
+    var data = s && s.level ? s.level.boss : null;
+    return data && typeof data.kind === 'string' ? data.kind : 'baron';
+  }
+
+  // A boss sound in the variant of the level's boss (BOSS_VARIANTS). Returns what playSfx returns.
+  function bossSfx(name, opts) {
+    var o = opts || {};
+    o.variant = bossKind();
+    return playSfx(name, o);
+  }
+
+  // Lady Ratchet's boiler gauge (LEVEL2 10.4). True at boss:weakopen when every entry of the volley
+  // was typed, which is when the weak-point window is the long one (openWeakPoint in js/boss.js) and
+  // the needle points full: her whistle then toots in place of boss_weak. The Baron has no gauge.
+  function gaugeFull() {
+    var s = gameState();
+    var volley = s && s.boss ? s.boss.volley : null;
+    var thrown = volley && volley.toLaunch ? volley.toLaunch.length : 0;
+    return bossKind() === 'ratchet' && thrown > 0 && volley.hits >= thrown;
+  }
+
   function onBossDefeat() {
     TG.Audio.music(null);
-    var end = playSfx('boss_defeat');
+    var end = bossSfx('boss_defeat');
     if (!ctx || !graph) return;
-    var at = end > 0 ? end : ctx.currentTime + 1.22;
+    // With sound effects off the fanfare still waits for the length of the boss's defeat sound.
+    var at = end > 0 ? end : ctx.currentTime + (bossKind() === 'ratchet' ? 1.82 : 1.22);
     loopSeq.start('victory', {}, at);
   }
 
   var HANDLERS = {
     'type:hit': function (p) {
       if (!p) return;
+      // Each letter of Lady Ratchet's finisher word cranks her key back one click (LEVEL2 10.7).
+      if (p.kind === 'finisher' && bossKind() === 'ratchet') playSfx('click');
       if (p.complete === true && (p.kind === 'core' || p.kind === 'finisher')) playSfx('word_clear');
       else if (p.index > 0 && !p.complete) playSfx('key_ok', { step: p.index });
     },
@@ -1944,7 +2047,7 @@
       playSfx('warn', { variant: from, pan: pan });
     },
     'attack:spawn': function (p) {
-      if (p && p.kind === 'shock') playSfx('boss_stomp');
+      if (p && p.kind === 'shock') bossSfx('boss_stomp');
     },
     'section:enter': onSectionEnter,
     'checkpoint': function (p) {
@@ -1965,18 +2068,18 @@
     'boss:enter': function () { playSfx('boss_rumble'); },
     'boss:attack': function (p) {
       if (p && (p.kind === 'shock' || p.kind === 'pick')) {
-        playSfx('boss_telegraph', { duration: typeof p.telegraph === 'number' ? p.telegraph : 1.0 });
+        bossSfx('boss_telegraph', { duration: typeof p.telegraph === 'number' ? p.telegraph : 1.0 });
       }
     },
-    'boss:throw': function () { playSfx('boss_throw'); },
+    'boss:throw': function () { bossSfx('boss_throw'); },
     'boss:weakopen': function () {
-      playSfx('boss_laugh');
-      if (ctx) playSfx('boss_weak', { at: ctx.currentTime + 0.3 });
+      bossSfx('boss_laugh');
+      if (ctx) playSfx(gaugeFull() ? 'toot' : 'boss_weak', { at: ctx.currentTime + 0.3 });
     },
     'boss:weakclose': function (p) {
-      if (p && p.completed === false) playSfx('boss_laugh');
+      if (p && p.completed === false) bossSfx('boss_laugh');
     },
-    'boss:hit': function () { playSfx('boss_hit'); },
+    'boss:hit': function () { bossSfx('boss_hit'); },
     'boss:phase': function (p) {
       if (p && p.phase === 3 && loopSeq.playing && loopSeq.name === trackNames.boss) {
         loopSeq.change(sectionMusic.phase3);
@@ -2024,6 +2127,26 @@
       if (urgentAcc > URGENT_PERIOD) urgentAcc = 0;
       playSfx('urgent_tick');
     }
+  }
+
+  // --- Lady Ratchet's intro (LEVEL2 10.1) ----------------------------------------------------------
+  // In her long intro she winds her key three clicks. No event marks them: they are moments of the
+  // intro timer, boss.stateT over boss.introTime, and the same three at which js/render.js steps her
+  // key (INTRO_CLICKS there; test/test-audio.js checks that the two lists agree). The short intro
+  // after a continue has no gesture. Followed in TG.Audio.update, as the urgent tick is.
+
+  var INTRO_CLICKS = [0.55, 0.6, 0.65];
+  var introAt = 0;          // how far the intro had run at the last update, 0 to 1
+
+  function introUpdate() {
+    var s = gameState();
+    var boss = s ? s.boss : null;
+    if (!boss || boss.state !== 'intro' || !(boss.introTime > TG.C.BOSS_INTRO_SHORT) || bossKind() !== 'ratchet') return;
+    var at = boss.stateT / boss.introTime;
+    for (var i = 0; i < INTRO_CLICKS.length; i++) {
+      if (introAt < INTRO_CLICKS[i] && at >= INTRO_CLICKS[i]) playSfx('click');
+    }
+    introAt = at;
   }
 
   // --- look-ahead ------------------------------------------------------------------------------
@@ -2181,7 +2304,8 @@
       } catch (e) { /* ignore */ }
     },
 
-    // Once per displayed frame: the sequencer look-ahead and the urgent tick. No timers.
+    // Once per displayed frame: the sequencer look-ahead, and the sounds that follow the game frame by
+    // frame: the urgent tick, the Pocket Watch's tick and the clicks of Lady Ratchet's intro. No timers.
     update: function (dt) {
       if (!ctx || !graph) return;
       var d = Number(dt);
@@ -2195,6 +2319,7 @@
       disconnectRetired(now);
       urgentUpdate(d);
       watchUpdate(d);
+      introUpdate();
     }
   };
 
@@ -2209,6 +2334,7 @@
     LOOKAHEAD: LOOKAHEAD,
     MAX_LOOKAHEAD: MAX_LOOKAHEAD,
     KEY_OK_TOP: KEY_OK_TOP,
+    INTRO_CLICKS: INTRO_CLICKS,
     MUSIC: MUSIC,
     CHANNELS: CHANNELS,
     parse: parseTrack,

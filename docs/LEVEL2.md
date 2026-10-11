@@ -1386,6 +1386,28 @@ Handed on from M2:
 | M6 | No test draws a real Level 2 state yet: `test/test-render.js` spawns the two kinds into a Level 1 run. The whole drawn Level 2 run of 13.5 in `test/test-integration.js` is the first |
 | M8 | CONTRACT 4.17 (where a clear starts for a kind drawn away from its simulation place) and 5.13 (`wanted()`'s order) |
 
+**M4, Lady Ratchet: built on 2026-10-12.** The simulation of the fight did not change: every RUN, MEASURE and CHECK line of `test/sim.js` is the same as before, and the target bot's fight is 69 to 74 / 100 to 103 / 110 to 112 s. `js/render.js` has her `BOSS_PARTS` entry and her own branch (`drawRatchet`): the parts by pose, state and phase, the key, the engine with its hatch and the gauge needle, the long and short intro, the finisher crank, her launch at the defeat, and the Baronet drawn in front of his mound. `js/effects.js` has her `BOSS_FX`: the goggles and the "1..." popup on a hit, the steam and the dust of the intro, the key, the fountain from the hatch, the cog rain and the snow at the defeat, brass-coloured bursts, and the Baronet's clear. `js/audio.js` has `toot`, `click` and her variants of the six boss sounds. The `boss-fight` check asserts her fight on every difficulty, the minion's skin and the lens colour by phase. Every Tier 2 item of M4 is built. Level 1 and the Baron are unchanged (2,097 frames and event logs identical, and 9,241 frames of his fight).
+
+As built, where sections 2, 4.4 and 10 say otherwise:
+
+- The intro gesture: she checks her watch and winds her key three clicks, as recorded above. It is three lines in `drawRatchet`. For the owner to confirm.
+- The cameo: the Baronet hops in in his `up` frame, reaches the hatch at 0.9 s (338 px a second where 10.1 has 304) and goes down inside its opening; the `spin` frame, which is his bare head, is not used there.
+- The defeat: from 0.55 s her head is the one without goggles, where 10.7 has the dizzy head, because the goggles have just flown off.
+- The key: 2, 4 and 8 frame steps a second by phase and 16 while her arm is up; in the finisher it follows the letters held, one step back for each.
+- The needle: the part of the volley cleared, RED while a weak-point word is open.
+- The speech plate: her line runs on the boss's own clock (`boss.stateT`) and goes on after a pause. A line that would not be whole in time is typed over half its time, so on the short intro her 27 letters are whole after 0.38 s and stand for 0.37 s. The Baron's plate is exactly as released, on `state.screenT`: after a pause in his intro his line comes late or is cut short. Giving him the same clock is one line in `drawSpeech` and changes Level 1's picture after such a pause, so it waits for the owner's word.
+- The Baronet loses `boss_helmet`, the oversized one, when he is cleared.
+
+Things only a sprite change could improve, left as they are: two of the key's four steps are small; the foot tap of the taunt is hidden behind the engine; a cog starts beside her brow and not in her hand.
+
+Handed on from M4:
+
+| To | What |
+|---|---|
+| M5 | The RED urgent border is faint on the PLUM and MAROON dither of phase 2 (2.8 to 1, the same as on Level 1's arena; what is close is the hue). A fix needs a colour key in the palette data or a different phase 2 band |
+| M6 | Her presentation is chosen from `state.level.boss.kind` (HUD, sound) and `state.boss.kind` (renderer, effects), and `TG.Effects` is reset on `level:start`: `nextStage` has to leave Level 2's data in `state.level` and emit `level:start`. The fight's motion has been judged from frame sheets only and needs a look in a browser |
+| M8 | The text of 2, 4.4 and 10 as above. CONTRACT 4.8, 4.17, 4.18, 6.4 and 7.1's notes that no test pins |
+
 ---
 
 ## 14. Decisions

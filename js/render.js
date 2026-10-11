@@ -8,7 +8,7 @@
 //   3. backdrop: sky, parallax layers (drawBackdrop is public, used by TG.UI for the title screen)
 //   4. the ground: tiles, gaps, plank bridges, the arena
 //   5. props: decor, signposts, checkpoint flags; hazards with their chevrons; ink drops
-//   6. the Baron, the entities and their ground markers
+//   6. the Baron and Lady Ratchet, the entities and their ground markers
 //   7. Pip: run, jump, slide, fall, rescue bubble, hurt, victory, game over; shield ring; cast overlay
 //   8. word plates: layoutLabels (CONTRACT 5.13), plates, tails, edge tags and lock brackets
 //   9. draw: the order of CONTRACT 4.19
@@ -33,6 +33,13 @@
 //     sprite. A typable beyond the right edge has the right tag while it is also above the playfield.
 //     TG.Render.sway(entity) and TG.Render.flutter(entity) give the two distances, so that TG.Effects can
 //     begin a clear where the creature was drawn.
+//   - Lady Ratchet (LEVEL2 10.1, 10.3, 10.4 and 10.7, with what LEVEL2 13.8 records of the art): her far
+//     arm stays at rest; her key is shown one frame step to the half turn; in the long intro she checks her
+//     watch and winds her key, where 10.1 has her lift her goggles; the needle of her gauge is at empty in
+//     the finisher; after her defeat she sits wound down until 1.2 s and is then launched, with the letter
+//     fountain of TG.Effects, her head the one without goggles from the moment they fly off. A minion in a
+//     sprite of its own, the Baronet, comes up in front of his mound; in the intro's cameo he keeps his
+//     helmet as he drops into the hatch.
 (function (root) {
   'use strict';
   var TG = root.TG = root.TG || {};
@@ -141,6 +148,21 @@
     var rows = Math.min(h, Math.floor(clipY) - top);
     if (rows <= 0) return;
     c.drawImage(cv, 0, 0, w, rows, left, top, w, rows);
+  }
+
+  // A sprite drawn only inside the screen box from x0, y0 to x1, y1 (the far edges not included), by the
+  // same means as spriteClipped: the Baronet seen through the opening of Lady Ratchet's hatch.
+  function spriteWithin(c, name, frame, x, y, flip, x0, y0, x1, y1) {
+    if (!TG.Gfx || !TG.Gfx.get) return;
+    var inf = info(name);
+    getOpts.flipX = !!flip;
+    getOpts.remap = null;
+    var cv = TG.Gfx.get(name, frame, getOpts);
+    if (!cv) return;
+    var left = Math.floor(x) - (inf ? (flip ? inf.w - inf.ax : inf.ax) : 0), top = Math.floor(y) - (inf ? inf.ay : 0);
+    var l = Math.max(left, x0), t = Math.max(top, y0);
+    var w = Math.min(left + (inf ? inf.w : 16), x1) - l, h = Math.min(top + (inf ? inf.h : 16), y1) - t;
+    if (w > 0 && h > 0) c.drawImage(cv, l - left, t - top, w, h, l, t, w, h);
   }
 
   function rect(c, x, y, w, h, color) {
@@ -499,17 +521,21 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // 6. The Baron and the entities (CONTRACT 6.4 boss composition, 6.6)
+  // 6. The Baron, Lady Ratchet and the entities (CONTRACT 6.4 boss composition, 6.6; LEVEL2 10)
   // ---------------------------------------------------------------------------------------------
 
   var HEAD_FRAME = { laugh: 'laugh', hurt: 'hurt', dizzy: 'dizzy' };
 
   // The sprites of each boss by boss.kind (LEVEL2 10.6), with the Baron as the default: the parts of
   // drawBoss (CONTRACT 6.4) with the base he stands behind, the thing in his hand in the intro gesture,
-  // and the minion-size figure of drawDefeat.
+  // and the minion-size figure of drawDefeat. Lady Ratchet has a key in her back and nothing in her hand
+  // (her watch is a frame of her arm); her small figure is the Baronet of the intro's cameo. drawRatchet
+  // puts her together.
   var BOSS_PARTS = {
     baron: { body: 'boss_body', arm: 'boss_arm', head: 'boss_head', base: 'boss_mound', gesture: 'boss_monocle',
-      small: 'en_digby' }
+      small: 'en_digby' },
+    ratchet: { body: 'boss2_body', arm: 'boss2_arm', head: 'boss2_head', base: 'boss2_engine', key: 'boss2_key',
+      small: 'en_baronet' }
   };
 
   function bossParts(boss) {
@@ -531,6 +557,12 @@
     var lab = boss.word ? effectsLabel(boss.word.id) : null;
     if (lab && lab.flinch) bx += lab.flinch;
     var white = (num(boss.flashT, 0) > 0 && !reduceFlash()) || (lab && lab.white);
+
+    // Lady Ratchet is put together her own way, her intro and her defeat with her (LEVEL2 10.1, 10.7).
+    if (parts === BOSS_PARTS.ratchet) {
+      drawRatchet(c, state, parts, bx, by, r, white, time);
+      return;
+    }
 
     if (state.screen === 'levelComplete' && boss.state === 'defeated') {
       if (drawDefeat(c, state, parts, bx, by, time)) return;
@@ -593,6 +625,173 @@
     }
     sprite(c, parts.base, 0, bx, by, false, null);
     return true;
+  }
+
+  // --- Lady Ratchet (LEVEL2 10.1, 10.3, 10.4, 10.7, and the build record of 13.8) -----------------
+
+  var RISE_HIDDEN = 40;             // boss.rise while a boss is out of sight behind its base (js/boss.js)
+
+  // Her key (LEVEL2 10.3) turns once a second in phase 1, twice in phase 2 and four times in phase 3, and
+  // eight times a second while her arm is up for an attack. Its four frames are four steps of half a turn,
+  // after which the bow looks the same again. One frame step is shown for each half turn of those rates:
+  // 2, 4, 8 and 16 steps a second, each twice the one before and all of them slow enough to be seen. (At
+  // the eight frames of a true turn the telegraph would ask for 64 steps a second, more than a display shows.)
+  var KEY_STEPS = [2, 4, 8];        // frame steps a second in phase 1, 2 and 3
+  var KEY_STEPS_RAISED = 16;        // and while her arm is up
+
+  // The long intro (LEVEL2 10.1), as fractions of the intro's length.
+  var INTRO_CAMEO = 0.25;           // the Baronet's cameo ends here: the hatch shuts and she begins to rise
+  var INTRO_UP = 0.5;               // she is up, and her gesture begins: she holds her watch up
+  var INTRO_CLICKS = [0.55, 0.6, 0.65];   // and winds her key three clicks, one frame step each. TG.Audio plays
+                                    // its `click` at the same three (INTRO_CLICKS there; test/test-audio.js compares them)
+  var INTRO_LAUGH = 0.7;            // the gesture ends and she laughs
+  var CAMEO_RUN = 304;              // px the Baronet crosses to reach the hatch: from screen x -8 to 296,
+  var CAMEO_HOPS = 6;               // in this many hops,
+  var CAMEO_HOP = 6;                // each this high, px
+  var CAMEO_DROP = 0.9;             // he is at the hatch at this fraction of the cameo, and goes down into it
+                                    // over the rest (its last 0.1 s)
+  // The opening of the hatch in the engine's `open` frame, in px from bx, by: 10 px wide between the
+  // jambs, from under the arch to the ground line.
+  var HATCH_LEFT = -5, HATCH_RIGHT = 5, HATCH_TOP = -12;
+
+  // Her defeat (LEVEL2 10.7), s of the levelComplete screen. Until DEFEAT_START the picture is frozen and
+  // then flashes, as for the Baron; TG.Effects throws her key from there on.
+  var DEFEAT_START = 0.55;
+  var LAUNCH_AT = 1.2;              // the hatch bursts and she is launched up the shaft: the SPROING of her defeat
+                                    // sound (LEVEL2 11.3), and the moment TG.Effects starts the letter fountain
+  var LAUNCH_SPEED = 480;           // px a second
+
+  // How far the long intro has run, 0 to 1 (boss.stateT over the intro's length), or -1 outside it. The
+  // short intro after a continue has neither cameo nor gesture: she rises as boss.rise says and laughs from
+  // the half, as the Baron does, so it is -1 too.
+  function longIntro(boss) {
+    var len = num(boss.introTime, TG.C.BOSS_INTRO_TIME);
+    if (boss.state !== 'intro' || !(len > TG.C.BOSS_INTRO_SHORT)) return -1;
+    return clamp(num(boss.stateT, 0) / len, 0, 1);
+  }
+
+  // The frame of her key, 0 to 3 (LEVEL2 10.3). It turns forward, k0 to k3, at the rate of her phase, and
+  // faster while her arm is up; it is still in the intro, a recoil, a laugh and the defeat; in the finisher
+  // each letter typed cranks it one step back (10.7).
+  function keyFrame(boss, time) {
+    var st = boss.state;
+    if (st === 'finisher') return (4 - (boss.word ? Math.floor(num(boss.word.typed, 0)) : 0) % 4) % 4;
+    if (st === 'intro' || st === 'recoil' || st === 'laugh' || st === 'defeated') return 0;
+    var rate = boss.pose === 'raise' ? KEY_STEPS_RAISED : KEY_STEPS[clamp(Math.floor(num(boss.phase, 1)), 1, 3) - 1];
+    return Math.floor(time * rate) % 4;
+  }
+
+  // The needle of the boiler gauge (LEVEL2 10.4): the centre of the dial on the engine's left and 3 px
+  // from it, from the left (empty) over the top to the right (full). It shows the part of the volley that
+  // was cleared, one notch for each cog, so that a full gauge says the long weak-point window is coming.
+  // It is RED while a window is open, and at empty once she is wound down.
+  function drawNeedle(c, boss, bx, by) {
+    var v = boss.volley;
+    var n = v && v.toLaunch ? v.toLaunch.length : 0;
+    var woundDown = boss.state === 'finisher' || boss.state === 'defeated';
+    var a = Math.PI * (1 - (n > 0 && !woundDown ? clamp(num(v.hits, 0) / n, 0, 1) : 0));
+    var color = boss.state === 'taunt' && boss.word ? RED : INK;
+    for (var k = 0; k <= 3; k++) rect(c, bx - 18 + needleStep(Math.cos(a) * k), by - 10 - needleStep(Math.sin(a) * k), 1, 1, color);
+  }
+
+  // A distance along the needle as whole px, a half going towards the centre. The needle at one third is
+  // then the mirror of the needle at two thirds, whatever the last bit of the cosine is, and both end on
+  // the dial and not on its rim.
+  function needleStep(d) {
+    return d < 0 ? -Math.round(-d - 1e-6) : Math.round(d - 1e-6);
+  }
+
+  // The cameo of the long intro (LEVEL2 10.1, 4.4): the Baronet hops in from the left edge of the view at
+  // a steady pace, lands in front of the open hatch and goes down into it. q: 0 to 1 through the cameo; t:
+  // the intro's clock, which turns him as he goes down. Drawn over the engine.
+  function drawCameo(c, name, bx, by, q, t) {
+    if (q < CAMEO_DROP) {
+      var run = q / CAMEO_DROP;
+      var f = run * CAMEO_HOPS % 1;
+      sprite(c, name, 'up', bx - Math.round(CAMEO_RUN * (1 - run)), by - Math.round(CAMEO_HOP * 4 * f * (1 - f)), true, null);
+      return;
+    }
+    // He is in the hatch and falls, spinning: only what the opening shows of him is drawn, so that the
+    // jambs, the arch and the gauge stay in front. He is turned from side to side in his `up` frame: the
+    // `spin` frame that 4.4 names is the bare head of his clear, and in it his helmet would be gone for
+    // these six frames.
+    var d = (q - CAMEO_DROP) / (1 - CAMEO_DROP);
+    spriteWithin(c, name, 'up', bx, by + Math.round(16 * d * d), Math.floor(t * 20) % 2 === 1,
+      bx + HATCH_LEFT, by + HATCH_TOP, bx + HATCH_RIGHT, by);
+  }
+
+  // LEVEL2 10.1: body, far arm, key, head, near arm and engine, in that order, the parts clipped at the
+  // ground line as the Baron's are. The far arm stays at rest (13.8: raised with the near one she would
+  // hold two spanners). r: boss.rise, floored; white: the flash of a hit or of a correct key.
+  function drawRatchet(c, state, parts, bx, by, r, white, time) {
+    var boss = state.boss;
+    var st = boss.state;
+    var pose = boss.pose || 'idle';
+    var head = HEAD_FRAME[pose] || 'normal';
+    var nearArm = (pose === 'raise' || pose === 'stomp') ? 'raise' : (pose === 'throw' ? 'throw' : (st === 'taunt' ? 'watch' : 'rest'));
+    // The body: the foot taps through a taunt, and she is slumped once she is wound down.
+    var body = st === 'finisher' || st === 'defeated' ? 1 : Math.floor(time * (st === 'taunt' ? 4 : 1)) % 2;
+    var key = keyFrame(boss, time);
+    var hatch = 'shut', rattle = 0, lift = 0, flip = false;
+
+    // The long intro: the cameo with her out of sight, whatever boss.rise says; her rise, which meets
+    // boss.rise at the half; her gesture; her laugh, which is the pose's.
+    var u = longIntro(boss);
+    if (u >= 0) {
+      if (u < INTRO_CAMEO) {
+        r = RISE_HIDDEN;
+        hatch = 'open';
+      } else if (u < INTRO_UP) {
+        r = Math.floor(RISE_HIDDEN * (INTRO_UP - u) / (INTRO_UP - INTRO_CAMEO));
+      } else if (u < INTRO_LAUGH) {
+        // The gesture (13.8): she checks her watch and winds her key. Her frames cannot show the goggles
+        // lifted, as 10.1 has it.
+        head = 'normal';
+        nearArm = 'watch';
+      }
+      for (var k = 0; k < INTRO_CLICKS.length; k++) if (u >= INTRO_CLICKS[k]) key = k + 1;
+    }
+    // The engine shakes by 1 px while she comes up through it, in either intro.
+    if (st === 'intro' && r > 0 && r < RISE_HIDDEN) rattle = Math.floor(num(boss.stateT, 0) * 20) % 2;
+    // The hatch opens to send the minion out.
+    var v = boss.volley;
+    if (st === 'volley' && pose === 'throw' && v && v.toLaunch && v.toLaunch[v.launched - 1] === 'minion') hatch = 'open';
+
+    // The defeat, after the freeze and the flash: her key is gone and her goggles are off, and then the
+    // hatch bursts open and she is launched straight up out of the playfield, spinning: her body is flipped
+    // twenty times a second, not rotated. TG.Effects throws the key and the goggles, so her head is the
+    // frame without goggles: the dizzy head that 10.7 names wears a pair, and she would have two. boss.rise
+    // sinks a defeated boss into its base in the last second; she has left by then, and is not drawn once
+    // every part of her is above the screen.
+    var t = state.screen === 'levelComplete' && st === 'defeated' ? num(state.screenT, 0) : 0;
+    if (t >= DEFEAT_START) {
+      key = -1;
+      head = 'hurt';
+    }
+    if (t >= LAUNCH_AT) {
+      hatch = 'open';
+      lift = Math.floor(LAUNCH_SPEED * (t - LAUNCH_AT));
+      flip = Math.floor(t * 20) % 2 === 1;
+    }
+
+    if (lift < by) {
+      var remap = white ? 'white' : null;
+      var headRemap = white ? 'white' : (boss.lampRed ? 'lampred' : null);
+      // Her lenses flash as she laughs at the start of a taunt, as the Baron's lamp does (LEVEL2 10.5).
+      if (!white && st === 'taunt' && num(boss.stateT, 9) < 0.6 && Math.floor(time * 15) % 2 === 0) {
+        headRemap = boss.lampRed ? null : 'lampred';
+      }
+      var dy = r + (pose === 'stomp' ? 2 : 0) - lift;
+      spriteClipped(c, parts.body, body, bx, by - 8 + dy, flip, remap, by);
+      spriteClipped(c, parts.arm, 'rest', bx + 20, by - 26 + dy, true, remap, by);
+      if (key >= 0) spriteClipped(c, parts.key, key, bx + 14, by - 30 + dy, false, remap, by);
+      spriteClipped(c, parts.head, head, bx - 2, by - 34 + dy, false, headRemap, by);
+      spriteClipped(c, parts.arm, nearArm, bx - 20, by - 26 + dy, false, remap, by);
+    }
+    sprite(c, parts.base, hatch, bx + rattle, by, false, null);
+    drawNeedle(c, boss, bx + rattle, by);
+    if (u >= 0 && u < INTRO_CAMEO) drawCameo(c, parts.small, bx, by, u / INTRO_CAMEO, num(boss.stateT, 0));
+    if (pose === 'dizzy' && r < 30 && lift === 0) dizzyStars(c, bx - 2, by - 60 + r, 16, time);
   }
 
   // The sprite of each kind (CONTRACT 5.4), for when js/entities.js is not loaded.
@@ -731,7 +930,14 @@
           sprite(c, name, Math.floor(at * 12) % 4, sx, sy, e.flipX !== false, remap);
           break;
         case 'digby':
-          if (e.phase === 'up') {
+          if (e.phase === 'up' && typeof e.skin === 'string' && e.skin) {
+            // A minion in a sprite of its own, the Baronet (LEVEL2 4.4, 13.8): he comes up in front of the
+            // mound, where the Digby comes up behind it, so that his helmet, monocle and moustache are
+            // seen; he peeks until 12 of his 16 rows are out.
+            var feet = G - num(e.elev, 0);
+            sprite(c, 'en_mound', 0, sx, G, false, null);
+            spriteClipped(c, name, G + 16 - Math.floor(feet) < 12 ? 'peek' : 'up', sx, feet, false, remap, G);
+          } else if (e.phase === 'up') {
             var popT = C.DIGBY_POP_T;
             spriteClipped(c, name, t < popT + 0.05 ? 'peek' : 'up', sx, G - num(e.elev, 0), false, remap, G);
             sprite(c, 'en_mound', 0, sx, G, false, null);
