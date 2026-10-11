@@ -54,8 +54,8 @@ const FILES = ['js/core.js', 'js/audio.js'];
 const SFX_NAMES = [
   'key_ok', 'key_bad', 'lock_on', 'lock_release', 'word_clear', 'clear_pop', 'clear_twang', 'clear_bonk',
   'clear_crunch', 'deflect', 'crate_break', 'streak', 'jump', 'land', 'slide', 'cue_jump', 'cue_duck',
-  'ink_drop', 'power_get', 'shield_up', 'shield_break', 'slow_on', 'slow_off', 'ink_blast', 'one_up',
-  'hurt', 'fall', 'rescue', 'checkpoint', 'warn', 'urgent_tick', 'boss_rumble', 'boss_laugh',
+  'ink_drop', 'power_get', 'shield_up', 'shield_break', 'slow_on', 'slow_off', 'watch_tick', 'watch_off',
+  'ink_blast', 'one_up', 'hurt', 'fall', 'rescue', 'checkpoint', 'warn', 'urgent_tick', 'boss_rumble', 'boss_laugh',
   'boss_telegraph', 'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat',
   'ui_move', 'ui_select', 'ui_back', 'pause', 'tally_tick', 'stamp', 'count_tick', 'start'
 ];
@@ -1640,28 +1640,30 @@ check('screen:change to paused stops new music notes while sfx still creates nod
   return env.audio.starts > s1 && log.filter(function (n) { return n === 'pause'; }).length === 2;
 });
 
+// Groups of notes that start together, in time order, as signatures.
+function groups(sources) {
+  const byTime = {};
+  sources.forEach(function (n) {
+    const key = n.startTime.toFixed(6);
+    const sig = n.kind === 'oscillator' ? 'o' + n.frequency.events[0].value.toFixed(2) : 'n' + n.playbackRate.events[0].value.toFixed(3);
+    (byTime[key] = byTime[key] || []).push(sig);
+  });
+  return Object.keys(byTime).sort(function (a, b) { return a - b; }).map(function (k) { return byTime[k].sort().join('+'); });
+}
+
+// A music note: source -> envelope gain -> channel gain -> duck. Sound effects (the pause sound, the
+// watch's tick) go to a voice gain instead. Checked while the paths are still connected.
+function musicNotes(e, list) {
+  const duck = e.TG.Audio._internals.graph().duck;
+  return list.filter(function (n) {
+    if (n.kind !== 'oscillator' && n.kind !== 'bufferSource') return false;
+    const g = n.connections[0];
+    const ch = g && g.connections[0];
+    return !!(ch && ch.connections.indexOf(duck) !== -1);
+  });
+}
+
 check('pausing loses no music: after resume the loop continues with the first step that had not sounded at the pause', function () {
-  // Groups of notes that start together, in time order, as signatures.
-  function groups(sources) {
-    const byTime = {};
-    sources.forEach(function (n) {
-      const key = n.startTime.toFixed(6);
-      const sig = n.kind === 'oscillator' ? 'o' + n.frequency.events[0].value.toFixed(2) : 'n' + n.playbackRate.events[0].value.toFixed(3);
-      (byTime[key] = byTime[key] || []).push(sig);
-    });
-    return Object.keys(byTime).sort(function (a, b) { return a - b; }).map(function (k) { return byTime[k].sort().join('+'); });
-  }
-  // A music note: source -> envelope gain -> channel gain -> duck. Sound effects (the pause sound)
-  // go to a voice gain instead. Checked while the paths are still connected.
-  function musicNotes(e, list) {
-    const duck = e.TG.Audio._internals.graph().duck;
-    return list.filter(function (n) {
-      if (n.kind !== 'oscillator' && n.kind !== 'bufferSource') return false;
-      const g = n.connections[0];
-      const ch = g && g.connections[0];
-      return !!(ch && ch.connections.indexOf(duck) !== -1);
-    });
-  }
   const ref = unlocked();
   const rf = nodeCount(ref);
   ref.TG.Audio.music('level1');
@@ -1685,6 +1687,307 @@ check('pausing loses no music: after resume the loop continues with the first st
   if (n < 40) return 'only ' + n + ' note groups';
   for (let i = 0; i < n; i++) if (got[i] !== want[i]) return 'group ' + i + ' is ' + got[i] + ', expected ' + want[i];
   return true;
+});
+
+// =================================================================================================
+// The Pocket Watch (LEVEL2 6.3, 11.3)
+// =================================================================================================
+//
+// The simulation is not loaded here: power:start, power:end and the screen changes are emitted by hand,
+// in the orders js/game.js emits them.
+
+const WATCH_ON = { power: 'watch', duration: 3 };
+const WATCH_END = { power: 'watch' };
+const G6 = 440 * Math.pow(2, 22 / 12), D6 = 440 * Math.pow(2, 17 / 12);
+
+// A run in play, past its ready jingle, with the level loop sounding.
+function inPlay() {
+  const env = unlocked();
+  emit(env, 'screen:change', { from: 'howToPlay', to: 'playing', data: null });
+  emit(env, 'level:start', { levelId: 2, difficulty: 'medium', name: 'X', continued: false, music: { level: 'level1', boss: 'boss1' } });
+  emit(env, 'section:enter', { index: 0, name: 'A', stage: '2-1', palette: 'day', music: { transpose: 0, tempo: 150, keyOk: { root: 0, mode: 'major' } } });
+  run(env, 60 * 5);
+  env.TG.Audio._internals.sfxLog.length = 0;
+  return env;
+}
+
+function played(env, name) {
+  return Array.prototype.slice.call(env.TG.Audio._internals.sfxLog).filter(function (n) { return n === name; }).length;
+}
+
+// The music notes among the nodes made since index `from` (see musicNotes).
+function musicSince(env, from) {
+  return musicNotes(env, createdSince(env, from)).length;
+}
+
+check('watch_tick is one 30 ms P12 note, the tick on G6 and the tock a fourth below it on D6; watch_off is a P50 rise from 220 to 880 Hz over 200 ms; both at the sound effect level', function () {
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  function sound(name, opts) {
+    const s = sfxSources(env, name, opts);
+    if (s.sources.length !== 1 || s.sources[0].node.kind !== 'oscillator') return null;
+    const osc = s.sources[0].node;
+    const ev = osc.connections[0].gain.events;
+    return { freq: osc.frequency.events, wave: osc.periodicWave ? osc.periodicWave.real[1] : null,
+      dur: ev[ev.length - 1].time - ev[0].time, ends: ev[ev.length - 1].value, level: s.level };
+  }
+  const P12 = 2 * Math.sin(Math.PI * 0.125) / Math.PI, P50 = 2 * Math.sin(Math.PI * 0.5) / Math.PI;
+  const tick = sound('watch_tick'), tock = sound('watch_tick', { tock: true }), off = sound('watch_off');
+  if (!tick || !tock || !off) return 'each is one tone and nothing else';
+  for (const t of [['tick', tick, G6], ['tock', tock, D6]]) {
+    if (t[1].freq.length !== 1 || Math.abs(t[1].freq[0].value - t[2]) > 0.01) return 'the ' + t[0] + ' is at ' + JSON.stringify(t[1].freq);
+    if (Math.abs(t[1].dur - 0.03) > 1e-6 || t[1].ends !== 0) return 'the ' + t[0] + ' lasts ' + t[1].dur;
+    if (t[1].wave === null || Math.abs(t[1].wave - P12) > 1e-6) return 'the ' + t[0] + ' is not P12';
+    if (Math.abs(t[1].level - 0.30) > 1e-9) return 'the ' + t[0] + ' plays at ' + t[1].level;
+  }
+  if (Math.abs(tick.freq[0].value / tock.freq[0].value - Math.pow(2, 5 / 12)) > 1e-6) return 'not a fourth apart';
+  if (off.wave === null || Math.abs(off.wave - P50) > 1e-6) return 'watch_off is not P50';
+  if (off.freq.length !== 2 || off.freq[0].value !== 220 || off.freq[1].value !== 880 || off.freq[1].type !== 'exponentialRampToValueAtTime') {
+    return 'watch_off sweeps ' + JSON.stringify(off.freq);
+  }
+  if (Math.abs(off.freq[1].time - off.freq[0].time - 0.2) > 1e-6 || Math.abs(off.dur - 0.2) > 1e-6) return 'watch_off lasts ' + off.dur;
+  return Math.abs(off.level - 0.30) < 1e-9 && I.levelOf('watch_tick') === I.levelOf('urgent_tick');
+});
+
+check('while a watch runs watch_tick plays every half second, tick and tock in turn and the first at once: six in its 3 s, and none after them however late power:end comes', function () {
+  const env = inPlay();
+  const ctx = env.audio.contexts[0];
+  const t0 = ctx.currentTime;
+  const n0 = nodeCount(env);
+  emit(env, 'power:start', WATCH_ON);
+  run(env, 180);
+  // The music stands still, so the only oscillators made in these 3 s are the ticks.
+  const ticks = createdSince(env, n0).filter(function (n) { return n.kind === 'oscillator'; });
+  if (ticks.length !== 6 || played(env, 'watch_tick') !== 6) return ticks.length + ' notes, ' + played(env, 'watch_tick') + ' watch_tick in 3 s';
+  // The first on the first frame after power:start (1/60 s, and the 3 ms lead of every sound effect),
+  // the others exactly half a second apart.
+  for (let k = 0; k < 6; k++) {
+    const at = ticks[k].startTime - t0;
+    if (Math.abs(at - (0.5 * k + 1 / 60 + 0.003)) > 1e-6) return 'tick ' + k + ' at ' + at.toFixed(4) + ' s';
+    const want = k % 2 === 0 ? G6 : D6;
+    if (Math.abs(ticks[k].frequency.events[0].value - want) > 0.01) return 'tick ' + k + ' is at ' + ticks[k].frequency.events[0].value + ' Hz';
+  }
+  // A machine whose simulation runs behind the clock: one more second before power:end.
+  run(env, 60);
+  if (played(env, 'watch_tick') !== 6) return 'a tick after the watch\'s 3 s';
+  if (played(env, 'watch_off') !== 0) return 'watch_off before power:end';
+  emit(env, 'power:end', WATCH_END);
+  const log = Array.prototype.slice.call(env.TG.Audio._internals.sfxLog);
+  if (log[log.length - 1] !== 'watch_off' || played(env, 'watch_off') !== 1) return 'power:end played ' + log.slice(6).join(',');
+  run(env, 120);
+  return (played(env, 'watch_tick') === 6 && played(env, 'watch_off') === 1) || 'a tick after power:end';
+});
+
+check('the watch\'s tick takes no voice from a more important sound: with three such voices busy it is not played, like the urgent tick', function () {
+  const env = inPlay();
+  const a = playVoice(env, 'boss_rumble'), b = playVoice(env, 'fall'), c = playVoice(env, 'slow_on');
+  if (!a || !b || !c) return 'voice gains not found';
+  emit(env, 'power:start', WATCH_ON);
+  run(env, 12);                                   // 0.2 s: the three are still sounding
+  if (played(env, 'watch_tick')) return 'the tick played over three busy voices';
+  if (fadedToZero(a) || fadedToZero(b) || fadedToZero(c)) return 'a voice was taken over';
+  run(env, 60);                                   // slow_on has ended: the tock at 0.5 s and the tick at 1 s have a voice
+  return played(env, 'watch_tick') === 2 || played(env, 'watch_tick') + ' ticks in the next second';
+});
+
+check('a watch loses no music: no note starts while it runs, and after power:end the loop goes on with the first step that had not sounded at power:start', function () {
+  const ref = unlocked();
+  const rf = nodeCount(ref);
+  ref.TG.Audio.music('level1');
+  run(ref, 60 * 6);
+  const want = groups(musicNotes(ref, createdSince(ref, rf)));
+
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  const f0 = nodeCount(env);
+  env.TG.Audio.music('level1');
+  run(env, 97);   // part-way between two steps
+  const T = env.audio.contexts[0].currentTime;
+  emit(env, 'power:start', WATCH_ON);
+  const before = musicNotes(env, createdSince(env, f0)).filter(function (n) { return n.startTime <= T; });
+  const held = I.sequencer('loop');
+  if (!held.playing || !held.paused || held.name !== 'level1') return 'the loop under a watch: ' + JSON.stringify(held);
+  const f1 = nodeCount(env);
+  run(env, 180);
+  if (musicSince(env, f1) !== 0) return musicSince(env, f1) + ' music notes started under the watch';
+  if (I.sequencer('loop').step !== held.step) return 'the position moved under the watch';
+  if (env.audio.suspends !== 0) return 'the watch called suspend()';
+  emit(env, 'power:end', WATCH_END);
+  if (I.sequencer('loop').paused || I.sequencer('loop').step !== held.step) return 'after power:end: ' + JSON.stringify(I.sequencer('loop'));
+  run(env, 60 * 3);
+  const got = groups(before).concat(groups(musicNotes(env, createdSince(env, f1))));
+  const n = Math.min(got.length, want.length, 60);
+  if (n < 40) return 'only ' + n + ' note groups';
+  for (let i = 0; i < n; i++) if (got[i] !== want[i]) return 'group ' + i + ' is ' + got[i] + ', expected ' + want[i];
+  return env.audio.resumes === 0 && cancelledGains(env).length === 0;
+});
+
+check('a watch and the Hourglass: the music stands still at the Hourglass tempo and goes on at it; a second watch while one runs starts the ticks again and one power:end ends it', function () {
+  const env = inPlay();
+  const I = env.TG.Audio._internals;
+  emit(env, 'power:start', { power: 'hourglass', duration: 6 });
+  run(env, 30);
+  I.sfxLog.length = 0;
+  emit(env, 'power:start', WATCH_ON);
+  run(env, 90);
+  if (played(env, 'watch_tick') !== 3) return played(env, 'watch_tick') + ' ticks in the first 1.5 s';
+  const f = nodeCount(env);
+  emit(env, 'power:start', WATCH_ON);
+  run(env, 180);
+  if (played(env, 'watch_tick') !== 9) return played(env, 'watch_tick') + ' ticks after a second watch, 9 expected';
+  const first = createdSince(env, f).filter(function (n) { return n.kind === 'oscillator'; })[0];
+  if (Math.abs(first.frequency.events[0].value - G6) > 0.01) return 'the second watch does not start on the tick';
+  if (musicSince(env, f) !== 0 || !I.sequencer('loop').paused) return 'the music moved under the second watch';
+  if (I.tempoScale() !== 0.75) return 'the watch changed the tempo scale to ' + I.tempoScale();
+  emit(env, 'power:end', WATCH_END);
+  run(env, 60);
+  if (I.sequencer('loop').paused || musicSince(env, f) === 0) return 'the music did not go on after power:end';
+  return (I.tempoScale() === 0.75 && played(env, 'watch_tick') === 9 && played(env, 'slow_off') === 0) || 'after the watch: tempo scale ' + I.tempoScale();
+});
+
+check('on the pause screen the watch\'s tick waits and the music stays still; back in play the ticks go on and the music still waits for power:end', function () {
+  const env = inPlay();
+  const I = env.TG.Audio._internals;
+  emit(env, 'power:start', WATCH_ON);
+  run(env, 45);                                   // 0.75 s: the tick and the tock
+  if (played(env, 'watch_tick') !== 2) return played(env, 'watch_tick') + ' ticks before the pause';
+  const f = nodeCount(env);
+  emit(env, 'screen:change', { from: 'playing', to: 'paused', data: null });
+  run(env, 60 * 4);
+  if (played(env, 'watch_tick') !== 2) return 'a tick on the pause screen';
+  emit(env, 'screen:change', { from: 'paused', to: 'playing', data: null });
+  if (!I.sequencer('loop').paused) return 'leaving the pause screen restarted the music under a watch';
+  run(env, 135);                                  // the other 2.25 s: four more
+  if (played(env, 'watch_tick') !== 6) return played(env, 'watch_tick') + ' ticks in all, 6 expected';
+  if (musicSince(env, f) !== 0) return 'music notes started before power:end';
+  emit(env, 'power:end', WATCH_END);
+  run(env, 60);
+  return (!I.sequencer('loop').paused && musicSince(env, f) > 0 && played(env, 'pause') === 2) || 'the music did not go on after power:end';
+});
+
+check('a jingle that is playing when a watch starts stands still with the loop, and after the watch the loop is ducked again for the rest of it', function () {
+  const env = unlocked();
+  const I = env.TG.Audio._internals;
+  emit(env, 'screen:change', { from: 'howToPlay', to: 'playing', data: null });
+  emit(env, 'level:start', { levelId: 2, difficulty: 'medium', name: 'X', continued: false, music: { level: 'level1', boss: 'boss1' } });
+  run(env, 60);   // 1 s into the 3.2 s ready jingle
+  emit(env, 'power:start', WATCH_ON);
+  const once = I.sequencer('once');
+  if (!once.playing || !once.paused) return 'the jingle under a watch: ' + JSON.stringify(once);
+  const f = nodeCount(env);
+  run(env, 180);
+  const bus = I.graph().musicBus;
+  const jingleNotes = createdSince(env, f).filter(function (n) {
+    return (n.kind === 'oscillator' || n.kind === 'bufferSource') && n.connections[0] && n.connections[0].connections[0] &&
+      n.connections[0].connections[0].connections.indexOf(bus) !== -1;
+  });
+  if (jingleNotes.length) return jingleNotes.length + ' jingle notes under the watch';
+  emit(env, 'power:end', WATCH_END);
+  const ctx = env.audio.contexts[0];
+  const ev = I.graph().duck.gain.events;
+  const tail = ev.slice(ev.map(function (e) { return e.type; }).lastIndexOf('cancelAndHoldAtTime'));
+  const hold = tail.filter(function (e) { return e.type === 'linearRampToValueAtTime' && e.value === I.DUCK; });
+  const up = tail.filter(function (e) { return e.type === 'linearRampToValueAtTime' && e.value === 1; })[0];
+  if (hold.length < 2 || !up) return 'not ducked again: ' + JSON.stringify(tail);
+  const rest = hold[hold.length - 1].time - ctx.currentTime;
+  if (!(rest > 1.8 && rest < 2.4)) return 'ducked for ' + rest.toFixed(2) + ' s, expected about 2.2';
+  return !I.sequencer('once').paused && I.sequencer('once').step === once.step;
+});
+
+check('a watch that ends with no power:end (RESTART FROM CHECKPOINT, game over and a continue, the arena, QUIT) stops ticking, plays no watch_off and leaves no music standing', function () {
+  const start = { levelId: 2, difficulty: 'medium', name: 'X', continued: true, music: { level: 'level1', boss: 'boss1' } };
+  const enter = { index: 0, name: 'A', stage: '2-1', palette: 'day', music: { transpose: 0, tempo: 150, keyOk: { root: 0, mode: 'major' } } };
+  const again = [['game:continue', { checkpoint: 0, continues: 1, assist: 0.85 }], ['level:start', start], ['section:enter', enter]];
+  const change = function (from, to) { return ['screen:change', { from: from, to: to, data: null }]; };
+  const cases = [
+    // [what, the events as js/game.js emits them, the loop that plays afterwards (null: none)]
+    ['RESTART FROM CHECKPOINT', [change('playing', 'paused'), change('paused', 'playing')].concat(again), 'level1'],
+    ['game over', [change('playing', 'lifeLost'), change('lifeLost', 'gameOver')], 'gameover'],
+    ['game over and a continue', [change('playing', 'lifeLost'), change('lifeLost', 'gameOver'), change('gameOver', 'playing')].concat(again), 'level1'],
+    ['the arena', [change('playing', 'bossIntro')], null],
+    ['the arena and the fight', [change('playing', 'bossIntro'), change('bossIntro', 'boss')], 'boss1'],
+    ['QUIT', [change('playing', 'paused'), change('paused', 'results')], 'results']
+  ];
+  const bad = [];
+  cases.forEach(function (c) {
+    const env = inPlay();
+    const I = env.TG.Audio._internals;
+    emit(env, 'power:start', WATCH_ON);
+    run(env, 20);
+    if (played(env, 'watch_tick') !== 1) bad.push(c[0] + ': ' + played(env, 'watch_tick') + ' ticks at the start');
+    c[1].forEach(function (e) { emit(env, e[0], e[1]); });
+    const f = nodeCount(env);
+    I.sfxLog.length = 0;
+    run(env, 60 * 4);
+    if (played(env, 'watch_tick')) bad.push(c[0] + ': ' + played(env, 'watch_tick') + ' ticks afterwards');
+    if (played(env, 'watch_off')) bad.push(c[0] + ': watch_off');
+    const loop = I.sequencer('loop');
+    if (c[2] === null) {
+      if (loop.playing || musicSince(env, f)) bad.push(c[0] + ': music plays: ' + JSON.stringify(loop));
+    } else if (loop.name !== c[2] || loop.paused || !musicSince(env, f)) {
+      bad.push(c[0] + ': ' + JSON.stringify(loop) + ' with ' + musicSince(env, f) + ' notes, ' + c[2] + ' expected');
+    }
+    if (I.sequencer('once').paused) bad.push(c[0] + ': a jingle is left standing');
+    if (env.warnings.length || env.errors.length) bad.push(c[0] + ': console: ' + env.warnings.concat(env.errors)[0]);
+  });
+  return bad.length ? bad.join('; ') : true;
+});
+
+check('a watch goes on through the lifeLost screen, started on it or just before it: it keeps ticking with the music still, and power:end back in play restarts the level loop', function () {
+  // A crate word finished on the lifeLost screen starts its watch there; a hit in the step that
+  // finished the word changes the screen just after power:start (LEVEL2 6.3).
+  for (const first of ['lifeLost', 'watch']) {
+    const env = inPlay();
+    const I = env.TG.Audio._internals;
+    if (first === 'lifeLost') emit(env, 'screen:change', { from: 'playing', to: 'lifeLost', data: null });
+    emit(env, 'power:start', WATCH_ON);
+    if (first === 'watch') emit(env, 'screen:change', { from: 'playing', to: 'lifeLost', data: null });
+    const f = nodeCount(env);
+    run(env, 60);
+    emit(env, 'screen:change', { from: 'lifeLost', to: 'playing', data: null });
+    run(env, 120);
+    if (played(env, 'watch_tick') !== 6) return first + ' first: ' + played(env, 'watch_tick') + ' ticks, 6 expected';
+    if (musicSince(env, f) !== 0 || !I.sequencer('loop').paused) return first + ' first: the music moved under the watch';
+    emit(env, 'power:end', WATCH_END);
+    run(env, 60);
+    const loop = I.sequencer('loop');
+    if (loop.name !== 'level1' || loop.paused || musicSince(env, f) === 0) return first + ' first: ' + JSON.stringify(loop);
+  }
+  return true;
+});
+
+check('the watch\'s events before unlock, with no AudioContext, and with music and sound effects off do not throw or write to the console', function () {
+  const flow = [
+    ['screen:change', { from: 'howToPlay', to: 'playing', data: null }],
+    ['level:start', { levelId: 2, difficulty: 'medium', name: 'X', continued: false, music: { level: 'level1', boss: 'boss1' } }],
+    ['pickup:power', { power: 'watch', x: 0, y: 0 }], ['power:start', WATCH_ON], ['power:start', { power: 'watch' }],
+    ['screen:change', { from: 'playing', to: 'paused', data: null }], ['screen:change', { from: 'paused', to: 'playing', data: null }],
+    ['power:end', WATCH_END], ['power:end', WATCH_END],
+    ['power:start', WATCH_ON], ['screen:change', { from: 'playing', to: 'bossIntro', data: null }]
+  ];
+  const bad = [];
+  ['locked', 'none', 'off'].forEach(function (mode) {
+    const env = mode === 'off' ? unlocked() : stubs.load({ files: FILES });
+    if (mode === 'none') {
+      delete env.window.AudioContext;
+      delete env.window.webkitAudioContext;
+    }
+    if (mode !== 'off') {
+      env.TG.Events.clear();
+      env.TG.Audio.init();
+    } else {
+      env.TG.Audio.setEnabled('music', false);
+      env.TG.Audio.setEnabled('sfx', false);
+    }
+    const starts = env.audio.starts;
+    flow.forEach(function (e) {
+      emit(env, e[0], e[1]);
+      for (let i = 0; i < 40; i++) env.TG.Audio.update(1 / 60);
+    });
+    if (env.audio.starts !== starts) bad.push(mode + ': ' + (env.audio.starts - starts) + ' sources started');
+    if (env.warnings.length || env.errors.length) bad.push(mode + ': ' + env.warnings.concat(env.errors)[0]);
+  });
+  return bad.length ? bad.join('; ') : true;
 });
 
 check('type:hit with complete true and kind finisher (or core) plays word_clear; index > 0 plays key_ok with that step', function () {
@@ -2071,6 +2374,7 @@ check('the remaining event-to-sound mappings of CONTRACT 7.1 play the right soun
     ['pickup:ink', { x: 0, y: 0, ink: 1, inkTotal: 1 }, 'ink_drop'],
     ['pickup:power', { power: 'hourglass', x: 0, y: 0 }, 'power_get'],
     ['pickup:power', { power: 'quill', x: 0, y: 0 }, 'power_get'],
+    ['pickup:power', { power: 'watch', x: 0, y: 0 }, 'power_get'],
     ['pickup:power', { power: 'blast', x: 0, y: 0 }, 'ink_blast'],
     ['pickup:power', { power: 'shield', x: 0, y: 0 }, null],
     ['shield:gain', { charges: 1, cause: 'crate' }, 'shield_up'],
@@ -2306,7 +2610,7 @@ function fadedToZero(gainNode) {
   return gainNode.gain.events.filter(function (e) { return e.type === 'linearRampToValueAtTime' && e.value === 0; }).length;
 }
 
-check('a sound that repeats all the time never takes over a reward: key_ok and ink_drop are dropped while three rewards play; a reward takes over the earliest reward', function () {
+check('a sound that repeats all the time never takes over a reward: key_ok, ink_drop and watch_tick are dropped while three rewards play; a reward takes over the earliest reward', function () {
   const env = unlocked();
   const I = env.TG.Audio._internals;
   const a = playVoice(env, 'one_up'), b = playVoice(env, 'streak'), c = playVoice(env, 'checkpoint');
@@ -2314,6 +2618,7 @@ check('a sound that repeats all the time never takes over a reward: key_ok and i
   I.sfxLog.length = 0;
   env.TG.Audio.sfx('key_ok', { step: 2 });
   env.TG.Audio.sfx('ink_drop');
+  env.TG.Audio.sfx('watch_tick');
   if (I.sfxLog.length) return 'played over three rewards: ' + I.sfxLog.join(',');
   if (fadedToZero(a) || fadedToZero(b) || fadedToZero(c)) return 'a reward voice was taken over';
   env.TG.Audio.sfx('power_get');

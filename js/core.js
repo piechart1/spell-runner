@@ -206,6 +206,7 @@
     SHIELD_INVULN: 1.0,
     HOURGLASS_TIME: 6, HOURGLASS_SCALE: 0.5,
     QUILL_TIME: 10,
+    WATCH_TIME: 3, WATCH_SCALE: 0,          // the Pocket Watch stops the world (LEVEL2 6.3)
     TUTOR_SCALE: 0.25, TUTOR_T: 0.6,
     CONTINUE_COUNT: 9, CONTINUE_LOCKOUT: 0.8,
     RESUME_STEP: 0.5,       // seconds per step of the 3-2-1 resume countdown

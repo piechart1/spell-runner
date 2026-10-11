@@ -17,6 +17,9 @@
 //   state.tutorial.enabled   the tutorial slow-down applies on this run (newRun option `tutorial`)
 //   state.tutorial.done      ids of the tutorial threats that have had their slow-down
 //   state.run.bestWpm        the saved personal best WPM for the difficulty, read once by newRun
+//   state.power.watchT       real seconds left of a Pocket Watch, 0 when none runs (LEVEL2 6.3). While it is
+//                            above 0 the world is stopped: timeScale is 0 and so is the world step. `last`
+//                            can also be 'watch'
 //
 // The boss round state machine lives in js/boss.js. This file hands over to it at the end of the
 // boss intro (screenTimers) and passes it completed boss words (completeWord).
@@ -82,7 +85,7 @@
       seed: 1, rng: null, difficulty: 'medium', config: null, levelId: 1, level: null, picker: null, typing: null,
       section: 0, camera: { x: 0 }, player: null, entities: [], items: [], boss: null, nextId: 1,
       score: 0, nextLifeAt: 10000, ink: 0, inkTotal: 0,
-      power: { shield: 0, slowT: 0, quillT: 0, last: null },
+      power: { shield: 0, slowT: 0, quillT: 0, watchT: 0, last: null },
       checkpoint: { index: 0, x: 96, score: 0, ink: 0, inkTotal: 0, nextLifeAt: 10000, bossPhase: 1, continuesHere: 0 },
       lifeLost: { cause: 'hit', t: 0, duration: 0.10, gapId: null, last: false },
       tutorial: { active: false, targetId: null, enabled: false, done: [] },
@@ -97,8 +100,11 @@
     };
   }
 
+  // The five factors of CONTRACT 11.3 and a sixth, the Pocket Watch's freeze (LEVEL2 6.3): WATCH_SCALE,
+  // which is 0, while a watch runs. The world step is dt x timeScale, so the world stands still.
   function timeScaleOf(s) {
-    return s.pace * s.assist * s.slowScale * s.tutorScale * s.finisherScale;
+    var freeze = s.power.watchT > 0 ? TG.C.WATCH_SCALE : 1;
+    return s.pace * s.assist * s.slowScale * s.tutorScale * s.finisherScale * freeze;
   }
 
   function sectionPayload(level, index) {
@@ -134,6 +140,9 @@
       return false;
     }
     if (RELEASE_ON_ENTER[name] && s.typing && s.typing.target) TG.Typing.release(s.typing, 'screen');
+    // A Pocket Watch still running when Pip reaches the arena ends here, without an event, as a continue
+    // ends it (LEVEL2 6.3).
+    if (name === 'bossIntro') stopWatch(s.power);
     s.screen = name;
     s.screenT = 0;
     s.screenData = data || null;
@@ -251,9 +260,10 @@
     s.ink = cp.ink;
     s.inkTotal = cp.inkTotal;
     s.nextLifeAt = cp.nextLifeAt;
-    // 5. Timed power-ups end without events; shield charges are kept.
+    // 5. Timed power-ups end without events, a Pocket Watch among them; shield charges are kept.
     s.power.slowT = 0;
     s.power.quillT = 0;
+    s.power.watchT = 0;
     s.power.last = null;
     s.slowScale = 1;
     s.tutorScale = 1;
@@ -294,7 +304,7 @@
     s.frame++;
     s.time += dt;
     s.screenT += dt;
-    // 3.
+    // 3. The world step is 0 on lifeLost, and while a Pocket Watch runs (timeScale is then 0).
     s.timeScale = timeScaleOf(s);
     var wdt = s.screen === 'lifeLost' ? 0 : dt * s.timeScale;
     // 4.
@@ -394,7 +404,11 @@
     var quill = s.power.quillT > 0;
     var points = TG.Util.round10(C.PTS_WORD_PER_LETTER * t.word.length * mult *
       (clean ? C.CLEAN_FACTOR : 1) * (quick ? C.QUICK_FACTOR : 1) * (quill ? 2 : 1) * s.assist);
-    var close = t.type === 'threat' && t.eta < C.CLOSE_CALL_TIME;
+    // No close call on a step a Pocket Watch holds the world, when the time scale is 0 (LEVEL2 6.3):
+    // nothing is about to reach Pip. The eta cannot say so in two cases. On the first held step it is still
+    // the one of the step before. And for a threat a fraction of a step from contact, the 0.01 floor of
+    // the time scale in the eta leaves it under the limit.
+    var close = t.type === 'threat' && t.eta < C.CLOSE_CALL_TIME && s.timeScale > 0;
 
     TG.Entities.remove(s, t, 'cleared');
     if (t.type === 'crate') s.run.cratesCleared++;
@@ -496,15 +510,31 @@
     return false;
   }
 
-  // Hourglass and Golden quill run on the real clock.
+  // The timed power the HUD slot goes back to when the one it showed has ended: one that is still
+  // running, the watch before the Hourglass before the quill; null when none is.
+  function runningPower(pw) {
+    if (pw.watchT > 0) return 'watch';
+    if (pw.slowT > 0) return 'hourglass';
+    return pw.quillT > 0 ? 'quill' : null;
+  }
+
+  // Stops the Pocket Watch: its time has run out, or Pip has reached the arena (LEVEL2 6.3).
+  function stopWatch(pw) {
+    pw.watchT = 0;
+    if (pw.last === 'watch') pw.last = runningPower(pw);
+  }
+
+  // Hourglass, Golden quill and Pocket Watch run on the real clock. The Hourglass's timer stands still
+  // while a watch runs, so that a watch does not use up the Hourglass's time (LEVEL2 6.3, decision 14);
+  // the quill's keeps counting, since points are still being scored.
   function updatePowers(s, dt) {
     var pw = s.power;
-    if (pw.slowT > 0) {
+    if (pw.slowT > 0 && !(pw.watchT > 0)) {
       pw.slowT -= dt;
       if (pw.slowT <= EPS) {
         pw.slowT = 0;
         s.slowScale = 1;
-        if (pw.last === 'hourglass') pw.last = pw.quillT > 0 ? 'quill' : null;
+        if (pw.last === 'hourglass') pw.last = runningPower(pw);
         emit('power:end', { power: 'hourglass' });
       }
     }
@@ -512,8 +542,15 @@
       pw.quillT -= dt;
       if (pw.quillT <= EPS) {
         pw.quillT = 0;
-        if (pw.last === 'quill') pw.last = pw.slowT > 0 ? 'hourglass' : null;
+        if (pw.last === 'quill') pw.last = runningPower(pw);
         emit('power:end', { power: 'quill' });
+      }
+    }
+    if (pw.watchT > 0) {
+      pw.watchT -= dt;
+      if (pw.watchT <= EPS) {
+        stopWatch(pw);
+        emit('power:end', { power: 'watch' });
       }
     }
   }
@@ -673,6 +710,11 @@
       pw.quillT = C.QUILL_TIME;
       pw.last = 'quill';
       emit('power:start', { power: 'quill', duration: C.QUILL_TIME });
+    } else if (power === 'watch') {
+      // The world stops from the next step (timeScaleOf). A second watch starts the time again.
+      pw.watchT = C.WATCH_TIME;
+      pw.last = 'watch';
+      emit('power:start', { power: 'watch', duration: C.WATCH_TIME });
     } else if (power === 'blast') {
       inkBlast(s);
     } else if (power === 'cap') {

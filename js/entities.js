@@ -247,12 +247,14 @@
     var p = state.player;
     if (!p) return;
 
-    // Real-time timers.
+    // Real-time timers. The invulnerability stands still while a Pocket Watch runs: it protects Pip over a
+    // stretch of the world, and a watch typed just after a hit would otherwise use it up (LEVEL2 6.3).
+    // hurtT only holds the hurt pose and keeps counting.
     if (dt > 0) {
-      p.invulnT = Math.max(0, p.invulnT - dt);
+      if (!(state.power.watchT > 0)) p.invulnT = Math.max(0, p.invulnT - dt);
       p.hurtT = Math.max(0, p.hurtT - dt);
     }
-    if (!(wdt > 0)) return;              // the world is stopped (lifeLost)
+    if (!(wdt > 0)) return;              // the world is stopped (lifeLost, or a Pocket Watch)
     p.animT += wdt;
 
     // The rescue bubble is shown until the world moves again.
@@ -766,7 +768,10 @@
 
     e.eta = etaOf(state, e);
     if (e.type === 'threat') {
-      e.urgent = e.eta < state.config.urgentTime;
+      // Nothing is urgent on a step a Pocket Watch holds the world, when the time scale is 0 (LEVEL2 6.3).
+      // The eta is then 100 x the world time left (the floor in etaOf), which alone would leave a threat
+      // a fraction of a step from contact urgent.
+      e.urgent = state.timeScale > 0 && e.eta < state.config.urgentTime;
       if (e.urgent && !e.urgentSent) {
         e.urgentSent = true;
         emit('threat:urgent', { id: e.id, kind: e.kind });

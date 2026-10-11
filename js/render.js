@@ -1142,6 +1142,20 @@
     if (flash !== null && flash !== undefined) rect(c, 0, C.PLAY_TOP, C.W, C.H - C.PLAY_TOP, flash);
   }
 
+  // The Pocket Watch's frame (LEVEL2 6.3): while a watch runs, 1 px of AQUA round the playfield, the part
+  // of the view the flash fills. It blinks ten times a second, three steps on and three off, as the power
+  // slot flashes when a power starts. On alternate steps it would be lost at 30 pictures a second, where a
+  // picture is drawn every second step: all of them would show it or none would. With three and three, a
+  // picture every 1 to MAX_STEPS steps shows it in some pictures and not in others, whichever step the
+  // watch began on.
+  var WATCH_FRAME_STEPS = 3;        // steps the frame is on, and then off
+
+  function drawWatchFrame(c, state) {
+    if (!(state.power && state.power.watchT > 0) || Math.floor(num(state.frame, 0) / WATCH_FRAME_STEPS) % 2 !== 0) return;
+    var C = TG.C;
+    outline(c, 1, C.PLAY_TOP + 1, C.W - 2, C.H - C.PLAY_TOP - 2, AQUA);
+  }
+
   function draw(state) {
     if (!ctx) return;
     var C = TG.C;
@@ -1164,6 +1178,8 @@
       if (dx !== 0 || dy !== 0) ctx.translate(dx, dy);
       drawWorld(ctx, s);
       ctx.restore();
+      // The watch's frame stays at the edges of the view when the world is shaken, and under the HUD.
+      drawWatchFrame(ctx, s);
       // 11. The HUD (not shaken). 12. Effects over the HUD.
       if (TG.Hud && TG.Hud.draw) TG.Hud.draw(ctx, s);
       if (TG.Effects && TG.Effects.draw) TG.Effects.draw(ctx, 'screen', 0);

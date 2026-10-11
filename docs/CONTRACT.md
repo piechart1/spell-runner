@@ -283,6 +283,7 @@ TG.C = {
   SHIELD_INVULN: 1.0,
   HOURGLASS_TIME: 6, HOURGLASS_SCALE: 0.5,
   QUILL_TIME: 10,
+  WATCH_TIME: 3, WATCH_SCALE: 0,          // the Pocket Watch stops the world (LEVEL2 6.3)
   TUTOR_SCALE: 0.25, TUTOR_T: 0.6,
   CONTINUE_COUNT: 9, CONTINUE_LOCKOUT: 0.8,
   RESUME_STEP: 0.5,       // seconds per step of the 3-2-1 resume countdown
@@ -2159,11 +2160,13 @@ Recipes are in DESIGN 15.2 and 15.3. `TG.Audio` plays everything in response to 
 | `cue_jump` | `hazard:cue` with action `jump` and `sound == true` |
 | `cue_duck` | `hazard:cue` with action `duck` and `sound == true` |
 | `ink_drop` | `pickup:ink`, with `step` 0 to 4: one step higher for each drop less than 0.35 s after the previous one |
-| `power_get` | `pickup:power` for `hourglass` and `quill`, 0.48 s later (after `crate_break`) |
+| `power_get` | `pickup:power` for `hourglass`, `quill` and `watch`, 0.48 s later (after `crate_break`) |
 | `shield_up` | `shield:gain`; with cause `crate`, 0.48 s later |
 | `shield_break` | `shield:break` |
 | `slow_on` | `power:start` with power `hourglass` |
 | `slow_off` | `power:end` with power `hourglass` |
+| `watch_tick` | Every 0.5 s from `power:start` with power `watch` until that watch ends: a tick and a tock in turn (`tock` in the options), the first at once, six in the watch's 3 s. Counted in real seconds in `TG.Audio.update`, up to the `duration` of the event; the count waits on the `paused` screen. It has the takeover priority of the sounds that repeat all the time, as `urgent_tick` has (DESIGN 15.1): when all three voices are busy it takes over one that plays another of those sounds, such as `key_ok`, and it is not played when all three hold more important sounds, as they can at the pickup |
+| `watch_off` | `power:end` with power `watch` |
 | `ink_blast` | `pickup:power` with power `blast` |
 | `one_up` | `life:gain`; with cause `cap`, 0.48 s later |
 | `hurt` | `life:lost` with `cause.type` other than `fall` |

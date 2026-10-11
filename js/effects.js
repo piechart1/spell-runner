@@ -721,7 +721,7 @@
     following(function () {
       burst(WORLD, heroTmp.x, heroTmp.y - 12, 10, 80, [AQUA, GOLD, WHITE], 0, 0.3);
       // The names of How to Play (TG.UI), so that each power has one name.
-      var name = { shield: 'SHIELD', hourglass: 'HOURGLASS', quill: 'GOLDEN QUILL', blast: 'INK BLAST' }[f.power];
+      var name = { shield: 'SHIELD', hourglass: 'HOURGLASS', quill: 'GOLDEN QUILL', blast: 'INK BLAST', watch: 'POCKET WATCH' }[f.power];
       if (name) popup(WORLD, name, heroTmp.x, heroTmp.y - 40, f.power === 'quill' ? GOLD : AQUA, 0);
     });
   }

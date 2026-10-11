@@ -84,7 +84,8 @@
     'key_ok', 'key_bad', 'lock_on', 'lock_release', 'word_clear',
     'clear_pop', 'clear_twang', 'clear_bonk', 'clear_crunch', 'deflect', 'crate_break',
     'streak', 'jump', 'land', 'slide', 'cue_jump', 'cue_duck', 'ink_drop', 'power_get',
-    'shield_up', 'shield_break', 'slow_on', 'slow_off', 'ink_blast', 'one_up', 'hurt', 'fall',
+    'shield_up', 'shield_break', 'slow_on', 'slow_off', 'watch_tick', 'watch_off',
+    'ink_blast', 'one_up', 'hurt', 'fall',
     'rescue', 'checkpoint', 'warn', 'urgent_tick', 'boss_rumble', 'boss_laugh', 'boss_telegraph',
     'boss_throw', 'boss_stomp', 'boss_weak', 'boss_hit', 'boss_stun', 'boss_defeat',
     'ui_move', 'ui_select', 'ui_back', 'pause', 'tally_tick', 'stamp', 'count_tick', 'start'
@@ -954,6 +955,14 @@
     slow_off: { level: 'sfx', play: function (B) {
       B.tone('p50', { from: 220, to: 880, dur: 0.3 });
     } },
+    // The Pocket Watch (LEVEL2 6.3, 11.3): one 30 ms note, the tick on G6 and the tock (opts.tock) a
+    // fourth below it on D6.
+    watch_tick: { level: 'sfx', play: function (B, o) {
+      B.tone('p12', { freq: o.tock ? N.D6 : N.G6, dur: 0.03, shape: 'decay' });
+    } },
+    watch_off: { level: 'sfx', play: function (B) {
+      B.tone('p50', { from: 220, to: 880, dur: 0.2 });
+    } },
     ink_blast: { level: 'sfx', play: function (B) {
       B.noise('long', { rateFrom: 1, rateTo: 0.1, dur: 0.6, shape: 'exp' });
       B.tone('tri', { from: 120, to: 40, dur: 0.4, shape: 'decay' });
@@ -1073,7 +1082,7 @@
   // never cut a reward: an extra life, a power-up, a streak or a cleared word.
   var PRIORITY = {
     key_ok: 0, key_bad: 0, lock_on: 0, lock_release: 0, ink_drop: 0, land: 0, slide: 0, urgent_tick: 0,
-    tally_tick: 0, ui_move: 0,
+    watch_tick: 0, tally_tick: 0, ui_move: 0,
     word_clear: 2, streak: 2, one_up: 2, power_get: 2, ink_blast: 2, shield_up: 2, checkpoint: 2,
     crate_break: 2, boss_hit: 2, boss_defeat: 2
   };
@@ -1546,28 +1555,81 @@
     keyOk.mode = 'major';
   }
 
+  // The music stands still at its position, for the pause screen and for the Pocket Watch (CONTRACT
+  // 7.3; LEVEL2 6.3), and goes on from there.
+  function holdMusic() {
+    loopSeq.pause();
+    onceSeq.pause();
+  }
+
+  function releaseMusic() {
+    loopSeq.resume();
+    onceSeq.resume();
+    // A jingle that was paused part-way ducks the loop again for the rest of its length.
+    if (ctx && graph && onceSeq.playing) duckLoop(onceSeq.nextTime, onceSeq.remaining());
+  }
+
+  // --- the Pocket Watch (LEVEL2 6.3, 11.3) -----------------------------------------------------
+  // While a watch runs the music stands still and a tick and a tock alternate every WATCH_PERIOD
+  // seconds, the first at once. The count is in real seconds, taken in TG.Audio.update. It waits on the
+  // pause screen, where the simulation's timer waits too, and it stops at the watch's length, so a
+  // machine whose simulation runs behind the clock plays no tick after the last one.
+
+  var WATCH_PERIOD = 0.5;       // s from a tick to the tock after it
+  // length: the duration of power:start, s; t: s since power:start; n: ticks asked for
+  var watch = { on: false, length: 0, t: 0, n: 0 };
+
+  // power:start with watch. A second watch while one runs starts the count again, as its time does.
+  function watchStart(p) {
+    watch.on = true;
+    watch.length = p.duration;
+    watch.t = 0;
+    watch.n = 0;
+    holdMusic();
+  }
+
+  // The watch is over and the music goes on. Called for power:end, and where a watch ends with no
+  // power:end (a continue, the arena, the end of a run: LEVEL2 6.3), when there may be none running.
+  function watchOver() {
+    if (!watch.on) return;
+    watch.on = false;
+    releaseMusic();
+  }
+
+  function watchUpdate(dt) {
+    if (!watch.on || screen === 'paused') return;
+    var at = watch.n * WATCH_PERIOD;
+    // 1e-9: thirty frames of 1/60 s add up to a hair under 0.5, and the tick would come a frame late.
+    if (watch.t + 1e-9 >= at && at < watch.length) {
+      playSfx('watch_tick', { tock: watch.n % 2 === 1 });
+      watch.n++;
+    }
+    watch.t += dt;
+  }
+
   function onScreenChange(p) {
     var from = p ? p.from : null;
     var to = p ? p.to : null;
     screen = to;
     if (to === 'paused' || from === 'paused') playSfx('pause');
     if (to === 'paused') {
-      loopSeq.pause();
-      onceSeq.pause();
+      holdMusic();
       return;
     }
     if (from === 'paused') {
-      loopSeq.resume();
       if (to === 'results') {
         // QUIT from the pause menu: a jingle paused part-way is dropped, not finished over the results.
+        loopSeq.resume();
         onceSeq.stop();
         unduck();
-      } else {
-        onceSeq.resume();
-        // A jingle that was paused part-way ducks the loop again for the rest of its length.
-        if (ctx && graph && onceSeq.playing) duckLoop(onceSeq.nextTime, onceSeq.remaining());
+      } else if (!watch.on) {
+        // Under a watch that is still running the music stays where it stands until the watch ends.
+        releaseMusic();
       }
     }
+    // A watch runs on the playing and lifeLost screens (and waits on the pause screen, above). On any
+    // other screen it is over.
+    if (to !== 'playing' && to !== 'lifeLost') watchOver();
     switch (to) {
       case 'boot':
         normalMusic();
@@ -1622,6 +1684,7 @@
   function onLevelStart(p) {
     TG.Audio.setTempoScale(1);
     TG.Audio.setBassOnly(false);
+    watchOver();
     var m = p && p.music;
     // The level's own ready jingle when music.ready is the name of a track (LEVEL2 11.1). It is
     // Tier 2: a level that names none, or names one that was left out, starts with jingle_ready.
@@ -1739,19 +1802,24 @@
     'shield:break': function () { playSfx('shield_break'); },
     'pickup:power': function (p) {
       if (!p) return;
-      if (p.power === 'hourglass' || p.power === 'quill') crateSfx('power_get', true);
+      if (p.power === 'hourglass' || p.power === 'quill' || p.power === 'watch') crateSfx('power_get', true);
       else if (p.power === 'blast') playSfx('ink_blast');   // at once, with the blast
     },
     'power:start': function (p) {
       if (p && p.power === 'hourglass') {
         playSfx('slow_on');
         TG.Audio.setTempoScale(0.75);
+      } else if (p && p.power === 'watch') {
+        watchStart(p);
       }
     },
     'power:end': function (p) {
       if (p && p.power === 'hourglass') {
         playSfx('slow_off');
         TG.Audio.setTempoScale(1);
+      } else if (p && p.power === 'watch') {
+        playSfx('watch_off');
+        watchOver();
       }
     },
     'hero:jump': function () { playSfx('jump'); },
@@ -2022,6 +2090,7 @@
       onceSeq.schedule(now, horizon);
       disconnectRetired(now);
       urgentUpdate(d);
+      watchUpdate(d);
     }
   };
 

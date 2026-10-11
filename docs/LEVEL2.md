@@ -1305,6 +1305,39 @@ Handed on from M1:
 | M6 | A continue inside Level 2's sections is exercised by the suite only in the arena; the four-checkpoint cases belong to `test/test-integration.js` |
 | M8 | CONTRACT passages no test pins: 4.16 and 5.5 lack `watch`; 5.5 (`age`, `flipX`, `phase`, the `turned` field, step 7's wider zone for the Dangle); 8.3 (the Flit's second `threat:warn`); 10.3, 10.4 and 14.1. A document check for the KINDS block of 5.4. README "Adding a level" still says to copy `level1.js` to `level2.js`, which now exists |
 
+**M3, the Pocket Watch: built on 2026-10-11, ahead of M2**, because M2 needs the art, which is being made in a separate copy, and M3 does not. A watch crate sets `power.watchT` to `WATCH_TIME` (3); while it runs `timeScale` is 0 (the `freeze` factor of decision 16: no other place in `js/` divides by `timeScale`), nothing moves, ages, spawns or is cued, the level's own lines (cues, checkpoints, section changes, the arena start) wait, the Hourglass's timer and Pip's invulnerability stand still, and typing goes on. It ends with `power:end`, or without an event on a continue and at `bossIntro`. The HUD slot shows it with a WHITE gauge, the music stands still and restarts where it stopped, `watch_tick` and `watch_off` are in, and an AQUA frame blinks round the playfield. The `watch-freeze` check has 11 parts. Level 1 is unchanged (2,097 frames and event logs identical; its 36 matrix lines identical).
+
+Measured with the watch live, seeds 1 to 5 (Easy / Medium / Hard), beside M1's figures:
+
+| Target of 13.5 | M1 | M3 | Met |
+|---|---|---|---|
+| The fixed conditions of CONTRACT 10.4, 36 runs | 36 pass | 36 pass | yes |
+| Floor bot continues, from either start | 0 | 0 | yes |
+| Target bot window use `u` | 0.52 to 0.58 / 0.60 to 0.64 / 0.68 to 0.72 | 0.50 to 0.55 / 0.58 to 0.62 / 0.66 to 0.69 | Medium and Hard yes; Easy under 0.55 on 4 seeds of 5 (decision 1). Two Easy seeds are 0.501, just over the harness's guard of 0.50 |
+| Target bot fight, s | 69 to 74 / 100 to 103 / 110 to 112 | the same within 0.5 | yes |
+| Target bot run length, s | 384 to 388 / 338 to 340 / 301 to 303 | 390 to 394 / 344 to 346 / 307 to 310 | yes |
+| Threats live at the arena flag | 0 in 30 runs | 0 in 30 runs | yes |
+
+What a watch is worth: the words on screen when one is typed never reached Pip afterwards (0 in 349 crate meetings; 26 without the watch). In points it adds 1.0% / 1.6% / 1.5% for a perfect typist, about a quarter of the Golden quill stand-in's 4.6% / 6.1% / 7.3%, so the world-score figures of 12.5 are a little high for Level 2 and M7 measures again. With the watch live the last crate (decision 34) is untyped at the flag in 18 of 60 Hard runs where it was 37.
+
+Corrections to 6.3 and 13.5, as built: the world holds for 179 steps (2.983 s), because the 3 s count from the step the crate is finished on, as the Hourglass's 6 s do; the frame blinks three steps on and three off, so that it shows at any drawing rate; on a held step `TG.Level.update` does nothing at all, so a watch finished on the step Pip crosses the arena line runs its time first and the boss intro starts when the world moves; a watch running at a rescue from a fall goes on, as the Hourglass does; the quick bonus lands on every word on screen during a freeze (4 to 6 a run); the Hourglass is ended only by a continue, so "as the Hourglass is ended there" does not describe the arena.
+
+For the owner, none of it blocking:
+
+- Hard and the first watch. By the bots' count Hard loses more lives with the watch than without: 212 against 179 over 180 runs (Easy 177 against 170 and Medium 239 against 248 are level). After a freeze the screen is clearer, and a new word gets extra time only for words still live, so the next words arrive at their base budget; on Hard a Dangle alone gets 2.55 s for 8 letters and the design-speed bot needs 2.42. Moving or removing the Hard Dangle of 240 does not bring it back (61 to 76 lives over 20 seeds against 71 as it is and 53 with no watch). The bot types at one speed whatever is on screen, so it does not measure the relief of a pause. To look at with decision 22, once the level can be played.
+- Adaptive pacing counts a word that was on screen during a freeze as typed fast. The Hourglass does the same in Level 1 as released. Left as built; changing it for both powers would change Level 1.
+- During a freeze Pip, the creatures and the crate hold their frame, and what the renderer animates from `state.time` (water, flags, ink drops, a hazard's swing, the backdrop) keeps moving. 6.3 says everything holds. Holding them needs one clock that stands still under a watch (about 10 lines). To decide at the art merge.
+
+Handed on from M3:
+
+| To | What |
+|---|---|
+| M2 | Drive the Flit's flutter from the entity's `animT`, which holds during a freeze, and not from `state.time` |
+| M4 | `power.watchT` is 0 from `bossIntro` on. After a watch finished at the arena line, section 3's end, the arena checkpoint, `boss:enter` and `bossIntro` come together on the first moving step |
+| M5, with the art merge | The `pw_watch` sprite and its rows; then the How To Play row for the watch (`POWERS` in `js/ui.js`, the row pitch 21 to 18, the test-ui case, and new howToPlay reference frames for the Level 1 pixel set with the owner's agreement); the decision on what holds during a freeze; the drawn Level 2 cases with a watch |
+| M6 | If `nextStage` clears the timed powers as `continueRun` does, include `watchT` and `last` |
+| M8 | CONTRACT passages no test pins: 4.14, 4.16, 4.18, 4.19, 5.1 (`power.watchT`, six factors), 5.2, 5.5, 7.3, 8.2, 11.3 and the WP-B and WP-F checklists. DESIGN 7, 13.2 and 15.2 have no row for the watch |
+
 ---
 
 ## 14. Decisions
@@ -1335,6 +1368,17 @@ The first six rows are the first round, on 2026-10-06. Decisions 1, 6, 17, 20 an
 | 29 | A stage mark on a board row | None in the first release. The plan's reasons: the mark is the one thing here that needs a change to the live database (one new column, added by hand with `ALTER TABLE` before the Worker is deployed, because `schema.sql` creates only what is missing); it needs a new field in what the game sends and changes to the tests that pin an entry to seven fields; and it would be only as reliable as the score, since a program can claim any stage. What is given up: without a mark, for example a small 2 beside runs that reached Stage 2, a player sees some scores about twice the size of others, with nothing on the row to say why. The line on the STAGE 1 CLEAR screen ("THE SCORE IS ENTERED WHEN THE RUN ENDS", 12.1) tells the player who goes on that a run can cover both stages; nothing tells a reader of the board. If the mark is added later, rows entered before then show none |
 | 31 | A run started at Stage 2 from the stage row | It goes on the same world board as the others, as the plan has it. It skips Level 1, and it scores about a quarter more than a Level 1 run of the same quality. Its totals are well below two-stage totals, so once two-stage runs are on a board it stands under them; until then it stands above a Level 1 run played as well. The board could tell such runs apart only through a new field that a program could misstate. Not chosen: a rule in the game alone, under which a run from the stage row is kept on this computer and is not offered to the world board |
 | 33 | The rows a board keeps | The best 200 runs for the release, and the boards are looked at again after a few weeks. The plan's reasoning: the number can be raised later with no database change, so the choice can wait until the boards show how quickly entries drop out. With one list for every run, Level 1 entries will drop out of the 200 sooner than they would have. Raising the number later is the constant in the Worker and its copy in `js/board.js`, the tests written around 200 and place 201 (`test/test-board.js`, `test/test-server.js`) and the figure in LEADERBOARD 3.2, 4 and 5, with no database change. A cached older copy would go on saying NOT IN THE BEST 200 YET for a place the service now keeps |
+
+### 14.1a Decided by the owner on 2026-10-11, after the M1 measurement
+
+The figures are in 13.8. The owner's words were "leave all four as you recommend". On the first three the recommendation was to leave things as they are. On the fourth no change had been recommended, so it is recorded as left as it is; the owner can change it by saying so.
+
+| # | Decision | What was decided |
+|---|---|---|
+| 1 | Easy's timing | Kept at react 1.4 / perChar 0.8 / impactGap 2.7. Easy's window use a little under the band (0.52 to 0.58, under 0.55 on three seeds of five) is accepted: Easy errs on the gentle side. The harness fails an Easy target run under 0.50 |
+| 18 | The floor player's headroom on Medium and Hard | Left as it is. The floor bot finishes with no continue on 20 seeds; none of the four single changes helps both difficulties |
+| 34 | The last crate before the arena (tile 890) | Left at 890. It is untyped at the flag in about half of Medium and Hard runs and costs no life; Level 1's last crate is missed more often. The Dangle of 886, left at the flag in 5 of 180 runs on seeds 1 to 20, stays where decision 20 put it |
+| 35 | A floor-speed player with ADAPTIVE PACE switched off, who does not finish Level 2 on Medium or Hard by the bot's measure | Left as it is: no change to the level or to the setting for this case |
 
 ### 14.2 Settled in the plan, listed for confirmation
 
@@ -1367,7 +1411,7 @@ Thirteen rows in two parts, each with the plan's recommendation: ten choices tha
 | 30 | How the daily counts treat the second stage: each stage counted on its own, or a run counted once from its start to its end. | Each stage on its own (12.5). The Level 1 rows keep exactly today's meaning, so the history stays comparable, and three new rows a day show how many second stages were started, finished and cleared and where they ended. It needs about 4 lines in the Worker and no database change. The new rows carry labels of their own in the counter table (`easy-s2`, `medium-s2`, `hard-s2`); no board has those names. Counting per run needs no Worker change but cannot show how many runs reach Level 2 |
 | 32 | A player goes on to Level 2 and then closes the tab. Should the Stage 1 score still reach the table on this computer? | Yes: keep it as a pending entry and add it at the next start under the initials used last (12.6). About 25 lines, Tier 2. It cannot be sent to the world board afterwards, because the run token lives in memory only |
 
-**Waiting for a measurement or a check.** These ask nothing of the owner now.
+**Waiting for a measurement or a check.** These ask nothing of the owner now. Rows 18 and 34 were measured in M1 and decided on 2026-10-11 (14.1a); row 11, the name check, is the one still waiting.
 
 | # | Decision | Recommendation |
 |---|---|---|

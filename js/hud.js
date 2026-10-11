@@ -37,6 +37,14 @@
   var MAX_BANNERS = 6;
   var PIP_X = 258;                  // first COMBO pip, after "X3" at x 240
   var GAUGE_X = 381, GAUGE_Y = 2, GAUGE_H = 14;   // power timer gauge beside the slot at (364, 1)
+  // The timed power-ups the slot shows, by state.power.last: the field of state.power with the seconds
+  // left, the constant of TG.C with the whole time (and its value, for a TG.C without it) and the colour
+  // of the gauge (DESIGN 13.2; the Pocket Watch is LEVEL2 6.3).
+  var SLOT_POWERS = {
+    hourglass: { left: 'slowT', total: 'HOURGLASS_TIME', seconds: 6, color: AQUA },
+    quill: { left: 'quillT', total: 'QUILL_TIME', seconds: 10, color: GOLD },
+    watch: { left: 'watchT', total: 'WATCH_TIME', seconds: 3, color: WHITE }
+  };
   var BANNER_OPEN = 4 * FRAME;      // the INK strip opens and closes over 4 frames
   var REFRESH = 0.5;                // DESIGN 13.2: WPM and accuracy refresh twice a second
 
@@ -461,17 +469,19 @@
     // Power slot: the latest timed power-up, with its timer as a gauge beside the slot (x 381 to 382,
     // y 2 to 15) that runs down. The empty slot is dimmed.
     var last = pw.last;
-    var timed = last === 'hourglass' || last === 'quill';
+    var timed = typeof last === 'string' && SLOT_POWERS.hasOwnProperty(last) ? SLOT_POWERS[last] : null;
     sprite(c, 'ui_slot', 0, 364, 1, false, timed ? null : 'dim');
     if (timed) {
-      var left = last === 'hourglass' ? num(pw.slowT, 0) : num(pw.quillT, 0);
-      var total = last === 'hourglass' ? num(C.HOURGLASS_TIME, 6) : num(C.QUILL_TIME, 10);
+      var left = num(pw[timed.left], 0);
+      var total = num(C[timed.total], timed.seconds);
       var frac = total > 0 ? clamp(left / total, 0, 1) : 0;
-      var showIcon = left > 2 || blinkOn(4, clock);
+      // The icon blinks while the time runs out: for the last 2 s, and for the last third of a power
+      // shorter than 6 s (the last second of the Pocket Watch's 3).
+      var showIcon = left > Math.min(2, total / 3) || blinkOn(4, clock);
       if (showIcon && !(slotT > 0 && !blinkOn(10, clock))) sprite(c, 'pw_' + last, Math.floor(clock * 4) % 2, 372, 17, true);
       var gauge = Math.round(GAUGE_H * frac);
       rect(c, GAUGE_X, GAUGE_Y, 2, GAUGE_H, SHADOW);
-      rect(c, GAUGE_X, GAUGE_Y + GAUGE_H - gauge, 2, gauge, last === 'quill' ? GOLD : AQUA);
+      rect(c, GAUGE_X, GAUGE_Y + GAUGE_H - gauge, 2, gauge, timed.color);
     }
   }
 

@@ -183,6 +183,14 @@ function loadEnv(files) {
 //                  clock (config.boss.telegraph for the first attack of a round, doubleGap for the second)
 //   weak-window    every weak-point window is exposeFactor x the base budget of its word, plus
 //                  exposeBonus when every entry of the volley was typed (world seconds, via boss.windowWs)
+// Added for the Pocket Watch (LEVEL2 6.3). The `watch-freeze` check follows the whole rule on a test level;
+// this asserts three parts of it in every run of the matrix that types a watch crate:
+//   watch          on a step that starts with a watch running, the world clock does not move, no threat or
+//                  crate appears, and the level does nothing: no section:enter, checkpoint, hazard:cue,
+//                  boss:warning or boss:enter
+
+// What TG.Level.update emits. None of it may come on a step a Pocket Watch holds (the `watch` assertion).
+const LEVEL_EVENTS = { 'section:enter': true, 'checkpoint': true, 'hazard:cue': true, 'boss:warning': true, 'boss:enter': true };
 
 class Checker {
   constructor(session) {
@@ -198,6 +206,7 @@ class Checker {
     this.stepFled = new Set();
     this.stepSpawned = new Set();
     this.stopReached = false;
+    this.heldWorld = null;             // worldTime before a step that a Pocket Watch holds; null on any other step and between steps
     this.announced = [];               // boss:attack for shock and pick not yet followed by attack:spawn
     this.volleyHits = 0;               // volley entries typed since the volley began
     this.volleySize = 0;
@@ -239,6 +248,9 @@ class Checker {
       }
     }
 
+    // watch
+    if (this.heldWorld !== null && LEVEL_EVENTS[name] === true) this.fail('watch', name + ' was emitted on a step a Pocket Watch holds');
+
     // word-pool
     if (name === 'threat:spawn' || name === 'boss:weakopen' || name === 'boss:finisher') {
       const w = payload.word;
@@ -253,6 +265,8 @@ class Checker {
       this.entities.set(payload.id, payload.entity);
       this.stepSpawned.add(payload.id);
       this.checkSpawn(payload.entity);
+      // watch
+      if (this.heldWorld !== null) this.fail('watch', payload.kind + ' "' + payload.word + '" appeared while a Pocket Watch holds the world');
     } else if (name === 'threat:hit' || name === 'threat:bounce') {
       this.stepContact.add(payload.id);
       const e = this.entities.get(payload.id);
@@ -464,6 +478,7 @@ class Checker {
   }
 
   beforeStep(state) {
+    this.heldWorld = state.power.watchT > 0 ? state.worldTime : null;
     this.prevThreats.clear();
     for (const e of state.entities) {
       if (!e.dead && e.type === 'threat') this.prevThreats.set(e.id, e);
@@ -478,7 +493,14 @@ class Checker {
     const TG = this.TG;
     const m = this.measure;
     if (state.player && (m.minLives === null || state.player.lives < m.minLives)) m.minLives = state.player.lives;
+    // The step is over. A continue comes between steps and emits section:enter, which is not a held step's.
+    const heldWorld = this.heldWorld;
+    this.heldWorld = null;
     if (this.error) return;
+    // watch
+    if (heldWorld !== null && state.worldTime !== heldWorld) {
+      this.fail('watch', 'the world clock moved by ' + (state.worldTime - heldWorld) + ' ws on a step a Pocket Watch holds');
+    }
     // first-letters
     const seen = new Map();
     for (const t of TG.Entities.typables(state)) {
@@ -893,7 +915,9 @@ function recordEvents(TG) {
 }
 
 // A small test level: two gaps, a bramble, a branch, a beehive and an arch, and nothing else.
-// With `empty: true` it has no gaps or hazards at all. `tune` is its tune block and `boss` its boss table.
+// With `empty: true` it has no gaps or hazards at all. `tune` is its tune block, `boss` its boss table,
+// `spawns` its spawn list (none without it: the checks spawn what they need) and `gaps` its gaps in place of
+// the two.
 function testLevel(TG, options) {
   const o = options || {};
   const L1 = TG.Levels[1];
@@ -912,14 +936,14 @@ function testLevel(TG, options) {
     ],
     arena: { name: 'ARENA', stage: 'T-B', palette: 'dusk', arenaTilesFrom: 236, music: music(168) },
     checkpoints: [0, 80, 160, 240],
-    gaps: o.empty ? [] : [{ x: 20, w: 1 }, { x: 40, w: 2 }],
+    gaps: o.gaps || (o.empty ? [] : [{ x: 20, w: 1 }, { x: 40, w: 2 }]),
     hazards: o.empty ? [] : [
       { x: 100, kind: 'bramble' },
       { x: 120, kind: 'branch' },
       { x: 140, kind: 'beehive' },
       { x: 180, kind: 'arch', w: 3 }
     ],
-    spawns: [],
+    spawns: o.spawns || [],
     ink: [],
     decor: [],
     boss: o.boss || { kind: 'baron', speech: 'TEST' }
@@ -956,6 +980,8 @@ function tryHazard(env, sc, hazardId, edge, mode, pressAt) {
   const h = s.level.hazards.find((z) => z.id === hazardId);
   const key = h.action === 'jump' ? 'jump' : 'duck';
   const target = typeof pressAt === 'number' ? pressAt : (edge === 'start' ? h.winStart : h.winEnd);
+  // timeScale is read as the world's speed. That is only true while no Pocket Watch runs (a watch makes it
+  // 0, LEVEL2 6.3), and none can here: this run of the test level has no crate.
   const stepDist = C.RUN_SPEED * s.timeScale * C.DT;
 
   if (mode === 'exact') {
@@ -1214,6 +1240,8 @@ CHECKS['duck-held'] = function () {
   TG.Input.keyDown('duck');
   TG.Game.step(C.DT);
   if (s.player.state !== 'slide') return result(false, 'duck did not start a slide');
+  // Here and for `ws` below timeScale is read as the world's speed, and here it is divided by. A Pocket
+  // Watch would make it 0 (LEVEL2 6.3); this run of the test level has no crate, so none can run.
   const hold = Math.ceil(C.SLIDE_TIME / (s.timeScale * C.DT)) + 30;
   for (let i = 0; i < hold; i++) TG.Game.step(C.DT);
   if (TG.Game.state.player.state !== 'slide') return result(false, 'the slide ended while duck was held');
@@ -2386,6 +2414,568 @@ CHECKS['pause-deferred'] = function () {
   return result(true, 'hit: deferred to paused, resumeTo playing, resumed; last life: game over; fall: paused in the bubble at the rescue point');
 };
 
+// --- watch-freeze -------------------------------------------------------------------------------
+// The Pocket Watch (LEVEL2 6.3; the check of this name in LEVEL2 13.5). On the test level a watch crate is
+// typed and the time it runs is followed step by step, one part of the rule at a time; then the bot plays
+// Level 2 through its first watch.
+// A watch counts WATCH_TIME from the step its crate is finished on, as the Hourglass counts its time. That
+// step's world step was worked out before the key was read, so the world stands still on the
+// WATCH_TIME / DT - 1 steps after it (179), and power:end comes on the last of them. A crate finished on
+// the lifeLost screen is the one case with a step more: part 10.
+// The parts with a list of clauses beside them are also run with a Red cap in the crate, which leaves the
+// world moving. Each must then report those clauses, as it would if the watch did nothing: the check must
+// be able to fail.
+// The value of WATCH_TIME itself is pinned in test/test-core.js.
+// What 6.3 leaves open and this check pins as built (reported to the owner with M3):
+//   - The level waits with the world. On a step the watch holds TG.Level.update does nothing, so a section
+//     line, a checkpoint, a cue, the boss warning or the arena line that Pip passed on the step of the pickup
+//     is acted on when the world moves again (part 5).
+//   - A watch that is running when a fall's rescue comes goes on. Pip waits in the bubble, letters are still
+//     typed, and the level sees where the rescue put him when the world moves (part 10). The Hourglass is
+//     not ended by a rescue either.
+//   - No close-call bonus and no urgent flag on a step the watch holds, also for a word finished on the
+//     first of those steps and for a threat a fraction of a step from contact (parts 2 and 3).
+
+// The failed clauses of one part of a check. The first failure of each clause is kept, with what was seen.
+function clauseList() {
+  const rows = [];
+  return {
+    check: (ok, clause, seen) => { if (!ok && !rows.some((r) => r.clause === clause)) rows.push({ clause: clause, text: clause + ': ' + seen }); },
+    has: (clause) => rows.some((r) => r.clause === clause),
+    texts: () => rows.map((r) => r.text)
+  };
+}
+
+CHECKS['watch-freeze'] = function () {
+  const env = simEnv();
+  const TG = env.TG;
+  const C = TG.C;
+  const DT = C.DT;
+  const HELD = Math.round(C.WATCH_TIME / DT) - 1;
+  const begin = (levelOptions) => {
+    TG.Events.clear();
+    const s = startTestRun(TG, SCALES[1], levelOptions);
+    return { s: s, events: recordEvents(TG) };
+  };
+  const since = (events, mark, name) => events.slice(mark).filter((x) => x.name === name);
+  const crateOf = (s, power) => TG.Entities.spawn(s, { kind: 'crate', power: power });
+  // Types a word a letter a step: the whole of it, or the letters up to `upTo`.
+  const type = (e, upTo) => {
+    const to = upTo === undefined ? e.word.length : upTo;
+    for (let i = e.typed; i < to && !e.dead; i++) {
+      TG.Input.typeChar(e.word[i]);
+      TG.Game.step(DT);
+    }
+  };
+  const named = (e) => e.kind + ' "' + e.word + '"';
+
+  // 1. The world holds. The threats of `kinds` and a crate are live. The nearest is half a second from Pip,
+  // so it is urgent; the Hourglass and the quill are running and Pip has just been hit. Then the crate is
+  // typed, and a jump is pressed on step 60 of the freeze. It is run with two sets of kinds, so that every
+  // kind of the two levels is followed: one whose clock stalls on a letter, the two anchored kinds, one from
+  // above that turns and one from behind; then the hopping, the bobbing, the buried and the swooping one.
+  const HOLD_KINDS = [['dawdle', 'boulder', 'dangle', 'flit', 'truffle'], ['hoppet', 'buzzle', 'digby', 'swoop']];
+  const holds = (kinds) => (power) => {
+    const c = clauseList();
+    const { s, events } = begin({ empty: true, tune: { medium: { maxActive: [6, 6, 6, 6] } } });
+    const p = s.player;
+    const threats = kinds.map((kind) => TG.Entities.spawn(s, { kind: kind }));
+    const other = crateOf(s, 'shield');
+    if (threats.some((e) => !e) || !other) {
+      c.check(false, 'setup', 'a threat or the crate did not spawn');
+      return c;
+    }
+    const nearest = threats[0];
+    for (let i = 0; i < 2000 && nearest.eta > 0.5; i++) TG.Game.step(DT);
+    TG.Game.applyPower('hourglass', 0, 0);
+    TG.Game.applyPower('quill', 0, 0);
+    const crate = crateOf(s, power);
+    type(crate, crate.word.length - 1);
+    TG.Entities.damage(s, { type: 'threat', kind: 'hoppet', id: 0, from: 'right' });
+    for (let i = 0; i < 60 && s.screen !== 'playing'; i++) TG.Game.step(DT);
+    const marks = { start: null, end: null };
+    TG.Events.on('power:start', (x) => { if (x.power === 'watch') marks.start = { frame: s.frame, time: s.time, duration: x.duration }; });
+    TG.Events.on('power:end', (x) => { if (x.power === 'watch') marks.end = { frame: s.frame, time: s.time }; });
+    const urgentBefore = nearest.urgent;
+    type(crate);                                   // the last letter: the pickup
+
+    const was = s.entities.filter((e) => !e.dead).map((e) => ({ e: e, age: e.age, x: e.x, t: e.t, y: e.y, animT: e.animT }));
+    const at = { frame: s.frame, time: s.time, world: s.worldTime, x: p.x, y: p.y, animT: p.animT, camera: s.camera.x, slowT: s.power.slowT, invulnT: p.invulnT, hurtT: p.hurtT, quillT: s.power.quillT, last: s.power.last, assist: s.assist };
+    c.check(crate.dead && was.length === kinds.length + 1 && urgentBefore === true && at.slowT > 0 && at.invulnT > 0 && at.hurtT > 0 && at.quillT > 0 && s.screen === 'playing', 'setup',
+      was.length + ' typables live at the pickup, the nearest ' + (urgentBefore ? '' : 'not ') + 'urgent before it, slowT ' + at.slowT + ', invulnT ' + at.invulnT + ', hurtT ' + at.hurtT + ', quillT ' + at.quillT + ', on ' + s.screen);
+    // Adaptive pacing is switched on with its target well below assist: assist goes on towards it at its
+    // usual rate while the world is held (6.3: it runs on the real clock).
+    s.adaptive = true;
+    s.assistTarget = at.assist - 0.2;
+
+    const mark = events.length;
+    for (let n = 1; n <= HELD; n++) {
+      if (n === 60) TG.Input.keyDown('jump');
+      if (n === 61) TG.Input.keyUp('jump');
+      TG.Game.step(DT);
+      const on = ' on step ' + n + ' of ' + HELD;
+      c.check(s.timeScale === 0, 'timeScale', 'timeScale is ' + s.timeScale + on);
+      c.check(s.worldTime === at.world, 'worldTime', 'worldTime moved by ' + (s.worldTime - at.world) + ' ws' + on);
+      for (const w of was) {
+        const e = w.e;
+        c.check(!e.dead && e.age === w.age && e.x === w.x && e.t === w.t, 'entities',
+          named(e) + on + ': age ' + w.age + ' -> ' + e.age + ', x ' + w.x + ' -> ' + e.x + ', t ' + w.t + ' -> ' + e.t + (e.dead ? ', gone (' + e.reason + ')' : ''));
+        c.check(e.y === w.y && e.animT === w.animT, 'frame', named(e) + on + ': y ' + w.y + ' -> ' + e.y + ', animT ' + w.animT + ' -> ' + e.animT);
+        const left = e.budget - e.age + e.stallT;
+        c.check(Math.abs(e.eta - 100 * left) < 1e-6, 'eta', named(e) + on + ': eta ' + e.eta + ' with ' + left + ' ws left, expected ' + 100 * left);
+        if (e.type === 'threat') c.check(e.urgent === false, 'urgent', named(e) + ' is urgent' + on);
+      }
+      c.check(p.x === at.x && p.y === at.y && p.animT === at.animT && p.state === 'run' && s.camera.x === at.camera, 'pip',
+        'Pip is ' + p.state + ' at x ' + p.x + ' (was ' + at.x + '), y ' + p.y + ' (was ' + at.y + '), with animT ' + p.animT + ' (was ' + at.animT + '), the camera at ' + s.camera.x + ' (was ' + at.camera + ')' + on);
+      c.check(Math.abs(s.assist - (at.assist - n * C.ASSIST_RATE * DT)) < 1e-9, 'assist', 'assist is ' + s.assist + on + ', expected ' + (at.assist - n * C.ASSIST_RATE * DT) + ': adaptive pacing keeps moving it towards its target');
+      c.check(s.power.slowT === at.slowT, 'slowT', 'the Hourglass\'s slowT ' + at.slowT + ' -> ' + s.power.slowT + on);
+      c.check(p.invulnT === at.invulnT, 'invulnT', 'Pip\'s invulnT ' + at.invulnT + ' -> ' + p.invulnT + on);
+      c.check(Math.abs(p.hurtT - Math.max(0, at.hurtT - n * DT)) < 1e-9, 'hurt', 'Pip\'s hurtT is ' + p.hurtT + on + ', expected ' + Math.max(0, at.hurtT - n * DT) + ': the hurt pose keeps counting');
+      c.check(Math.abs(s.power.quillT - (at.quillT - n * DT)) < 1e-9, 'quill', 'the quill\'s time is ' + s.power.quillT + on + ', expected ' + (at.quillT - n * DT) + ': it keeps counting');
+    }
+    const jumped = since(events, mark, 'hero:jump').length;
+    c.check(jumped === 0 && p.bufferT === C.JUMP_BUFFER, 'jump',
+      'a jump pressed on step 60 of the freeze ' + (jumped ? 'started during it' : 'is buffered for ' + p.bufferT + ' ws at its end, not the whole ' + C.JUMP_BUFFER));
+    c.check(since(events, mark, 'threat:urgent').length === 0, 'urgent', 'threat:urgent was emitted during the freeze');
+    c.check(marks.start !== null && marks.start.frame === at.frame && marks.start.duration === C.WATCH_TIME, 'start',
+      'no power:start with power watch and duration ' + C.WATCH_TIME + ' on the step of the pickup');
+    const ends = since(events, mark, 'power:end').filter((x) => x.payload.power === 'watch').length;
+    c.check(marks.end !== null && marks.end.frame === at.frame + HELD && Math.abs(marks.end.time - at.time - (C.WATCH_TIME - DT)) < 1e-9 && s.power.watchT === 0 && ends === 1, 'ends',
+      ends + ' power:end for the watch, ' + (marks.end ? (marks.end.frame - at.frame) + ' steps and ' + fmt(marks.end.time - at.time, 4) + ' s after the step of the pickup' : 'none in time') +
+      ', expected one, ' + HELD + ' steps and ' + fmt(C.WATCH_TIME - DT, 4) + ' s after it (the ' + C.WATCH_TIME + ' s are counted from that step); watchT is ' + s.power.watchT);
+    c.check(at.last === 'watch' && s.power.last === 'hourglass', 'slot', 'power.last was ' + at.last + ' during the watch and is ' + s.power.last + ' after it (watch, then the Hourglass that is still running)');
+
+    // Pacing is put back as it was at the pickup, so that what follows reads the time scale of that moment.
+    s.adaptive = false;
+    s.assist = s.assistTarget = at.assist;
+    const after = events.length;
+    TG.Game.step(DT);                              // the first step the world moves again
+    c.check(s.timeScale === s.pace * s.assist * C.HOURGLASS_SCALE && s.worldTime > at.world, 'moves',
+      'on the step after the watch timeScale is ' + s.timeScale + ' and worldTime has moved by ' + (s.worldTime - at.world) + ' ws');
+    c.check(since(events, after, 'hero:jump').length === 1 && p.state === 'jump', 'jump', 'the jump pressed during the freeze did not start on the first step the world moved: Pip is ' + p.state);
+    const urgentSent = events.filter((x) => x.name === 'threat:urgent' && x.payload.id === nearest.id).length;
+    c.check(nearest.urgent === true && urgentSent === 1, 'urgent',
+      'once the world moves the nearest threat is ' + (nearest.urgent ? '' : 'not ') + 'urgent again (eta ' + nearest.eta + '), and threat:urgent was emitted for it ' + urgentSent + ' times in all');
+    c.check(Math.abs(s.power.slowT - (at.slowT - DT)) < 1e-9, 'slowT', 'the Hourglass did not go on counting after the watch: slowT ' + at.slowT + ' -> ' + s.power.slowT);
+    c.check(Math.abs(p.invulnT - (at.invulnT - DT)) < 1e-9, 'invulnT', 'the invulnerability did not go on counting after the watch: invulnT ' + at.invulnT + ' -> ' + p.invulnT);
+    return c;
+  };
+
+  // 2. The close call. Pip is under CLOSE_CALL_TIME from a boulder when the crate is typed, and the
+  // boulder's word is typed next: a letter a step, and in a second run the whole word on the first held
+  // step, when the boulder's eta is still the one of the step of the pickup (an eta is worked out after the
+  // keys of a step are read). A boulder's clock is the distance left, so the letters do not hold it back.
+  const closeCall = (power) => {
+    const c = clauseList();
+    for (const atOnce of [false, true]) {
+      const { s, events } = begin({ empty: true });
+      const boulder = TG.Entities.spawn(s, { kind: 'boulder' });
+      for (let i = 0; i < 2000 && boulder.eta > 1.0; i++) TG.Game.step(DT);
+      const crate = crateOf(s, power);
+      type(crate, crate.word.length - 1);
+      for (let i = 0; i < 2000 && boulder.eta > 0.30; i++) TG.Game.step(DT);
+      type(crate);
+      c.check(crate.dead && !boulder.dead && boulder.eta < C.CLOSE_CALL_TIME, 'setup', 'at the pickup the boulder is ' + (boulder.dead ? 'gone' : boulder.eta + ' s away') + ', not a close call');
+      const mark = events.length;
+      if (atOnce) {
+        for (const ch of boulder.word) TG.Input.typeChar(ch);
+        TG.Game.step(DT);
+      } else {
+        type(boulder);
+      }
+      const how = atOnce ? 'typed whole on the first held step' : 'typed a letter a step during the freeze';
+      const clear = since(events, mark, 'word:clear').find((x) => x.payload.id === boulder.id);
+      const paid = since(events, mark, 'score:add').filter((x) => x.payload.reason === 'close').length;
+      c.check(!!clear && clear.payload.cause === 'typed', 'typed', 'the boulder\'s word ' + how + ' did not clear it');
+      c.check(!!clear && clear.payload.close === false && paid === 0, atOnce ? 'close-first' : 'close',
+        'the boulder\'s word ' + how + ': a close-call bonus was paid: close is ' + (clear && clear.payload.close) + ' and ' + paid + ' score:add have the reason close');
+    }
+    return c;
+  };
+
+  // 3. A threat a fraction of a step from contact. An eta is the world time left over the time scale, and
+  // the time scale has a floor of 0.01 there (etaOf in js/entities.js). With the world stopped, a thousandth
+  // of a world second left therefore reads as 0.1 s, which is under the close call's time and under the
+  // urgent time. The watch's rule holds for it all the same: it is not urgent and its word pays no close
+  // call. The two anchored kinds, whose clocks no letter holds back; the anchor is moved to put Pip there.
+  const nearContact = () => {
+    const c = clauseList();
+    for (const kind of ['boulder', 'dangle']) {
+      const { s, events } = begin({ empty: true });
+      const e = TG.Entities.spawn(s, { kind: kind });
+      type(crateOf(s, 'watch'));
+      e.anchorX = s.player.x + e.contact + C.RUN_SPEED * 0.001;
+      const mark = events.length;
+      TG.Game.step(DT);
+      c.check(!e.dead && s.power.watchT > 0 && Math.abs(e.eta - 0.1) < 1e-6 && e.eta < C.CLOSE_CALL_TIME && e.eta < s.config.urgentTime, 'setup',
+        'the ' + kind + ' is ' + (e.dead ? 'gone (' + e.reason + ')' : 'at an eta of ' + e.eta + ' s') + ', expected 0.1 s with the world stopped');
+      type(e);
+      const clear = since(events, mark, 'word:clear').find((x) => x.payload.id === e.id);
+      const paid = since(events, mark, 'score:add').filter((x) => x.payload.reason === 'close').length;
+      c.check(since(events, mark, 'threat:urgent').length === 0, 'urgent-near', 'the ' + kind + ' a thousandth of a world second from contact was urgent during the freeze');
+      c.check(!!clear && clear.payload.cause === 'typed' && clear.payload.close === false && paid === 0, 'close-near',
+        'the ' + kind + ' a thousandth of a world second from contact: ' + (clear ? 'close is ' + clear.payload.close + ' and ' + paid + ' score:add have the reason close' : 'its word typed during the freeze did not clear it'));
+    }
+    return c;
+  };
+
+  // 4. A word typed in the freeze, and the spawn that waits. Three threats of the level's own list are due
+  // close together where two may be live, so the third waits for a slot. The first one's word is typed
+  // during the freeze, which frees the slot. The level does nothing on a held step (part 5), and when the
+  // world moves the entry still has the rest of its retry time to wait, which is on the world clock.
+  const waiting = (power) => {
+    const c = clauseList();
+    const tiles = [['hoppet', 8], ['buzzle', 9], ['dawdle', 10]];
+    const { s, events } = begin({ empty: true, spawns: tiles.map((t) => ({ x: t[1], kind: t[0], min: 'easy' })) });
+    const third = s.level.spawns[2];
+    for (let i = 0; i < 600 && !third.waiting; i++) TG.Game.step(DT);
+    const hoppet = s.entities.find((e) => e.kind === 'hoppet');
+    if (!hoppet || !third.waiting || third.done || TG.Entities.activeThreats(s) !== 2) {
+      c.check(false, 'setup', 'the third threat is not waiting behind two live ones');
+      return c;
+    }
+    type(crateOf(s, power));
+    const mark = events.length;
+    const age = hoppet.age;
+    const stall = TG.Difficulty.toWs(s.config, s.config.letterStall);
+    let n = 0;
+    for (; n < hoppet.word.length; n++) {
+      TG.Input.typeChar(hoppet.word[n]);
+      TG.Game.step(DT);
+      if (n < hoppet.word.length - 1) {
+        c.check(hoppet.typed === n + 1 && hoppet.age === age && Math.abs(hoppet.stallT - (n + 1) * stall) < 1e-9, 'stall',
+          'after ' + (n + 1) + ' letters typed in the freeze the hoppet has ' + hoppet.typed + ' typed, age ' + age + ' -> ' + hoppet.age + ' and stallT ' + hoppet.stallT + ', expected ' + (n + 1) * stall + ' (each letter still pays its stall)');
+      }
+    }
+    const clear = since(events, mark, 'word:clear').find((x) => x.payload.id === hoppet.id);
+    const u = hoppet.age / hoppet.budget;
+    c.check(!!clear && clear.payload.cause === 'typed' && hoppet.reason === 'cleared', 'typed', 'a word typed during the freeze was not cleared');
+    c.check(u < C.QUICK_U && !!clear && clear.payload.quick === true, 'u', 'the word cleared in the freeze has u ' + fmt(u, 3) + ' and quick ' + (clear && clear.payload.quick) + ', expected u under ' + C.QUICK_U);
+    for (; n < HELD; n++) TG.Game.step(DT);
+    const appeared = since(events, mark, 'threat:spawn').length;
+    c.check(TG.Entities.activeThreats(s) === 1 && appeared === 0 && third.waiting && !third.done, 'waiting-spawn',
+      'with its slot freed the waiting dawdle ' + (appeared ? 'appeared during the freeze' : 'is ' + (third.done ? 'done' : third.waiting ? 'waiting' : 'not waiting') + ' with ' + TG.Entities.activeThreats(s) + ' threats live'));
+    // It appears once the world moves, when the retry time it had left has run out.
+    const world = s.worldTime;
+    for (let i = 0; i < 120 && !third.done; i++) TG.Game.step(DT);
+    c.check(third.done && s.worldTime - world <= C.SPAWN_RETRY + 1e-9, 'waiting-spawn',
+      'after the freeze the waiting dawdle ' + (third.done ? 'appeared ' + fmt(s.worldTime - world, 3) + ' ws on, later than its retry time of ' + C.SPAWN_RETRY : 'did not appear'));
+    return c;
+  };
+
+  // 5. A line of the level reached on the step of the pickup. The crate's last letter is typed on the step
+  // that carries Pip over the line. TG.Level.update ran earlier in that step, with Pip still short of the
+  // line, so the level first sees him past it on a later step. That is the first step the world moves, since
+  // the level does nothing on a step the watch holds. Four lines: a spawn point (a slot is free; and once
+  // more with the point reached a step earlier), the start of a hazard's window, a checkpoint with the
+  // section that starts there, and the arena line, where the watch runs its whole time before the boss
+  // intro starts.
+  // pickupOver: with one letter of a new crate left, Pip runs up to x and the letter is typed on the step
+  // that carries him over it.
+  const pickupOver = (s, x, power) => {
+    const crate = crateOf(s, power);
+    type(crate, crate.word.length - 1);
+    const stepDist = C.RUN_SPEED * s.timeScale * DT;       // no watch runs yet
+    for (let i = 0; i < 600 && s.player.x + stepDist < x; i++) TG.Game.step(DT);
+    const before = s.player.x;
+    type(crate);
+    return { ok: crate.dead && before < x && s.player.x >= x, text: 'Pip went from x ' + before + ' to ' + s.player.x + ' on the step of the pickup; the line is at ' + x };
+  };
+  const lines = (power) => {
+    const c = clauseList();
+    const count = (events, mark, name) => since(events, mark, name).length;
+    let run, at, mark;
+
+    run = begin({ empty: true, spawns: [{ x: 12, kind: 'hoppet', min: 'easy' }] });
+    const entry = run.s.level.spawns[0];
+    at = pickupOver(run.s, entry.x, power);
+    c.check(at.ok && !entry.done, 'setup', 'the spawn point: ' + at.text);
+    mark = run.events.length;
+    for (let n = 0; n < HELD; n++) TG.Game.step(DT);
+    c.check(count(run.events, mark, 'threat:spawn') === 0 && !entry.done, 'spawn', 'the hoppet whose spawn point Pip reached on the step of the pickup appeared during the freeze');
+    TG.Game.step(DT);
+    c.check(entry.done && count(run.events, mark, 'threat:spawn') === 1, 'spawn', 'the hoppet did not appear on the first step the world moved');
+
+    // The same point reached a step earlier, so that the entry is due on the step of the pickup itself. Its
+    // spawn step comes after the keys of that step are read, and nothing new appears once a watch runs.
+    run = begin({ empty: true, spawns: [{ x: 12, kind: 'hoppet', min: 'easy' }] });
+    const due = run.s.level.spawns[0];
+    const dueCrate = crateOf(run.s, power);
+    type(dueCrate, dueCrate.word.length - 1);
+    for (let i = 0; i < 600 && run.s.player.x < due.x; i++) TG.Game.step(DT);
+    c.check(run.s.player.x >= due.x && !due.done, 'setup', 'the spawn point reached a step early: Pip is at x ' + run.s.player.x + ', the point at ' + due.x + ', the entry ' + (due.done ? 'done' : 'not done'));
+    mark = run.events.length;
+    type(dueCrate);
+    c.check(dueCrate.dead && !due.done && count(run.events, mark, 'threat:spawn') === 0, 'spawn-due', 'the hoppet that was due on the step of the pickup appeared on it, after the crate was typed');
+    for (let n = 0; n < HELD; n++) TG.Game.step(DT);
+    c.check(!due.done && count(run.events, mark, 'threat:spawn') === 0, 'spawn-due', 'the hoppet that was due on the step of the pickup appeared during the freeze');
+    TG.Game.step(DT);
+    c.check(due.done && count(run.events, mark, 'threat:spawn') === 1, 'spawn-due', 'the hoppet that was due on the step of the pickup did not appear on the first step the world moved');
+
+    run = begin();
+    const branch = run.s.level.hazards.find((h) => h.id === 'h3');
+    teleport(TG, branch.winStart - 40);
+    at = pickupOver(run.s, branch.winStart, power);
+    c.check(at.ok && !branch.cued, 'setup', 'the start of the branch\'s window: ' + at.text);
+    mark = run.events.length;
+    for (let n = 0; n < HELD; n++) TG.Game.step(DT);
+    c.check(count(run.events, mark, 'hazard:cue') === 0 && !branch.cued, 'cue-line', 'hazard:cue was emitted during the freeze, for the window Pip entered on the step of the pickup');
+    TG.Game.step(DT);
+    c.check(since(run.events, mark, 'hazard:cue').filter((x) => x.payload.id === branch.id).length === 1, 'cue-line', 'the cue of the window Pip entered on the step of the pickup did not come on the first step the world moved');
+
+    run = begin({ empty: true });
+    const cp = run.s.level.checkpoints[1];
+    teleport(TG, cp.x - 40);
+    at = pickupOver(run.s, cp.x, power);
+    c.check(at.ok && !cp.raised && run.s.section === 0, 'setup', 'the checkpoint line: ' + at.text);
+    mark = run.events.length;
+    const passed = () => count(run.events, mark, 'checkpoint') + ' checkpoint and ' + count(run.events, mark, 'section:enter') + ' section:enter, section ' + run.s.section + ', the banked checkpoint ' + run.s.checkpoint.index;
+    for (let n = 0; n < HELD; n++) TG.Game.step(DT);
+    c.check(count(run.events, mark, 'checkpoint') === 0 && count(run.events, mark, 'section:enter') === 0 && run.s.section === 0 && run.s.checkpoint.index === 0, 'checkpoint-line',
+      'during the freeze, for the line Pip passed on the step of the pickup: ' + passed() + ' (expected none, section 0, checkpoint 0)');
+    TG.Game.step(DT);
+    c.check(count(run.events, mark, 'checkpoint') === 1 && count(run.events, mark, 'section:enter') === 1 && run.s.section === 1 && run.s.checkpoint.index === 1, 'checkpoint-line',
+      'on the first step the world moved: ' + passed() + ' (expected one of each, section 1, checkpoint 1)');
+
+    run = begin({ empty: true });
+    const s = run.s;
+    const lastCp = s.level.checkpoints.length - 1;
+    teleport(TG, s.level.arenaX - 40);
+    at = pickupOver(s, s.level.arenaX, power);
+    c.check(at.ok && s.screen === 'playing' && s.checkpoint.index === lastCp - 1, 'setup', 'the arena line: ' + at.text + '; on ' + s.screen + ' with checkpoint ' + s.checkpoint.index + ' banked');
+    mark = run.events.length;
+    let away = 0;
+    for (let n = 0; n < HELD; n++) {
+      TG.Game.step(DT);
+      if (s.screen !== 'playing') away++;
+    }
+    c.check(away === 0 && count(run.events, mark, 'boss:enter') === 0 && s.checkpoint.index === lastCp - 1, 'arena-line',
+      'during the freeze, with Pip over the arena line since the step of the pickup: ' + away + ' steps off the playing screen, ' + count(run.events, mark, 'boss:enter') + ' boss:enter, checkpoint ' + s.checkpoint.index + ' banked');
+    c.check(since(run.events, mark, 'power:end').filter((x) => x.payload.power === 'watch').length === 1, 'arena-line', 'the watch did not run its whole time and end with power:end before the arena started');
+    TG.Game.step(DT);
+    c.check(s.screen === 'bossIntro' && count(run.events, mark, 'boss:enter') === 1 && s.section === 3 && s.checkpoint.index === lastCp, 'arena-line',
+      'on the first step the world moved: screen ' + s.screen + ', ' + count(run.events, mark, 'boss:enter') + ' boss:enter, section ' + s.section + ', checkpoint ' + s.checkpoint.index + ' banked (expected bossIntro, one, 3 and ' + lastCp + ')');
+    return c;
+  };
+
+  // 6. A fall in progress. Pip runs off the edge of the narrow gap, and the crate's last letter is typed
+  // three steps into the fall.
+  const falls = (power) => {
+    const c = clauseList();
+    const { s, events } = begin();
+    const p = s.player;
+    teleport(TG, s.level.hazards.find((h) => h.id === 'h0').x - 40);
+    const crate = crateOf(s, power);
+    type(crate, crate.word.length - 1);
+    for (let i = 0; i < 600 && since(events, 0, 'hero:fall').length === 0; i++) TG.Game.step(DT);
+    for (let i = 0; i < 3; i++) TG.Game.step(DT);
+    type(crate);
+    const lives = p.lives, y = p.y, vy = p.vy;
+    c.check(crate.dead && p.state === 'fall' && !p.fallen && s.screen === 'playing', 'setup', 'at the pickup Pip is ' + p.state + ' on ' + s.screen + ', not in mid-fall');
+    for (let n = 1; n <= HELD; n++) {
+      TG.Game.step(DT);
+      c.check(p.state === 'fall' && p.y === y && p.vy === vy && p.lives === lives && s.screen === 'playing', 'fall',
+        'on step ' + n + ' of ' + HELD + ' Pip is ' + p.state + ' at y ' + p.y + ' (was ' + y + ') with ' + p.lives + ' lives (was ' + lives + ') on ' + s.screen);
+    }
+    const mark = events.length;
+    for (let i = 0; i < 60 && s.screen === 'playing'; i++) TG.Game.step(DT);
+    const lost = since(events, mark, 'life:lost');
+    c.check(lost.length === 1 && lost[0].payload.cause.type === 'fall' && p.lives === lives - 1 && s.screen === 'lifeLost', 'fall',
+      'after the freeze the fall did not finish and cost its life: ' + lost.length + ' life:lost, ' + p.lives + ' lives (was ' + lives + '), on ' + s.screen);
+    return c;
+  };
+
+  // 7. The cue. Pip is under half a second short of the branch's window when the crate is typed. A duck
+  // is pressed on step 30 of the freeze: the slide pose starts at once, and its time is counted when the
+  // world moves.
+  const cue = (power) => {
+    const c = clauseList();
+    const { s, events } = begin();
+    const p = s.player;
+    const branch = s.level.hazards.find((h) => h.id === 'h3');
+    teleport(TG, branch.winStart - 30);
+    type(crateOf(s, power));
+    c.check(p.x < branch.winStart && !branch.cued, 'setup', 'at the pickup Pip is at x ' + p.x + ', the window starts at ' + branch.winStart);
+    const mark = events.length;
+    for (let n = 1; n <= HELD; n++) {
+      if (n === 30) TG.Input.keyDown('duck');
+      if (n === 32) TG.Input.keyUp('duck');
+      TG.Game.step(DT);
+      if (n >= 30) c.check(p.state === 'slide' && p.slideT === C.SLIDE_TIME, 'duck', 'after a duck pressed on step 30 Pip is ' + p.state + ' with slideT ' + p.slideT + ' on step ' + n + ', expected a slide with the whole ' + C.SLIDE_TIME);
+    }
+    c.check(since(events, mark, 'hazard:cue').length === 0, 'cue', 'hazard:cue was emitted during the freeze');
+    const after = events.length;
+    TG.Game.step(DT);
+    c.check(p.slideT < C.SLIDE_TIME, 'duck', 'the slide\'s time did not start to count when the world moved');
+    for (let i = 0; i < 60 && !branch.cued; i++) TG.Game.step(DT);
+    c.check(since(events, after, 'hazard:cue').filter((x) => x.payload.id === branch.id).length === 1, 'cue', 'the cue of the branch did not come once Pip ran into its window');
+    return c;
+  };
+
+  // 8. What ends it besides its time, and a second watch. A second crate starts the time again: the two do
+  // not add. A continue ends the watch without an event, as it ends the Hourglass (CONTRACT 4.16).
+  const ended = () => {
+    const c = clauseList();
+    const { s, events } = begin({ empty: true });
+    type(crateOf(s, 'watch'));
+    for (let n = 0; n < 60; n++) TG.Game.step(DT);
+    const left = s.power.watchT;
+    TG.Game.applyPower('watch', 0, 0);
+    c.check(s.power.watchT === C.WATCH_TIME && since(events, 0, 'power:start').length === 2, 'second',
+      'a second watch with ' + left + ' s left of the first gives watchT ' + s.power.watchT + ', expected ' + C.WATCH_TIME + ', and ' + since(events, 0, 'power:start').length + ' power:start');
+    for (let n = 0; n < 30; n++) TG.Game.step(DT);
+    const world = s.worldTime;
+    TG.Game.pause();
+    const mark = events.length;
+    const continued = TG.Game.continueRun();
+    c.check(continued && s.power.watchT === 0 && s.power.last === null && s.timeScale === s.pace * s.assist, 'continue',
+      'after a continue watchT is ' + s.power.watchT + ', power.last ' + s.power.last + ' and timeScale ' + s.timeScale);
+    c.check(since(events, mark, 'power:end').length === 0, 'continue', 'the continue emitted power:end; timed power-ups end without events there');
+    TG.Game.step(DT);
+    c.check(s.screen === 'playing' && s.worldTime > world, 'continue', 'the world does not move on the step after the continue (' + s.screen + ')');
+    return c;
+  };
+
+  // 9. The arena. Pip crosses the arena line with one letter of the crate left, and the letter is typed on
+  // the next step: the watch starts, and the change to bossIntro in the same step ends it. No power:end is
+  // emitted there, as none is on a continue.
+  const arena = () => {
+    const c = clauseList();
+    const { s, events } = begin({ empty: true });
+    teleport(TG, s.level.arenaX - 40);
+    const crate = crateOf(s, 'watch');
+    type(crate, crate.word.length - 1);
+    for (let i = 0; i < 600 && s.player.x < s.level.arenaX; i++) TG.Game.step(DT);
+    c.check(s.screen === 'playing' && !crate.dead, 'setup', 'with Pip just over the arena line the screen is ' + s.screen + ' and the crate is ' + (crate.dead ? 'gone' : 'live'));
+    const mark = events.length;
+    type(crate);
+    const order = events.slice(mark).filter((x) => ((x.name === 'power:start' || x.name === 'power:end') && x.payload.power === 'watch') ||
+      (x.name === 'screen:change' && x.payload.to === 'bossIntro')).map((x) => x.name).join(', ');
+    c.check(order === 'power:start, screen:change' && s.screen === 'bossIntro' && s.power.watchT === 0 && s.power.last === null, 'bossIntro',
+      'events ' + (order || 'none') + ' (expected power:start, screen:change); screen ' + s.screen + ', watchT ' + s.power.watchT + ', power.last ' + s.power.last);
+    TG.Game.step(DT);
+    c.check(s.timeScale === s.pace * s.assist, 'bossIntro', 'timeScale is ' + s.timeScale + ' on the boss intro');
+    return c;
+  };
+
+  // 10. The lifeLost screen (the last row of the table of 6.3). The world is already stopped there and
+  // letters still count, so a watch crate finished on it starts counting at once, on that screen. The screen
+  // ends when it would have, and the watch goes on. The step of the pickup does not move the world here,
+  // and the step that ends the screen stops at the change of screen and counts nothing (the Hourglass's
+  // time does the same), so power:end comes WATCH_TIME / DT steps after the pickup: one more than in play.
+  // After a hit, with the letter typed on the first step of the screen; and after a fall, with the letter
+  // typed 20 steps in. There the rescue comes with the watch running: Pip is put down past the gap, in this
+  // level past a checkpoint line as well, and waits in the bubble until the world moves. The level sees
+  // where he is then.
+  const overlap = () => {
+    const c = clauseList();
+    const STEPS = Math.round(C.WATCH_TIME / DT);
+    for (const cause of ['hit', 'fall']) {
+      const { s, events } = begin(cause === 'fall' ? { gaps: [{ x: 78, w: 1 }] } : { empty: true });
+      const p = s.player;
+      const gap = cause === 'fall' ? s.level.hazards.find((h) => h.kind === 'gap') : null;
+      if (gap) teleport(TG, gap.x - 40);
+      const crate = crateOf(s, 'watch');
+      type(crate, crate.word.length - 1);
+      if (gap) for (let i = 0; i < 600 && s.screen !== 'lifeLost'; i++) TG.Game.step(DT);
+      else TG.Entities.damage(s, { type: 'threat', kind: 'hoppet', id: 0, from: 'right' });
+      const lostAt = s.frame;
+      const screenSteps = Math.round(s.lifeLost.duration / DT);
+      for (let i = 0; gap && i < 20; i++) TG.Game.step(DT);
+      const on = ' (after a ' + cause + ')';
+      const marks = { end: null, rescue: null, screen: null };
+      TG.Events.on('power:end', (x) => { if (x.power === 'watch') marks.end = s.frame; });
+      TG.Events.on('hero:rescue', () => { marks.rescue = s.frame; });
+      TG.Events.on('screen:change', (x) => { if (x.from === 'lifeLost' && marks.screen === null) marks.screen = s.frame; });
+      const world = s.worldTime;
+      const mark = events.length;
+      type(crate);                                 // the pickup, on the lifeLost screen
+      const pickup = s.frame;
+      c.check(crate.dead && s.screen === 'lifeLost' && s.lifeLost.cause === cause && s.power.watchT > 0, 'setup', 'at the pickup the screen is ' + s.screen + ' (' + s.lifeLost.cause + '), the crate ' + (crate.dead ? 'typed' : 'live') + on);
+      c.check(Math.abs(s.power.watchT - (C.WATCH_TIME - DT)) < 1e-9, 'counts', 'after the step of the pickup watchT is ' + s.power.watchT + ', expected ' + (C.WATCH_TIME - DT) + ': the watch counts on the lifeLost screen' + on);
+      const rescueX = gap ? gap.x + gap.w + C.RESCUE_AHEAD : null;
+      const level = () => since(events, mark, 'section:enter').length + ' section:enter, ' + since(events, mark, 'checkpoint').length + ' checkpoint and ' + since(events, mark, 'hazard:cue').length + ' hazard:cue';
+      while (marks.end === null && s.frame < pickup + STEPS + 5) {
+        const left = s.power.watchT, was = s.screen;
+        TG.Game.step(DT);
+        if (was === 'lifeLost' && s.screen === 'lifeLost') {
+          c.check(Math.abs(left - s.power.watchT - DT) < 1e-9, 'counts', 'on a step of the lifeLost screen watchT went from ' + left + ' to ' + s.power.watchT + on);
+        }
+        c.check(s.worldTime === world, 'held', 'worldTime moved by ' + (s.worldTime - world) + ' ws, ' + (s.frame - pickup) + ' steps after the pickup' + on);
+        if (marks.rescue !== null) {
+          c.check(p.state === 'rescue' && p.x === rescueX, 'bubble', (s.frame - marks.rescue) + ' steps after the rescue Pip is ' + p.state + ' at x ' + p.x + ', expected the bubble at ' + rescueX + ' until the world moves');
+        }
+      }
+      c.check(marks.screen === lostAt + screenSteps && s.screen === 'playing', 'screen',
+        'the lifeLost screen ended ' + (marks.screen === null ? 'never' : (marks.screen - lostAt) + ' steps after the life was lost') + ', expected ' + screenSteps + ' as with no watch; now on ' + s.screen + on);
+      c.check(marks.end === pickup + STEPS && s.power.watchT === 0, 'ends',
+        'power:end came ' + (marks.end === null ? 'not at all' : (marks.end - pickup) + ' steps after the pickup') + ', expected ' + STEPS + on);
+      if (gap) c.check(marks.rescue === lostAt + screenSteps, 'bubble', 'the rescue came ' + (marks.rescue === null ? 'not at all' : (marks.rescue - lostAt) + ' steps after the life was lost') + ', expected ' + screenSteps);
+      c.check(since(events, mark, 'section:enter').length + since(events, mark, 'checkpoint').length + since(events, mark, 'hazard:cue').length === 0, 'level',
+        'while the watch ran: ' + level() + ' (expected none: the level waits for the world)' + on);
+      TG.Game.step(DT);
+      c.check(s.worldTime > world && p.state === 'run', 'moves', 'on the step after power:end worldTime moved by ' + (s.worldTime - world) + ' ws and Pip is ' + p.state + on);
+      if (gap) {
+        c.check(since(events, mark, 'section:enter').length === 1 && since(events, mark, 'checkpoint').length === 1 && s.section === 1 && s.checkpoint.index === 1, 'level',
+          'on the first step the world moved, with Pip put down past the checkpoint line: ' + level() + ', section ' + s.section + ', checkpoint ' + s.checkpoint.index + ' banked (expected one section:enter and one checkpoint, 1 and 1)');
+      }
+    }
+    return c;
+  };
+
+  const bad = [];
+  const blind = [];
+  const HOLD_CLAUSES = ['timeScale', 'worldTime', 'entities', 'frame', 'eta', 'urgent', 'pip', 'slowT', 'invulnT', 'jump', 'start', 'ends', 'slot'];
+  const parts = [
+    ['the world holds', holds(HOLD_KINDS[0]), HOLD_CLAUSES],
+    ['the world holds (' + HOLD_KINDS[1].join(', ') + ')', holds(HOLD_KINDS[1]), HOLD_CLAUSES],
+    ['the close call', closeCall, ['close', 'close-first']],
+    ['a threat a fraction of a step from contact', nearContact, null],
+    ['a word typed and the waiting spawn', waiting, ['stall', 'waiting-spawn']],
+    ['a line of the level reached at the pickup', lines, ['spawn', 'spawn-due', 'cue-line', 'checkpoint-line', 'arena-line']],
+    ['a fall in progress', falls, ['fall']],
+    ['the cue and the duck', cue, ['cue', 'duck']],
+    ['a second watch and a continue', ended, null],
+    ['the arena', arena, null],
+    ['the lifeLost screen', overlap, null]
+  ];
+  for (const [what, part, sensitive] of parts) {
+    for (const text of part('watch').texts()) bad.push(what + ', ' + text);
+    if (!sensitive) continue;
+    const control = part('cap');
+    if (control.has('setup')) blind.push(what + ' (the script with a Red cap did not set up)');
+    for (const clause of sensitive) if (!control.has(clause)) blind.push(what + ', ' + clause);
+  }
+  if (bad.length) return result(false, bad.length + ' failed: ' + bad.slice(0, 4).join('; '));
+  if (blind.length) return result(false, 'the check is not sensitive (a Red cap in the crate passes): ' + blind.join('; '));
+
+  // 11. The bot keeps typing: its timing is on state.time, which is real seconds. Level 2, to its first watch
+  // crate and through the freeze, with every assertion of a run on (the `watch` one among them).
+  return withSession({ levelId: 2, difficulty: 'medium', profile: 'target', seed: 1, until: 'results', maxSeconds: 300 }, (session, T) => {
+    let started = false;
+    T.Events.on('power:start', (x) => { if (x.power === 'watch') started = true; });
+    while (!started && session.tick()) { /* run to the first watch crate */ }
+    if (!started) return result(false, 'the bot did not clear the first watch crate of level 2: ' + session.report.error);
+    const s = T.Game.state;
+    const keys = () => s.typing.stats.correct + s.typing.stats.wrong;
+    const keysBefore = keys(), world = s.worldTime;
+    let cleared = 0, steps = 0;
+    T.Events.on('word:clear', () => { if (s.power.watchT > 0) cleared++; });
+    while (s.power.watchT > 0 && session.tick()) steps++;
+    const typed = keys() - keysBefore;
+    // Half of what its speed gives in the time: the rest is its pause between words.
+    const least = Math.floor(0.5 * steps * DT / session.bot.interval);
+    for (let i = 0; i < 600 && session.tick(); i++) { /* and on for ten seconds */ }
+    if (session.report.error) return result(false, 'the level 2 run: ' + session.report.error);
+    if (steps !== HELD || s.worldTime === world) return result(false, 'in the level 2 run the watch held the world for ' + steps + ' steps, expected ' + HELD);
+    if (typed < least) return result(false, 'the bot pressed ' + typed + ' keys during the freeze, expected at least ' + least + ' at ' + session.bot.wpm + ' WPM');
+    return result(true, 'the world held for ' + HELD + ' steps (' + fmt(HELD * DT, 3) + ' s: WATCH_TIME counts from the step of the pickup): worldTime, age, x, t of ' + (HOLD_KINDS[0].length + HOLD_KINDS[1].length) + ' kinds, ' +
+      'timeScale 0, eta 100 x the ws left, urgent, slowT, invulnT, assist, jump, fall, cue, spawns, the lines of the level, close call, power:end, continue, bossIntro, lifeLost and the rescue; ' +
+      parts.filter((x) => x[2]).length + ' parts shown to fail with a Red cap in the crate; ' +
+      'the level 2 bot pressed ' + typed + ' keys and cleared ' + cleared + ' words in its first freeze');
+  });
+};
+
 // --- checks that need full runs (milestone 4) ---------------------------------------------------
 
 // The runs of one profile of the matrix on the level of ctx: every difficulty, seeds 1 to 3. The matrix's own
@@ -3094,8 +3684,8 @@ CHECKS['level1-events'] = function () {
 // list with `length`, `deterministic`, `no-presentation` and `words-by-difficulty`); the others are the
 // WP-E acceptance items of CONTRACT 12 written as checks; `anchored-kinds`, `attack-windows` and `spawn-skin`
 // are the groundwork of LEVEL2 13.1 in js/entities.js and js/boss.js, and `level1-events` is the regression
-// check of LEVEL2 13.5; `new-kinds` is the check of that name in LEVEL2 13.5, and `targets` holds the rows of
-// its target table. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
+// check of LEVEL2 13.5; `new-kinds` and `watch-freeze` are the checks of those names in LEVEL2 13.5, and
+// `targets` holds the rows of its target table. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
 // level"); the others are run once. `deterministic` and `no-presentation` are marked as well, though 13.5
 // does not list them: each plays a whole run, and a level's own kinds are only met on that level.
 const CHECK_LIST = [
@@ -3120,6 +3710,7 @@ const CHECK_LIST = [
   { name: 'no-type', milestone: 3 },
   { name: 'no-jump-bridge', milestone: 3, perLevel: true },
   { name: 'pause-deferred', milestone: 3 },
+  { name: 'watch-freeze', milestone: 3 },
   { name: 'deterministic', milestone: 4, perLevel: true },
   { name: 'no-presentation', milestone: 4, perLevel: true },
   { name: 'words-by-difficulty', milestone: 4, perLevel: true },

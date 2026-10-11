@@ -17,8 +17,8 @@
 //     the five (on seeds 1 to 20 it is 0.52 to 0.59, and under on 8): the exception decision 1 notes. And
 //     on seeds 1 to 20 the last Dangle (886) is still live at the arena flag in 1 of 60 floor runs from
 //     assist 1.0 and 4 of 60 from the saved assist, and in none of the 60 target runs. Neither was tuned:
-//     Easy's timing is kept by decision 1 and the Dangle of 886 is the layout of decision 20, so both go
-//     back to the owner, with decision 34.
+//     Easy's timing is kept by decision 1 and the Dangle of 886 is the layout of decision 20, and the
+//     owner decided on 2026-10-11 to leave both as they are, with the crate of 890 (LEVEL2 14.1a).
 //   Tried and not kept: the last crate (890) 1 to 6 tiles earlier, for decision 34. Where it is, the crate
 //     is still untyped at the arena flag in 5 of 10 Medium and 6 of 10 Hard target and floor runs. At 886
 //     to 889 that hardly moves (4, and 5 or 6, of 10). At 884 or 885 no crate is left at the flag (it is

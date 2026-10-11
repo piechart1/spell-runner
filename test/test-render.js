@@ -2369,6 +2369,321 @@ if (!SIM_PRESENT) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// 8. The Pocket Watch (LEVEL2 6.3; the watch frame and the HUD slot of 13.5)
+// ---------------------------------------------------------------------------------------------
+//
+// The state is built by hand: power.watchT holds the real seconds left and power.last is 'watch'. No
+// check reads the pixels of pw_watch, which is drawn by name whether or not its art is defined; until
+// it is, TG.Gfx draws its labelled box and warns once, so these checks do not ask for a quiet console.
+
+// The seconds a watch lasts: TG.C.WATCH_TIME, and 3 for a TG.C without it, as js/hud.js reads it.
+function watchTime(TG) {
+  return typeof TG.C.WATCH_TIME === 'number' ? TG.C.WATCH_TIME : 3;
+}
+
+// The pixels of the watch's frame: the outline of the playfield, x 0 to 383 and y PLAY_TOP to 215.
+function framePixels(TG) {
+  const C = TG.C;
+  const out = [];
+  for (let x = 0; x < C.W; x++) out.push([x, C.PLAY_TOP], [x, C.H - 1]);
+  for (let y = C.PLAY_TOP + 1; y < C.H - 1; y++) out.push([0, y], [C.W - 1, y]);
+  return out;
+}
+
+check('the power slot shows the Pocket Watch: the slot lit, pw_watch in it, and a WHITE gauge that empties from the top over the watch\'s 3 s', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const total = watchTime(TG);
+  if (total !== 3) return 'a watch lasts ' + total + ' s';
+  const s = handState(TG, 'playing');
+  const crate = s.entities.filter(function (e) { return e.kind === 'crate'; })[0];
+  // [seconds left, rows of the 14 px gauge that are WHITE, counted from its bottom]
+  for (const c of [[3, 14], [2.25, 11], [1.5, 7], [0.75, 4], [0.3, 1], [0.1, 0], [0, 0]]) {
+    s.power = { shield: 0, slowT: 0, quillT: 0, watchT: c[0], last: 'watch' };
+    const calls = drawCalls(TG, function () { TG.Render.draw(s); });
+    const rgba = env.canvas.toRGBA();
+    for (let y = 2; y <= 15; y++) {
+      const want = y > 15 - c[1] ? pal[4] : pal[1];
+      for (const x of [381, 382]) {
+        if (pixel(rgba, 384, x, y) !== want) return c[0] + ' s left: the gauge at ' + x + ',' + y + ' is ' + pixel(rgba, 384, x, y) + ', want ' + want;
+      }
+    }
+    if (pixel(rgba, 384, 366, 2) !== pal[3]) return c[0] + ' s left: the slot is dimmed';
+    if (pixel(rgba, 384, 380, 9) !== pal[0] || pixel(rgba, 384, 383, 9) !== pal[0]) return 'the gauge is wider than 2 px';
+    const icon = named(calls, 'pw_watch');
+    if (icon.length !== 1 || icon[0].x !== 372 || icon[0].y !== 17 || !icon[0].anchor || icon[0].remap !== null) {
+      return c[0] + ' s left: the icon: ' + JSON.stringify(icon);
+    }
+  }
+  // The crate that carries a watch shows the same icon over its balloon, as every crate shows its power.
+  crate.power = 'watch';
+  s.power = { shield: 0, slowT: 0, quillT: 0, watchT: 0, last: null };
+  const world = named(drawCalls(TG, function () { TG.Render.draw(s); }), 'pw_watch');
+  if (world.length !== 1 || world[0].x !== Math.floor(crate.x - s.camera.x)) return 'the watch crate\'s icon: ' + JSON.stringify(world);
+  if (env.errors.length) return env.errors[0];
+});
+
+check('the icon in the slot blinks while the time runs out: for the watch\'s last second, and for the last 2 s of the Hourglass and the Golden quill as before; it flashes when a power starts', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const s = handState(TG, 'playing');
+  // The HUD's clock is 0 after a load. The 4 Hz blink is on for an eighth of a second and off for the
+  // next: three updates of 1/16 s reach an off eighth, one more the next on eighth.
+  const shown = function (power) {
+    s.power = Object.assign({ shield: 0, slowT: 0, quillT: 0, watchT: 0 }, power);
+    return named(drawCalls(TG, function () { TG.Hud.draw(env.canvas.getContext('2d'), s); }), 'pw_' + power.last).length === 1;
+  };
+  // [the power, seconds left, steady (true) or blinking]
+  const cases = [
+    [{ watchT: 3, last: 'watch' }, true], [{ watchT: 1.1, last: 'watch' }, true], [{ watchT: 0.9, last: 'watch' }, false],
+    [{ slowT: 2.1, last: 'hourglass' }, true], [{ slowT: 1.9, last: 'hourglass' }, false],
+    [{ quillT: 2.1, last: 'quill' }, true], [{ quillT: 1.9, last: 'quill' }, false]
+  ];
+  for (const c of cases) if (!shown(c[0])) return JSON.stringify(c[0]) + ': no icon in the on phase';
+  for (let i = 0; i < 3; i++) TG.Hud.update(1 / 16, s);
+  for (const c of cases) {
+    if (shown(c[0]) !== c[1]) return JSON.stringify(c[0]) + ': ' + (c[1] ? 'the icon blinks' : 'the icon does not blink');
+  }
+  TG.Hud.update(1 / 16, s);
+  for (const c of cases) if (!shown(c[0])) return JSON.stringify(c[0]) + ': no icon in the next on phase';
+  // power:start: the slot flashes at 10 Hz for half a second. An eighth of a second on (the clock at
+  // 0.375 s) is an off twentieth.
+  TG.Events.emit('power:start', { power: 'watch', duration: 3 });
+  for (let i = 0; i < 2; i++) TG.Hud.update(1 / 16, s);
+  if (shown({ watchT: 2.875, last: 'watch' })) return 'no flash of the slot when the watch starts';
+  for (let i = 0; i < 8; i++) TG.Hud.update(1 / 16, s);
+  if (!shown({ watchT: 2.375, last: 'watch' })) return 'the slot still flashes 0.625 s after the start';
+});
+
+check('the watch\'s frame: 1 px of AQUA round the playfield (x 0 to 383, y 24 to 215) while power.watchT > 0, three steps on and three off, and nothing else in the picture changes', function () {
+  for (const art of [true, false]) {
+    const env = loadEnv({ art: art ? undefined : false });
+    const TG = env.TG;
+    const aqua = TG.PAL[11].toLowerCase();
+    const where = art ? '' : ' (without TG.Gfx)';
+    const edge = framePixels(TG);
+    const onEdge = {};
+    edge.forEach(function (p) { onEdge[p[0] + ',' + p[1]] = true; });
+    if (edge.length !== 2 * 384 + 2 * 190) return 'the frame has ' + edge.length + ' pixels';
+    for (const screen of ['playing', 'lifeLost']) {
+      const picture = function (watchT, frame) {
+        const s = handState(TG, screen);
+        s.power = { shield: 0, slowT: 0, quillT: 0, watchT: watchT, last: null };
+        s.frame = frame;
+        deepFreeze(s);
+        TG.Render.draw(s);
+        return env.canvas.toRGBA();
+      };
+      // Steps 102 to 104 are three steps on (state.frame counts the steps): 99 to 101 before them and
+      // 105 to 107 after them are off.
+      const plain = picture(0, 102);
+      for (const p of [[0, 100], [383, 100], [192, 24], [192, 215]]) {
+        if (pixel(plain, 384, p[0], p[1]) === aqua) return screen + where + ': AQUA at ' + p.join(',') + ' with no watch running';
+      }
+      const on = picture(1.5, 102);
+      for (const p of edge) {
+        if (pixel(on, 384, p[0], p[1]) !== aqua) return screen + where + ': ' + p.join(',') + ' is ' + pixel(on, 384, p[0], p[1]) + ' on step 102';
+      }
+      for (let y = 0; y < 216; y++) {
+        for (let x = 0; x < 384; x++) {
+          if (!onEdge[x + ',' + y] && pixel(on, 384, x, y) !== pixel(plain, 384, x, y)) return screen + where + ': the picture changed at ' + x + ',' + y;
+        }
+      }
+      for (const frame of [103, 104]) {
+        const again = picture(1.5, frame);
+        for (const p of [[0, 100], [383, 100], [192, 24], [192, 215]]) {
+          if (pixel(again, 384, p[0], p[1]) !== aqua) return screen + where + ': no frame at ' + p.join(',') + ' on step ' + frame;
+        }
+      }
+      // The three steps before and the three after: no frame, and the picture of a state without a watch.
+      for (const frame of [99, 100, 101, 105, 106, 107]) {
+        const off = picture(1.5, frame), none = picture(0, frame);
+        for (let i = 0; i < off.length; i++) if (off[i] !== none[i]) return screen + where + ': something drawn on step ' + frame + ', one of the three the frame is off';
+      }
+      // The last step of a watch still shows it. A state with no watchT (Level 1's, before the watch)
+      // has the same edge on a step the frame would be on as on one it would be off.
+      if (pixel(picture(1 / 60, 102), 384, 0, 100) !== aqua) return screen + where + ': no frame in the last step';
+      const old = [102, 105].map(function (frame) {
+        const s = handState(TG, screen);
+        s.frame = frame;
+        TG.Render.draw(s);
+        return env.canvas.toRGBA();
+      });
+      for (const p of edge) {
+        if (pixel(old[0], 384, p[0], p[1]) !== pixel(old[1], 384, p[0], p[1])) return screen + where + ': a frame on a state with no watchT';
+      }
+    }
+    if (env.errors.length) return env.errors[0];
+  }
+});
+
+check('the watch\'s frame is seen at every rate the main loop draws at: with a picture every 1 to MAX_STEPS steps, from any step, it is in some pictures and not in others; at two steps a picture (30 pictures a second) never the same in more than two running', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const aqua = TG.PAL[11].toLowerCase();
+  const s = handState(TG, 'playing');
+  s.power = { shield: 0, slowT: 0, quillT: 0, watchT: 1.5, last: null };
+  for (let every = 1; every <= TG.C.MAX_STEPS; every++) {
+    // Six steps are one blink, so six starting steps are every case; 13 pictures are two blinks or more.
+    for (let start = 240; start < 246; start++) {
+      const shown = [];
+      for (let i = 0; i < 13; i++) {
+        s.frame = start + i * every;
+        TG.Render.draw(s);
+        shown.push(pixel(env.canvas.toRGBA(), 384, 0, 100) === aqua);
+      }
+      const on = shown.filter(function (x) { return x; }).length;
+      let run = 1, longest = 1;
+      for (let i = 1; i < shown.length; i++) {
+        run = shown[i] === shown[i - 1] ? run + 1 : 1;
+        longest = Math.max(longest, run);
+      }
+      const what = 'a picture every ' + every + ' steps from step ' + start + ': the frame is in ' + on + ' of 13 pictures, the same in up to ' + longest + ' running';
+      if (on < 4 || on > 9 || longest > 3) return what;
+      if (every === 2 && longest > 2) return what;
+    }
+  }
+  if (env.errors.length) return env.errors[0];
+});
+
+check('the watch\'s frame stays at the edges of the view when the world is shaken, and the HUD is drawn over it', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const pal = paletteSet(TG);
+  const s = handState(TG, 'playing');
+  withGame(TG, s);
+  s.power = { shield: 0, slowT: 0, quillT: 0, watchT: 2, last: null };      // no icon in the slot: see the note above
+  s.frame = 102;                                                            // a step the frame is on
+  // A hit shakes the world by 3 px (DESIGN 14.6).
+  TG.Events.emit('hero:hurt', payloads(TG, s)['hero:hurt']);
+  TG.Events.emit('life:lost', payloads(TG, s)['life:lost']);
+  let shaken = 0;
+  for (let i = 0; i < 12; i++) {
+    TG.Effects.update(1 / 60);
+    const sh = TG.Effects.shake();
+    if (sh.x === 0 && sh.y === 0) continue;
+    shaken++;
+    TG.Render.draw(s);
+    const rgba = env.canvas.toRGBA();
+    for (const p of framePixels(TG)) {
+      if (pixel(rgba, 384, p[0], p[1]) !== pal[11]) return 'shaken by ' + sh.x + ',' + sh.y + ': ' + p.join(',') + ' is ' + pixel(rgba, 384, p[0], p[1]);
+    }
+  }
+  if (shaken < 4) return 'the world was shaken on ' + shaken + ' frames only';
+  // A locked word: the type bar's GOLD border lies on the bottom row (y 215), over the frame.
+  TG.Effects.reset();
+  s.typing.target = s.entities[1];
+  TG.Render.draw(s);
+  const rgba = env.canvas.toRGBA();
+  if (pixel(rgba, 384, 192, 215) !== pal[18]) return 'the type bar\'s border at 192,215 is ' + pixel(rgba, 384, 192, 215);
+  if (pixel(rgba, 384, 2, 215) !== pal[11] || pixel(rgba, 384, 381, 215) !== pal[11]) return 'the frame beside the type bar';
+  // The top bar and the strip above the playfield are untouched: no AQUA above y 24 at the sides.
+  for (let y = 0; y < 24; y++) if (pixel(rgba, 384, 0, y) === pal[11]) return 'AQUA above the playfield at 0,' + y;
+});
+
+check('a Pocket Watch from a crate: pw_watch falls with the crate and flies to Pip, and the popup says POCKET WATCH', function () {
+  const env = loadEnv();
+  const TG = env.TG;
+  const s = handState(TG, 'playing');
+  withGame(TG, s);
+  const seen = [];
+  const draw = TG.Font.draw;
+  TG.Font.draw = function (ctx, text) { seen.push(String(text)); return draw.apply(TG.Font, arguments); };
+  const ctx = env.canvas.getContext('2d');
+  try {
+    const p = payloads(TG, s);
+    TG.Events.emit('word:clear', Object.assign({}, p['word:clear'], { type: 'crate', kind: 'crate', power: 'watch' }));
+    TG.Events.emit('pickup:power', { power: 'watch', x: p['word:clear'].x, y: p['word:clear'].y });
+    TG.Events.emit('power:start', { power: 'watch', duration: 3 });
+    if (TG.Effects.flash() !== null) return 'a flash for the watch';
+    let icons = 0;
+    const names = [];
+    for (let i = 0; i < 120; i++) {
+      TG.Effects.update(1 / 60);
+      seen.length = 0;
+      icons += named(drawCalls(TG, function () { TG.Effects.draw(ctx, 'world', s.camera.x); }), 'pw_watch').length;
+      seen.forEach(function (t) { if (/WATCH|HOURGLASS|QUILL|SHIELD|BLAST/.test(t)) names.push(t); });
+      if (TG.Effects.flash() !== null) return 'a flash for the watch';
+    }
+    if (icons < 30) return 'pw_watch drawn on ' + icons + ' frames of the crate\'s fall and the item\'s flight';
+    if (!names.length || names.some(function (t) { return t !== 'POCKET WATCH'; })) return 'the popup: ' + (names.slice(0, 2).join(',') || 'none');
+  } finally {
+    TG.Font.draw = draw;
+  }
+  if (env.errors.length) return env.errors[0];
+});
+
+if (!SIM_PRESENT) {
+  skip('in the game, a Pocket Watch is shown from power:start to power:end', 'the simulation files are not all present');
+} else {
+  check('in the game, a Pocket Watch is shown from power:start to power:end: for its 180 steps the slot holds pw_watch with the WHITE gauge running down and the frame is on for three steps and off for three; then the slot is empty and the frame gone', function () {
+    const env = loadEnv({ sim: true });
+    const TG = env.TG;
+    const C = TG.C;
+    const pal = paletteSet(TG);
+    const events = [];
+    TG.Events.on('power:start', function (p) { events.push('start ' + p.power + ' ' + p.duration); });
+    TG.Events.on('power:end', function (p) { events.push('end ' + p.power); });
+    TG.Input.clear();
+    TG.Game.init();
+    TG.Game.newRun({ difficulty: 'medium', seed: 1, levelId: 1, adaptive: false, assist: 1, tutorial: false });
+    // The frame but for its corner under the power slot: until pw_watch has its art, the labelled box
+    // that stands for it is placed by its corner and hangs down over that part of the frame.
+    const frameAway = framePixels(TG).filter(function (p) { return p[0] < 364 || p[1] > 40; });
+    const frame = function () {
+      TG.Game.step(C.DT);
+      const s = TG.Game.state;
+      TG.Effects.update(C.DT);
+      TG.Hud.update(C.DT, s);
+      const calls = drawCalls(TG, function () { TG.Render.draw(s); });
+      const rgba = env.canvas.toRGBA();
+      let rows = 0;
+      for (let y = 2; y <= 15; y++) if (pixel(rgba, 384, 381, y) === pal[4] && pixel(rgba, 384, 382, y) === pal[4]) rows++;
+      const edge = frameAway.filter(function (p) { return pixel(rgba, 384, p[0], p[1]) === pal[11]; }).length;
+      return { s: s, rows: rows, edge: edge, lit: pixel(rgba, 384, 366, 2) === pal[3], icon: named(calls, 'pw_watch').length };
+    };
+    for (let i = 0; i < 30; i++) {
+      const f = frame();
+      if (f.edge > 100 || f.lit || f.icon || f.rows) return 'before the watch: ' + JSON.stringify({ rows: f.rows, edge: f.edge, lit: f.lit, icon: f.icon });
+    }
+    const p0 = TG.Game.state.player;
+    // The crate's word is typed: the game applies its power (js/game.js, completeWord).
+    TG.Game.applyPower('watch', p0.x + 60, p0.y - 60);
+    if (events.join(', ') !== 'start watch 3') return 'events at the pickup: ' + events.join(', ');
+    const all = frameAway.length;
+    let icons = 0;
+    for (let i = 1; i <= 179; i++) {
+      const f = frame();
+      const left = f.s.power.watchT;
+      if (!(left > 0) || f.s.power.last !== 'watch' || f.s.screen !== 'playing') return 'step ' + i + ': watchT ' + left + ', last ' + f.s.power.last + ', on ' + f.s.screen;
+      if (Math.abs(left - (3 - i * C.DT)) > 1e-6) return 'step ' + i + ': ' + left + ' s left';
+      if (f.rows !== Math.round(14 * left / 3)) return 'step ' + i + ': ' + f.rows + ' rows of the gauge are WHITE with ' + left.toFixed(3) + ' s left';
+      if (!f.lit) return 'step ' + i + ': the slot is dimmed';
+      // Every pixel of the frame on the three steps it is on; on the three it is off only what the world
+      // has there (water).
+      if (Math.floor(f.s.frame / 3) % 2 === 0 ? f.edge !== all : f.edge > 100) {
+        return 'step ' + i + ' (frame ' + f.s.frame + '): ' + f.edge + ' of the ' + all + ' pixels of the frame are AQUA';
+      }
+      icons += f.icon;
+    }
+    // The icon is steady for the first 2 s, but for the half second in which the slot flashes at 10 Hz,
+    // and blinks at 4 Hz through the last second.
+    if (icons < 120 || icons > 150) return 'pw_watch drawn in the slot on ' + icons + ' of the 179 steps';
+    const last = frame();
+    if (events.join(', ') !== 'start watch 3, end watch') return 'events after 180 steps: ' + events.join(', ');
+    if (last.s.power.watchT !== 0 || last.s.power.last !== null) return 'after the watch: ' + JSON.stringify(last.s.power);
+    for (let i = 0; i < 30; i++) {
+      const f = i === 0 ? last : frame();
+      if (f.edge > 100 || f.lit || f.icon || f.rows) return 'after the watch: ' + JSON.stringify({ rows: f.rows, edge: f.edge, lit: f.lit, icon: f.icon });
+    }
+    if (env.errors.length) return env.errors[0];
+    const other = env.warnings.filter(function (w) { return w.indexOf('"pw_watch"') === -1; });
+    if (other.length) return 'console: ' + other[0];
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 
 console.log('SUMMARY passed=' + passed + ' failed=' + failed + ' skipped=' + skipped);
 process.exit(failed > 0 ? 1 : 0);

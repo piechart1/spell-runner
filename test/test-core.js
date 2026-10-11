@@ -187,6 +187,13 @@ check('TG.C has the Dangle and Flit constants of LEVEL2 4.3', function () {
     C.HERO_SCREEN_X + C.FLIT_BEHIND_DX - 12 >= 0;
 });
 
+check('TG.C has the Pocket Watch constants of LEVEL2 6.3', function () {
+  const C = TG.C;
+  // 3 real seconds on every difficulty (decision 22), and a scale of 0: the watch stops the world, where
+  // the Hourglass slows it to HOURGLASS_SCALE.
+  return C.WATCH_TIME === 3 && C.WATCH_SCALE === 0;
+});
+
 check('TG.PAL has 32 hex strings, TG.PAL_KEYS has 32 distinct keys, TG.COLOR has 32 names for 0 to 31', function () {
   const hexOk = TG.PAL.every(function (h) { return /^#[0-9A-F]{6}$/.test(h); });
   const keys = TG.PAL_KEYS.split('');
