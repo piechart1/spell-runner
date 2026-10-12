@@ -13,7 +13,7 @@
 //   6. removal and damage
 //   7. queries: typables, activeThreats, hitbox, nextAction
 //
-// Fields added beyond CONTRACT 5.2 and 5.5 (read-only for other modules):
+// Fields added beyond CONTRACT 5.2 and 5.5 (read-only for other modules; turned and skin are in 5.5):
 //   player.jumpX         x at take-off; during a jump arc x = jumpX + RUN_SPEED * jumpT
 //   player.duckBufferT   ws left in which a duck pressed in the air still starts a slide on landing
 //   player.fallen        the fall has reached FALL_COMMIT and cost its life; cleared by the rescue

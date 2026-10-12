@@ -136,15 +136,15 @@ CREATE TABLE IF NOT EXISTS used (
 );
 CREATE INDEX IF NOT EXISTS used_at ON used (at);   -- for deleting the rows older than a token's life
 
--- Counters (docs/LEADERBOARD.md, section 10): totals only, nothing about a player.
+-- Counters (docs/LEADERBOARD.md, section 10): totals only, nothing about a player. Each stage of a run is counted on its own.
 CREATE TABLE IF NOT EXISTS stats (
   day        TEXT    NOT NULL,           -- UTC date, YYYY-MM-DD
-  difficulty TEXT    NOT NULL,
-  starts     INTEGER NOT NULL DEFAULT 0, -- runs started
-  finishes   INTEGER NOT NULL DEFAULT 0, -- runs that reached the results screen
-  cleared    INTEGER NOT NULL DEFAULT 0, -- of those, runs that beat the level
-  time_s     INTEGER NOT NULL DEFAULT 0, -- seconds played in the finished runs
-  reach0     INTEGER NOT NULL DEFAULT 0, -- finished runs that ended in section 1
+  difficulty TEXT    NOT NULL,           -- the label: easy, medium or hard for Level 1, and easy-s2, medium-s2 or hard-s2 for Level 2
+  starts     INTEGER NOT NULL DEFAULT 0, -- stages started
+  finishes   INTEGER NOT NULL DEFAULT 0, -- stages that reached their results screen
+  cleared    INTEGER NOT NULL DEFAULT 0, -- of those, stages that were beaten
+  time_s     INTEGER NOT NULL DEFAULT 0, -- seconds played in the finished stages
+  reach0     INTEGER NOT NULL DEFAULT 0, -- finished stages that ended in section 1
   reach1     INTEGER NOT NULL DEFAULT 0, -- ... in section 2
   reach2     INTEGER NOT NULL DEFAULT 0, -- ... in section 3
   reach3     INTEGER NOT NULL DEFAULT 0, -- ... at the boss

@@ -1870,7 +1870,7 @@
       return liveCount;
     },
 
-    // Tests: every live effect as { type, layer, x, y } in screen px (world effects use the last camera).
+    // Tests: every live effect as { type, kind, layer, x, y, delay }, in screen px (world effects use the last camera).
     _list: function () {
       var out = [];
       if (!pool) return out;

@@ -1,11 +1,11 @@
 // js/levels/level2.js
 // SPELL RUNNER Level 2: CLOCKWORK CAVERNS. Registers TG.Levels[2].
 //
-// Plan: docs/LEVEL2.md. Contract: docs/CONTRACT.md section 5.9. Positions are in tiles (16 px); x is the
-// trigger tile of a threat or crate and the left edge of a gap or hazard; min is the lowest difficulty that
-// uses the entry. No tutorial threats; the first two threats carry `intro` in their place (LEVEL2 9.2).
-// The tune block is LEVEL2 section 8.1: timing values within 25% of js/core.js, whole numbers within 1,
-// tierMix replaced whole.
+// Plan: docs/LEVEL2.md. Contract: docs/CONTRACT.md section 5.9. Design: docs/DESIGN.md section 11A and
+// Appendix B. Positions are in tiles (16 px); x is the trigger tile of a threat or crate and the left edge
+// of a gap or hazard; min is the lowest difficulty that uses the entry. No tutorial threats; the first two
+// threats carry `intro` in their place (LEVEL2 9.2). The tune block is LEVEL2 section 8.1: timing values
+// within 25% of js/core.js, whole numbers within 1, tierMix replaced whole.
 //
 // Tuning changes: none. The first measurement with the real Dangle and Flit (M1; LEVEL2 8.6 and 13.5)
 // needed none: the acceptance matrix and every extra check pass with the tune block of LEVEL2 8.1 and the
@@ -24,6 +24,8 @@
 //     to 889 that hardly moves (4, and 5 or 6, of 10). At 884 or 885 no crate is left at the flag (it is
 //     typed in 10 of 10 Medium and 9 of 10 Hard runs), and the Dangle of 886 is left there in its place, in
 //     5 of 10 Medium and 6 of 10 Hard runs.
+//   All of these figures are the first measurement's, taken before the Pocket Watch had an effect.
+//     docs/DESIGN.md sections 11A.2 and 11A.5 have the figures of the level as built.
 (function (root) {
   'use strict';
   var TG = root.TG = root.TG || {};

@@ -2,6 +2,8 @@
 
 Version 0.4, 2026-10-07. A plan: nothing in it is built.
 
+**Status on 2026-10-12: built.** Milestones M0 to M8 are built and committed on the branch `level2`; the release (M9) is not made, and the scores service has not been deployed. Sections 1 to 13 are the design as it was approved and are not kept up to date: section 13.8 records what was built and where it departs from them, and `docs/CONTRACT.md`, `docs/DESIGN.md` (section 11A) and the code are the description of the game as it is.
+
 ## 0. Status and how to read this
 
 **What this document is.** A design plan for Level 2. Where it says "the renderer reads `theme.tiles`" it means the renderer must be changed to do so; section 13 lists every such change by file. Where it gives a number it shows the arithmetic, in the style of `docs/DESIGN.md` 4.1 and 11.2. Numbers marked *measured* come from headless runs of the draft level on 2026-10-06, with stand-ins for the two new creatures and the new power-up and with the `clockwork` words installed. They were taken again the same day with the word lists as Appendix A now prints them, after the swaps of decision 17. The measured figures are gathered in section 8.6, which also says what stood in for what; a section that uses one cites it. They are starting values to be re-measured when the real parts exist. The two-stage totals of 8.6 and 12.5 were measured with a scratch `nextStage` and the same stand-ins. Line counts, days and every statement about how the real Flit and the real Pocket Watch play are estimates, and are marked so where they appear.
@@ -1294,7 +1296,7 @@ What the measurement says about the three decisions that waited for it (14.3). T
 
 New, and for the owner before M6: with ADAPTIVE PACE switched off, the floor bot does not finish Level 2 on Medium or Hard on any of seeds 1 to 5 (24 to 31 and 36 to 42 continues in 1,500 s). Level 1 by the same script finishes on every difficulty, Hard with 8 to 20 continues. No rule in the contract or this plan covers a floor-speed player with the setting off.
 
-Corrections to the text above, found in M1: in 4.3 "12 to 17 tiles ahead" is the Dangle's anchor and the intro's is 18 to 23; the Flit's 4 px flutter in the crossing is drawn by the renderer and the simulation keeps `elev` at 100; in 8.4 a threat word can also be cleared by the Ink blast (15 of 265 Medium and 19 of 330 Hard threat words of five target runs), which is neither typed nor reaching Pip.
+Corrections to the text above, found in M1: in 4.3 "12 to 17 tiles ahead" is the Dangle's anchor at the base budget and the intro's is 18 to 23 (in play 80 of 132 Dangles of the matrix were anchored further, up to 39 / 81 / 89 tiles ahead, because the queue, spacing and keep-clear rules lengthen the budget); the Flit's 4 px flutter in the crossing is drawn by the renderer and the simulation keeps `elev` at 100; in 8.4 a threat word can also be cleared by the Ink blast (15 of 265 Medium and 19 of 330 Hard threat words of five target runs), which is neither typed nor reaching Pip.
 
 Handed on from M1:
 
@@ -1320,7 +1322,7 @@ Measured with the watch live, seeds 1 to 5 (Easy / Medium / Hard), beside M1's f
 
 What a watch is worth: the words on screen when one is typed never reached Pip afterwards (0 in 349 crate meetings; 26 without the watch). In points it adds 1.0% / 1.6% / 1.5% for a perfect typist, about a quarter of the Golden quill stand-in's 4.6% / 6.1% / 7.3%, so the world-score figures of 12.5 are a little high for Level 2 and M7 measures again. With the watch live the last crate (decision 34) is untyped at the flag in 18 of 60 Hard runs where it was 37.
 
-Corrections to 6.3 and 13.5, as built: the world holds for 179 steps (2.983 s), because the 3 s count from the step the crate is finished on, as the Hourglass's 6 s do; the frame blinks three steps on and three off, so that it shows at any drawing rate; on a held step `TG.Level.update` does nothing at all, so a watch finished on the step Pip crosses the arena line runs its time first and the boss intro starts when the world moves; a watch running at a rescue from a fall goes on, as the Hourglass does; the quick bonus lands on every word on screen during a freeze (4 to 6 a run); the Hourglass is ended only by a continue, so "as the Hourglass is ended there" does not describe the arena.
+Corrections to 6.3 and 13.5, as built: the world holds for 179 steps (2.983 s), because the 3 s count from the step the crate is finished on, as the Hourglass's 6 s do; the frame blinks three steps on and three off, so that it shows at any drawing rate; on a held step `TG.Level.update` does nothing at all, so a watch finished on the step Pip crosses the arena line runs its time first and the boss intro starts when the world moves; a watch running at a rescue from a fall goes on, as the Hourglass does; in the bot runs the quick bonus landed on the words on screen during a freeze (4 to 6 a run), though a word already past half its window before the watch is not quick; the Hourglass is ended only by a continue, so "as the Hourglass is ended there" does not describe the arena.
 
 For the owner, none of it blocking:
 
@@ -1445,7 +1447,6 @@ As built, where section 12 says otherwise:
 - 12.1, the strip's line THE SCORE IS ENTERED WHEN THE RUN ENDS: shown only when a run ending at that point has an entry to make. For the owner to confirm.
 - 12.2, the WPM note on the last results screen of a two-stage run: measured against the WPM the run already showed at STAGE 1 CLEAR, so it reads BEST 86 beside 82 where it would have read NEW BEST!. For the owner to confirm.
 - 12.4, the idle rotation: the cavern is drawn behind Level 2's story panel and the High Scores panel, without Pip running in it.
-- 12.7: the example line A NEEDS NO CONTINUES cannot appear in play.
 
 For the owner, none of it blocking:
 
@@ -1499,6 +1500,34 @@ Handed on from M7:
 |---|---|
 | M8 | CONTRACT 4.20 and 4.22 (the counter per stage, `info.level`, the stage's own time). The comments on `stats` in `server/schema.sql` and LEADERBOARD 4 still say runs where the rows now count stages; a test compares the two, so they change together. For a third level, README "Adding a level" and CONTRACT 4.22 need a step: the game module, the Worker's rule and the labels are extended together. 12.5's working figures in this plan are behind what was built |
 | M9 | The order: the Worker first, then the game, then the itch.io zip (LEADERBOARD 9). The smoke runs can read the counter's `-s2` rows with the second command of LEADERBOARD 10. The two decisions above are settled first, since either may change `LIMITS` or the game the limits were measured on. A later change to Level 2's layout or scoring fails the document checks of `test/test-server.js` with a message to measure again |
+
+**M8, the documents: written on 2026-10-12.** `docs/CONTRACT.md` describes the code with two levels throughout (the optional keys of a level's data with their defaults, the Pocket Watch and the two clocks, `nextStage` in order, effects and parts by boss, the stages and the save, the harness's options and its 49 checks, and a record for Level 2 in its section 14); `docs/DESIGN.md` has the Level 2 script as section 11A with the measured values, and rows for the new creatures, the watch and the stage step; the README's "Adding a level" is rewritten for a third level from what the second needed. Two reviewers checked the changed statements against the code, 95 of them by running it. No code changed: comments only, in six files under `js/` and in `server/schema.sql` and `server/src/worker.js`. No Tier 2 item of 13.7 was left out of the build.
+
+Figures of this record that later milestones superseded, as the level stands (seeds 1 to 5 unless said):
+
+| Figure | Recorded above | As built |
+|---|---|---|
+| Easy's target window use (decision 1) | 0.52 to 0.58, under 0.55 on 3 seeds of 5 (M1) | 0.50 to 0.55 with the watch live, under on 4 of 5, two seeds at 0.501 against the harness's guard of 0.50 |
+| The Dangle of 886 live at the arena flag, seeds 1 to 20 | 5 of 180 runs (M1) | 7 of 180, all floor runs, none on Hard |
+| Floor bot lives lost; the fewest lives held | 9 / 14 / 8; 4 / 2 / 1 (M1) | 10 / 14 / 9; 4 / 1 / 1 |
+| The last crate untyped at the flag | 0 / 5 / 6 of 10 (M1) | 0 / 4 / 2 of 10 |
+| A run started at Stage 2 against a Level 1 run; a two-stage run (12.5) | about a quarter more; about 2.3 times | about 14% more; about 2.2 times |
+| `node test/run-all.js`; with `--quick` | about 200 s; 32 s (M6) | about 190 s; 36 s |
+
+Found in the code while documenting it, none of it changed here:
+
+- The white flash of a correct key is drawn for one frame, where DESIGN 3.4 and CONTRACT 6.6 say two. The released game has the same.
+- `nextStage` switches the tutorial off for the stage it starts whatever the next level's flag, and three places are written for exactly two levels (`TG.Board.stat` sends `level` only when it is 2; the results row is labelled from `levelId - 1`; NEXT STAGE is offered for any registered next level while `TG.Save` knows none above `LAST_LEVEL`). Nothing is wrong with two levels; the README's steps for a third level say what to extend.
+- Two Level 1 passages of CONTRACT disagree with the code and were left alone: 6.2 says the renderer flips a crow flying off, and 6.6 gives the frog's leap frame for `elev > 0` where the code uses 0.5.
+
+For the owner, with what stands open from the milestones above (CONTRACT 14.3 lists them for Level 2):
+
+- Easy's window use with the watch, as in the table: lower than the figures the decision of 2026-10-11 was taken on.
+- The boss's weak-point rounds, to settle before the Worker is deployed (M7).
+- The white flash: one frame as built, or two as documented, which would change Level 1's frames.
+- The version line of CONTRACT and DESIGN still reads 1.1.
+
+What the release (M9) still has to write: the README's sentence after the play links, which says Level 2 is not released and tells a reader to play a local copy with WORLD SCORES off; CONTRACT 14.1 and 14.3, which say the Worker was not deployed and the names not checked; DESIGN's "working title" line; and an entry here.
 
 ---
 

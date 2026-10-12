@@ -6,7 +6,7 @@
 //   POST /v1/runs      start a run: answers with a signed run token and writes nothing (3.1)
 //   POST /v1/scores    submit a finished run: the checks of section 5, then one row in `scores` (3.2)
 //   GET  /v1/scores    the three boards (3.3)
-//   POST /v1/stats     count a run that started or ended: daily totals only (section 10)
+//   POST /v1/stats     count a stage that started or ended: daily totals only (section 10)
 //   scheduled          once an hour: deletes what is no longer needed of `hits` and `used` (section 4)
 //
 // Bindings: env.DB (the D1 database of server/schema.sql) and env.TOKEN_SECRET (a secret string of at
@@ -560,7 +560,7 @@ async function readBoards(url, env) {
   return reply(200, boards, { 'cache-control': 'public, max-age=' + Math.floor((life - (now - use.at)) / 1000) });
 }
 
-// POST /v1/stats (section 10). Counts a run that started or ended in the totals of the day. Nothing
+// POST /v1/stats (section 10). Counts a stage that started or ended in the totals of the day. Nothing
 // about the player is kept: a start also counts the source once per day, through a hash that is made
 // with the day, so that it cannot be matched with another day's, and is deleted when the day is over.
 // The token only shows that the request comes from a game that asked for one; it is not used up.

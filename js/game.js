@@ -13,7 +13,7 @@
 //   5. scoring, lives and power-ups: addScore, addLife, applyPower
 //   6. the run result, endRun and snapshot
 //
-// Fields added to the state beyond CONTRACT 5.1:
+// State fields: the two of state.tutorial are beyond CONTRACT 5.1; the others are in 5.1, with more said here:
 //   state.tutorial.enabled   the tutorial slow-down applies on this run (newRun option `tutorial`)
 //   state.tutorial.done      ids of the tutorial threats that have had their slow-down
 //   state.run.bestWpm        the saved personal best WPM for the difficulty, read once by newRun
@@ -183,7 +183,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // 3. newRun and continueRun
+  // 3. newRun, continueRun and nextStage
   // ---------------------------------------------------------------------------------------------
 
   function newRun(opts) {
@@ -292,7 +292,7 @@
     s.section = TG.Level.sectionAt(s.level, cp.x);
     s.boss = null;
     s.resumeTo = null;
-    // 7. The boss checkpoint restarts the Baron at the phase that had been reached.
+    // 7. The boss checkpoint restarts the boss at the phase that had been reached.
     var atBoss = cp.index === s.level.checkpoints.length - 1;
     if (atBoss && TG.Boss && TG.Boss.create) TG.Boss.create(s);
     s.timeScale = timeScaleOf(s);

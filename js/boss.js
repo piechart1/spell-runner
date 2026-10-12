@@ -1,7 +1,7 @@
 // js/boss.js
-// SPELL RUNNER boss: Baron von Burrow (WP-E). Defines TG.Boss.
+// SPELL RUNNER boss (WP-E): Baron von Burrow in Level 1, Lady Ratchet in Level 2. Defines TG.Boss.
 //
-// Contract: docs/CONTRACT.md sections 4.15 and 5.7. Design: docs/DESIGN.md section 11.6.
+// Contract: docs/CONTRACT.md sections 4.15 and 5.7. Design: docs/DESIGN.md sections 11.6 and 11A.6.
 //
 // File layout:
 //   1. helpers and constants
@@ -13,7 +13,8 @@
 //
 // A round (DESIGN 11.6): volley -> telegraph -> attack -> taunt -> recoil (word typed) or laugh (window
 // ran out) -> the next volley. After a recoil the phase may change (transition) or health may reach 0
-// (finisher). Completing the finisher word defeats the Baron (defeated, screen levelComplete).
+// (finisher). Completing the finisher word defeats the boss (defeated, screen levelComplete). The rounds
+// are the same for both bosses: boss.kind, from the level's data, is for the presentation.
 //
 // How the states hand over. Each state has entry actions, run by enter(). boss.entered holds the state
 // whose entry actions have run; when boss.state differs from it, update() runs the entry for the new

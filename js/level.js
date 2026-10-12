@@ -1,9 +1,9 @@
 // js/level.js
 // SPELL RUNNER levels (WP-E). Defines TG.Level.
 //
-// Contract: docs/CONTRACT.md sections 4.14, 5.8 and 5.9. Design: docs/DESIGN.md sections 5, 6 and 11.
+// Contract: docs/CONTRACT.md sections 4.14, 5.8 and 5.9. Design: docs/DESIGN.md sections 5, 6, 11 and 11A.
 //
-// A level is registered as data in TG.Levels (js/levels/level1.js). TG.Level.build turns that data
+// A level is registered as data in TG.Levels (the files under js/levels/). TG.Level.build turns that data
 // into the runtime level for one difficulty: positions in world px, hazards with their input windows,
 // the spawn list, ink drop positions and checkpoints. TG.Level.update is called by TG.Game once per
 // step on the 'playing' screen and handles sections, checkpoints, spawn triggers, hazard cues and
