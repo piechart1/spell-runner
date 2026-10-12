@@ -9,9 +9,9 @@
 //
 //   POST <URL>/v1/runs      a run token, asked for when the player confirms a difficulty
 //   POST <URL>/v1/scores    a finished run: the token, three initials, score, WPM, accuracy, rank,
-//                           whether the level was cleared, and the run's length in seconds
+//                           whether a stage was cleared, and the run's length in seconds
 //   GET  <URL>/v1/scores    the three boards
-//   POST <URL>/v1/stats     a count of a run started or ended, for the owner's daily totals
+//   POST <URL>/v1/stats     a count of a stage of a run started or ended, for the owner's daily totals
 //
 // The game must work without the service. So:
 //   - TG.Board.URL is the empty string until a service is deployed. With an empty URL the module is
@@ -35,8 +35,9 @@
 //     most 50 entries are kept per list.
 //
 // The run token is kept in memory only. A token belongs to one difficulty, is dropped when the player
-// confirms another difficulty, and is used up by submit(). A continue and a restart from a checkpoint
-// keep it, because they do not come through startRun().
+// confirms another difficulty, and is used up by submit(). A continue, a restart from a checkpoint and
+// NEXT STAGE keep it, because they do not come through startRun(): a run that covers two stages is sent
+// once, at its end, with the token it started with (docs/LEVEL2.md section 12.5).
 //
 // File layout:
 //   1. limits and the block list
@@ -488,7 +489,8 @@
     },
 
     // Asks for a run token. TG.UI calls it when the player confirms a difficulty, so the token has
-    // normally arrived before the run starts; not on a continue or a restart from a checkpoint.
+    // normally arrived before the run starts; not on a continue, a restart from a checkpoint or NEXT
+    // STAGE.
     startRun: function (difficulty) {
       try {
         if (NAMES.indexOf(difficulty) === -1 || !sync()) return;
@@ -498,22 +500,25 @@
       }
     },
 
-    // Counts a run for the owner's daily totals (LEADERBOARD 10). event: 'start' when a run starts from
-    // the menus, 'end' when it reaches the results screen, with info { time, cleared, section }.
-    // Nothing about the player is sent: the request carries the run token and, for 'end', those three
-    // values. Does nothing when world scores are off or no token is held; the reply is not used.
+    // Counts a stage of a run for the owner's daily totals (LEADERBOARD 10). event: 'start' when a stage
+    // starts (a run from the menus, or NEXT STAGE), 'end' when it reaches its results screen, with info
+    // { time, cleared, section } for that stage alone. info.level is the stage: with 2 the request also
+    // carries level: 2, and otherwise it is the request of before Level 2, with no such field.
+    // Nothing about the player is sent: the request carries the run token and those values. Does
+    // nothing when world scores are off or no token is held; the reply is not used.
     stat: function (event, info) {
       try {
         if ((event !== 'start' && event !== 'end') || !sync()) return;
         var held = tokenFor();
         if (!held) return;
+        var i = isRecord(info) ? info : {};
         var body = { token: held.value, event: event };
         if (event === 'end') {
-          var i = isRecord(info) ? info : {};
           body.time = whole(i.time, 0, 10800);
           body.cleared = i.cleared === true;
           body.section = whole(i.section, 0, 3);
         }
+        if (i.level === 2) body.level = 2;
         request('stat', 'POST', '/v1/stats', body, function () {});
       } catch (e) {
         report('stat', e);

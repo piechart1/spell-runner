@@ -908,8 +908,10 @@ async function main() {
     assert.strictEqual(boards.easy.length, 1);
     assert.strictEqual(boards.hard.length, 0);
     // A score that only hard allows is refused with an easy token.
-    const high = await s.attempt({ difficulty: 'hard', score: 150000, time: 600 }, { difficulty: 'easy' });
+    const only = LIMITS.easy.cap + 1;
+    const high = await s.attempt({ difficulty: 'hard', score: only, time: 600 }, { difficulty: 'easy' });
     expectError(high, 400, 'implausible', 'a hard score on an easy token');
+    expectAccepted(await s.attempt({ score: only, time: 600 }, { difficulty: 'hard' }), 'the same score on a hard token');
   });
 
   await check('token: it cannot be used twice', async () => {
@@ -2202,10 +2204,12 @@ async function main() {
   // 10. The limits against the real game
   // ===============================================================================================
   //
-  // The headless bot of test/sim.js plays the level on each difficulty. From the game's own result
+  // The headless bot of test/sim.js plays the game on each difficulty, in each of the three ways a run
+  // reaches a board (LEADERBOARD 5): Level 1 alone, Level 2 alone (started from the stage row) and both
+  // stages (Level 1, NEXT STAGE, Level 2). From the game's own result at the end of the run
   // (TG.Game.state.result, with the end-of-level bonuses the game adds) the test builds the
-  // submission the game would send, as TG.UI builds its high score entry (CONTRACT 5.12) and with the
-  // time rounded down (LEADERBOARD 3.2), and puts it through the Worker.
+  // submission the game would send, as TG.UI builds its high score entry (CONTRACT 5.12, entryFor in
+  // js/ui.js) and with the time rounded down (LEADERBOARD 3.2), and puts it through the Worker.
   //
   // "Room to spare" is fixed here: a run may use at most ROOM of the score cap and of the points its
   // time allows, and a cleared run must still be long enough if it were SHORTER times as long. A
@@ -2214,6 +2218,14 @@ async function main() {
   const ROOM = 0.8;
   const SHORTER = 0.9;
 
+  // The three ways, as options of runBot. The names are the rows of the table in LEADERBOARD 5.
+  const WAYS = {
+    'Level 1 alone': { levelId: 1 },
+    'Level 2 alone': { levelId: 2 },
+    'Both stages': { levelId: 1, campaign: true }
+  };
+  const STAGES = { 'Level 1 alone': 1, 'Level 2 alone': 1, 'Both stages': 2 };
+
   let sim = null;
   try {
     sim = require('./sim');
@@ -2221,14 +2233,71 @@ async function main() {
     ok(false, 'limits: test/sim.js loads', String(e && e.message).split('\n')[0]);
   }
 
-  // Plays one run. Returns the report of runBot, the game's result, and the moment (from 10 s on) at
-  // which the score was highest against what its time allows, as if the run had ended there.
+  // What a player who knows the level can do and the harness's bot does not (LEADERBOARD 5). The bot
+  // types whatever is nearest, so it types the Golden quill's crate the moment nothing else is on
+  // screen. A player can leave that crate, and the words before it, until its last moment, so that
+  // more words are typed while points count double, and can leave a crate alone altogether.
+  //   plan.quill   by level, { pre, late }: the threat words are left alone from `pre` tiles before the
+  //                place the crate appears at, and the crate itself until `late` seconds before the
+  //                last moment it can still be typed. A word about to reach Pip is always typed
+  //   plan.leave   powers whose crates are never typed (the Hourglass and the Pocket Watch slow the
+  //                world or stop it, so a run that takes them is longer)
+  //   plan.restart true: RESTART FROM CHECKPOINT from the pause menu on the first step of a boss
+  //                intro. The intro after a continue is shorter than the first; the run ranks B
+  // The choice of words is put in front of the bot only: the bot chooses among the typables this lets
+  // through, while the game's own calls, made inside TG.Game.step, see them all. So the game plays as
+  // it does for any player who leaves a word alone. bot: { wpm, react }, for the time a word takes.
+  function knowing(TG, bot, plan) {
+    const typables = TG.Entities.typables;
+    const step = TG.Game.step;
+    let inStep = false;
+    TG.Game.step = function () {
+      const s = TG.Game.state;
+      if (plan.restart && s.screen === 'bossIntro' && s.checkpoint.continuesHere === 0) {
+        TG.Game.pause();
+        TG.Game.continueRun();
+        return undefined;
+      }
+      inStep = true;
+      try { return step.apply(TG.Game, arguments); } finally { inStep = false; }
+    };
+    // The time the player needs to finish a word, with `before` more letters to type first.
+    const need = function (e, before) { return 0.4 + bot.react + (e.word.length - e.typed + before) * 12 / bot.wpm; };
+    TG.Entities.typables = function (state) {
+      const all = typables.apply(TG.Entities, arguments);
+      if (inStep) return all;
+      const list = all.filter((e) => !(e.type === 'crate' && (plan.leave || []).includes(e.power)));
+      const quill = plan.quill && plan.quill[state.levelId];
+      if (!quill) return list;
+      const urgent = function (before) { return list.filter((e) => e.type === 'threat' && e.eta < need(e, before)); };
+      const crate = list.find((e) => e.type === 'crate' && e.power === 'quill');
+      if (crate && crate.typed === 0) {
+        const must = urgent(crate.word.length);
+        if (crate.eta <= quill.late + need(crate, 0)) return must.length ? must : [crate];
+        return list.filter((e) => e !== crate && (quill.pre === 0 || e.type !== 'threat' || must.includes(e)));
+      }
+      const spawn = state.level.spawns.find((x) => x.kind === 'crate' && x.power === 'quill');
+      if (!crate && quill.pre > 0 && spawn && !spawn.done && state.player.x >= spawn.x - quill.pre * TG.C.TILE) {
+        const must = urgent(0);
+        return list.filter((e) => e.type !== 'threat' || must.includes(e));
+      }
+      return list;
+    };
+  }
+
+  // Plays one run. options: those of runBot (levelId and campaign choose the way), and plan (above).
+  // Returns the report of runBot, the game's result, and the moment (from 10 s on) at which the score
+  // was highest against what its time allows, as if the run had ended there.
   function play(difficulty, options) {
+    const o = Object.assign({}, options);
+    const plan = o.plan;
+    delete o.plan;
     let game = null;
     const tight = { share: 0, score: 0, time: 0 };
-    const report = sim.runBot(Object.assign({ difficulty: difficulty, seed: 1, adaptive: false, files: sim.SIM_FILES }, options, {
+    const report = sim.runBot(Object.assign({ difficulty: difficulty, seed: 1, adaptive: false, files: sim.SIM_FILES }, o, {
       setup: function (TG) {
         game = TG;
+        if (plan) knowing(TG, { wpm: o.wpm, react: o.react }, plan);
         TG.Events.on('score:add', function (p) {
           const t = Math.floor(TG.Game.state.time);
           if (t < RULES.minTime) return;
@@ -2241,6 +2310,8 @@ async function main() {
     return { report: report, result: result, tight: tight };
   }
 
+  // The game's rule for an entry (entryFor in js/ui.js): cleared means that the run cleared at least
+  // one stage (result.stages), which for a run of one stage is result.cleared (LEVEL2 12.5).
   function submissionFor(result) {
     const typing = result.typing || {};
     return {
@@ -2249,7 +2320,7 @@ async function main() {
       wpm: Math.round(typing.wpm || 0),
       accuracy: Math.floor((typeof typing.accuracy === 'number' ? typing.accuracy : 1) * 100 + 1e-9),
       rank: result.rank,
-      cleared: result.cleared === true,
+      cleared: result.stages > 0,
       time: Math.floor(result.time)
     };
   }
@@ -2258,25 +2329,45 @@ async function main() {
     return Math.round(share * 100) + '%';
   }
 
+  // Ends the run on the game over screen, as Esc does there.
+  function endAtGameOver(TG, session) {
+    TG.Game.endRun();
+    session.done = true;
+  }
+
+  // Sends one submission through the Worker's own checks and then the whole way: a token when the run
+  // began, the run's length later the submission, then the board. Returns the points its time allows.
+  async function accepted(difficulty, run, sub) {
+    const allowed = RULES.base + sub.time * LIMITS[difficulty].rate;
+    const now = T0 + Math.ceil(run.result.time * 1000);
+    const verdict = W.validateSubmission(Object.assign({ token: 't' }, sub), { id: '6'.repeat(32), d: difficulty, t: T0 }, now);
+    assert.strictEqual(verdict, null, JSON.stringify(sub) + ' is refused as ' + verdict);
+    const s = service();
+    const token = await s.start(difficulty);
+    s.wait(run.result.time);
+    const r = await s.call('POST', '/v1/scores', { body: Object.assign({ token: token }, sub), ip: '203.0.113.200' });
+    expectAccepted(r, 'the Worker refused ' + JSON.stringify(sub));
+    assert.deepStrictEqual(r.json.scores[0], Object.assign({}, { name: sub.name, score: sub.score, wpm: sub.wpm, accuracy: sub.accuracy, rank: sub.rank, cleared: sub.cleared }, { date: r.json.scores[0].date }));
+    assert.deepStrictEqual(s.d1.rows('SELECT difficulty, score, time_s FROM scores'), [{ difficulty: difficulty, score: sub.score, time_s: sub.time }], 'the run is not one row with its total and its length');
+    return allowed;
+  }
+
   // Checks one run against the limits with room to spare, sends it through the Worker, and returns
-  // the measured values as text. capWpm: the run is from a bot that types faster than the service
-  // believes of a person (RULES.maxWpm) and is here for its length, so its WPM is sent as that limit.
-  async function judge(difficulty, run, expectCleared, capWpm) {
+  // the measured values as text. stages: the stages the run is to have cleared (0, 1 or 2). capWpm: the
+  // run is from a bot that types faster than the service believes of a person (RULES.maxWpm) and is
+  // here for its length, so its WPM is sent as that limit. The submission is left in run.sub.
+  async function judge(difficulty, run, stages, capWpm) {
     const limits = LIMITS[difficulty];
     assert.ok(!run.report.error, 'the bot run failed: ' + run.report.error);
     assert.ok(run.result, 'the run has no result');
     assert.strictEqual(run.result.difficulty, difficulty);
-    assert.strictEqual(run.result.cleared, expectCleared, 'cleared is ' + run.result.cleared);
-    const sub = submissionFor(run.result);
+    assert.strictEqual(run.result.stages, stages, 'the run cleared ' + run.result.stages + ' stages');
+    const sub = run.sub = submissionFor(run.result);
     if (capWpm) {
       assert.ok(sub.wpm > RULES.maxWpm, 'the run reports ' + sub.wpm + ' WPM, which needs no cap');
       sub.wpm = RULES.maxWpm;
     }
-    const allowed = RULES.base + sub.time * limits.rate;
-    // The Worker's own checks, with a token issued when the run began.
-    const now = T0 + Math.ceil(run.result.time * 1000);
-    const verdict = W.validateSubmission(Object.assign({ token: 't' }, sub), { id: '6'.repeat(32), d: difficulty, t: T0 }, now);
-    assert.strictEqual(verdict, null, JSON.stringify(sub) + ' is refused as ' + verdict);
+    const allowed = await accepted(difficulty, run, sub);
     // Room to spare.
     assert.ok(sub.score >= 1, 'score ' + sub.score);
     assert.ok(sub.score <= ROOM * limits.cap, 'score ' + sub.score + ' is more than ' + percent(ROOM) + ' of the cap ' + limits.cap);
@@ -2287,13 +2378,6 @@ async function main() {
       assert.ok(Math.floor(sub.time * SHORTER) >= limits.minCleared,
         'a cleared run of ' + sub.time + ' s is within ' + percent(1 - SHORTER) + ' of the shortest allowed, ' + limits.minCleared + ' s');
     }
-    // The whole way: a token at the start, the run's length later the submission, then the board.
-    const s = service();
-    const token = await s.start(difficulty);
-    s.wait(run.result.time);
-    const r = await s.call('POST', '/v1/scores', { body: Object.assign({ token: token }, sub), ip: '203.0.113.200' });
-    expectAccepted(r, 'the Worker refused ' + JSON.stringify(sub));
-    assert.deepStrictEqual(r.json.scores[0], Object.assign({}, { name: sub.name, score: sub.score, wpm: sub.wpm, accuracy: sub.accuracy, rank: sub.rank, cleared: sub.cleared }, { date: r.json.scores[0].date }));
     return 'score ' + sub.score + ' of cap ' + limits.cap + ' (' + percent(sub.score / limits.cap) + '); ' +
       sub.time + ' s' + (sub.cleared ? ' against the shortest cleared run of ' + limits.minCleared + ' s' : ', not cleared') + '; ' +
       sub.score + ' of the ' + allowed + ' points that time allows (' + percent(sub.score / allowed) + '); ' +
@@ -2301,45 +2385,177 @@ async function main() {
   }
 
   if (sim) {
+    for (const way of Object.keys(WAYS)) {
+      for (const d of DIFFS) {
+        await check('limits: ' + d + ', ' + way + ': the target profile clears and its result is accepted with room to spare', async () => {
+          return judge(d, play(d, Object.assign({ profile: 'target' }, WAYS[way])), STAGES[way]);
+        });
+        for (const seed of [1, 2, 3]) {
+          await check('limits: ' + d + ', ' + way + ': 150 WPM with perfect accuracy and a 0.05 s reaction (seed ' + seed + ') is accepted with room to spare', async () => {
+            const run = play(d, Object.assign({ wpm: 150, accuracy: 1, react: 0.05, seed: seed }, WAYS[way]));
+            assert.strictEqual(run.result && run.result.typing.accuracy, 1);
+            return judge(d, run, STAGES[way]);
+          });
+        }
+      }
+    }
     for (const d of DIFFS) {
-      await check('limits: ' + d + ', the target profile clears the level and its result is accepted with room to spare', async () => {
-        return judge(d, play(d, { profile: 'target' }), true);
-      });
-      for (const seed of [1, 2, 3]) {
-        await check('limits: ' + d + ', 150 WPM with perfect accuracy and a 0.05 s reaction (seed ' + seed + ') is accepted with room to spare', async () => {
-          const run = play(d, { wpm: 150, accuracy: 1, react: 0.05, seed: seed });
-          assert.strictEqual(run.result && run.result.typing.accuracy, 1);
-          return judge(d, run, true);
+      for (const way of ['Level 1 alone', 'Level 2 alone']) {
+        await check('limits: ' + d + ', ' + way + ': a run that never types, ended at the first game over, is accepted', async () => {
+          const run = play(d, Object.assign({ profile: 'target', noType: true, onGameOver: endAtGameOver }, WAYS[way]));
+          assert.strictEqual(run.report.continues, 0);
+          assert.strictEqual(run.result.cleared, false);
+          return judge(d, run, 0);
         });
       }
-      await check('limits: ' + d + ', a run that never types, ended at the first game over, is accepted', async () => {
-        const run = play(d, {
-          profile: 'target', noType: true,
-          onGameOver: function (TG, session) {
-            TG.Game.endRun();
-            session.done = true;
-          }
-        });
-        assert.strictEqual(run.report.continues, 0);
-        return judge(d, run, false);
+    }
+
+    // The runs that gave the highest score, the shortest cleared run and the highest share of what the
+    // rate allows on each difficulty, among 360 bot runs of each way (60 seeds each at 60, 90, 150,
+    // 220, 400 and 1,000 WPM with perfect accuracy). They are where the first table of LEADERBOARD 5
+    // comes from, and each must pass with room to spare. A run is given as the bot's WPM, its reaction
+    // time in seconds and the seed. What each run gives is kept in `measured`, for the checks that follow.
+    const bot = function (wpm, react, seed) { return { wpm: wpm, react: react, seed: seed }; };
+    const EXTREMES = {
+      'Level 1 alone': {
+        easy: { highest: bot(150, 0.05, 33), shortest: bot(1000, 0, 12), densest: bot(1000, 0, 33) },
+        medium: { highest: bot(90, 0.1, 50), shortest: bot(1000, 0, 11), densest: bot(1000, 0, 50) },
+        hard: { highest: bot(150, 0.05, 9), shortest: bot(1000, 0, 59), densest: bot(1000, 0, 9) }
+      },
+      'Level 2 alone': {
+        easy: { highest: bot(150, 0.05, 7), shortest: bot(1000, 0, 17), densest: bot(1000, 0, 7) },
+        medium: { highest: bot(150, 0.05, 56), shortest: bot(1000, 0, 2), densest: bot(1000, 0, 16) },
+        hard: { highest: bot(150, 0.05, 29), shortest: bot(1000, 0, 2), densest: bot(1000, 0, 26) }
+      },
+      'Both stages': {
+        easy: { highest: bot(150, 0.05, 37), shortest: bot(1000, 0, 12), densest: bot(1000, 0, 37) },
+        medium: { highest: bot(150, 0.05, 4), shortest: bot(1000, 0, 7), densest: bot(1000, 0, 4) },
+        hard: { highest: bot(150, 0.05, 7), shortest: bot(1000, 0, 3), densest: bot(1000, 0, 7) }
+      }
+    };
+    const KINDS = { highest: 'the highest score', shortest: 'the shortest cleared run', densest: 'the run that uses most of what the rate allows' };
+    const measured = {};
+    for (const way of Object.keys(EXTREMES)) {
+      measured[way] = { highest: {}, shortest: {}, densest: {} };
+      for (const d of DIFFS) {
+        for (const kind of Object.keys(KINDS)) {
+          const o = EXTREMES[way][d][kind];
+          await check('limits: ' + d + ', ' + way + ': ' + KINDS[kind] + ' found in 360 bot runs (' + o.wpm + ' WPM, seed ' + o.seed + ') is accepted with room to spare', async () => {
+            const run = play(d, Object.assign({ accuracy: 1 }, o, WAYS[way]));
+            const note = await judge(d, run, STAGES[way], o.wpm > RULES.maxWpm);
+            measured[way][kind][d] = kind === 'highest' ? run.sub.score : kind === 'shortest' ? run.sub.time : Math.round(run.tight.share * 100);
+            return (kind === 'densest' ? 'at most ' + percent(run.tight.share) + ' of what the rate allows; ' : '') + note;
+          });
+        }
+      }
+    }
+
+    // The runs of the second table of LEADERBOARD 5: the same seeds played by a player who knows the
+    // level (`knowing` above), at 1,000 WPM with no reaction time.
+    //   highest   both stages with the Golden quill's crate used late in each: the highest run totals
+    //             found, which the caps are taken from
+    //   densest   Level 2 alone with the quill used late and, on Medium and Hard, the Hourglass and
+    //             Pocket Watch crates left alone: the runs found to use most of what the rate allows
+    //   shortest  Level 1 alone with the Hourglass crate left alone and a restart at the boss intro: the
+    //             shortest cleared runs found
+    const SLOW = ['hourglass', 'watch'];
+    const FOUND = {
+      highest: {
+        way: 'Both stages',
+        easy: { seed: 40, plan: { quill: { 1: { pre: 32, late: 8 }, 2: { pre: 0, late: 0 } } } },
+        medium: { seed: 46, plan: { quill: { 1: { pre: 32, late: 4 }, 2: { pre: 24, late: 2 } } } },
+        hard: { seed: 4, plan: { quill: { 1: { pre: 32, late: 6 }, 2: { pre: 24, late: 2 } } } }
+      },
+      densest: {
+        way: 'Level 2 alone',
+        easy: { seed: 33, plan: { quill: { 2: { pre: 0, late: 0 } } } },
+        medium: { seed: 16, plan: { quill: { 2: { pre: 24, late: 2 } }, leave: SLOW } },
+        hard: { seed: 29, plan: { quill: { 2: { pre: 24, late: 2 } }, leave: SLOW } }
+      },
+      shortest: {
+        way: 'Level 1 alone',
+        easy: { seed: 12, plan: { leave: SLOW, restart: true } },
+        medium: { seed: 11, plan: { leave: SLOW, restart: true } },
+        hard: { seed: 59, plan: { leave: SLOW, restart: true } }
+      }
+    };
+    // What these runs give: the figures of the second table, and how long the highest took.
+    const found = { highest: {}, took: {}, densest: {}, shortest: {} };
+    const playFound = function (kind, d) {
+      const f = FOUND[kind];
+      return play(d, Object.assign({ wpm: 1000, react: 0, accuracy: 1, seed: f[d].seed, plan: f[d].plan }, WAYS[f.way]));
+    };
+    for (const d of DIFFS) {
+      await check('limits: ' + d + ', the highest run total found (both stages, the Golden quill used late, seed ' + FOUND.highest[d].seed + ') is accepted with room to spare', async () => {
+        const run = playFound('highest', d);
+        const note = await judge(d, run, 2, true);
+        assert.strictEqual(run.result.livesLost, 0, 'the run lost a life');
+        found.highest[d] = run.sub.score;
+        found.took[d] = run.sub.time;
+        return note;
+      });
+      await check('limits: ' + d + ', the run found to use most of what the rate allows (Level 2 alone, seed ' + FOUND.densest[d].seed + ') is accepted with room to spare', async () => {
+        const run = playFound('densest', d);
+        const note = await judge(d, run, 1, true);
+        found.densest[d] = Math.round(run.tight.share * 100);
+        return 'at most ' + percent(run.tight.share) + ' of what the rate allows; ' + note;
+      });
+      // This run is closer to the shortest allowed than SHORTER asks, so it is not put through judge:
+      // it must be accepted, and how close it comes is reported. LEADERBOARD 5 gives the figures.
+      await check('limits: ' + d + ', the shortest cleared run found (Level 1 alone, the Hourglass crate left alone and a restart at the boss intro, seed ' + FOUND.shortest[d].seed + ') is accepted', async () => {
+        const run = playFound('shortest', d);
+        assert.ok(!run.report.error, 'the bot run failed: ' + run.report.error);
+        assert.deepStrictEqual([run.result.stages, run.result.continues, run.result.rank], [1, 1, 'B']);
+        const sub = Object.assign(submissionFor(run.result), { wpm: RULES.maxWpm });
+        await accepted(d, run, sub);
+        assert.ok(sub.time < measured['Level 1 alone'].shortest[d], 'the run is no shorter than the bot\'s shortest');
+        found.shortest[d] = sub.time;
+        return sub.time + ' s against the shortest allowed, ' + LIMITS[d].minCleared + ' s; ' + percent(SHORTER) + ' of it is ' + Math.floor(sub.time * SHORTER) + ' s';
       });
     }
 
-    // The runs that gave the highest score and the shortest cleared run of each difficulty among 360
-    // bot runs (60 seeds each at 60, 90, 150, 220, 400 and 1,000 WPM with perfect accuracy). They are
-    // where the figures of LEADERBOARD 5 come from, and each must pass with room to spare.
-    const EXTREMES = {
-      easy: { highest: { wpm: 150, react: 0.05, seed: 33 }, shortest: { wpm: 1000, react: 0, seed: 12 } },
-      medium: { highest: { wpm: 90, react: 0.1, seed: 50 }, shortest: { wpm: 1000, react: 0, seed: 11 } },
-      hard: { highest: { wpm: 150, react: 0.05, seed: 9 }, shortest: { wpm: 1000, react: 0, seed: 59 } }
-    };
-    for (const d of DIFFS) {
-      for (const kind of ['highest', 'shortest']) {
-        const bot = EXTREMES[d][kind];
-        await check('limits: ' + d + ', the ' + kind + (kind === 'highest' ? ' score' : ' cleared run') + ' found in 360 bot runs (' + bot.wpm + ' WPM, seed ' + bot.seed + ') is accepted with room to spare', async () => {
-          return judge(d, play(d, Object.assign({ accuracy: 1 }, bot)), true, bot.wpm > RULES.maxWpm);
-        });
-      }
+    if (!fs.existsSync(documentPath)) {
+      skip('doc: the measured figures of LEADERBOARD 5 (the document is absent)');
+    } else {
+      await check('doc: every figure in the two tables of LEADERBOARD 5, and the figures of the list under them, are what these runs give today', () => {
+        const doc = fs.readFileSync(documentPath, 'utf8');
+        const again = '. Measure the three ways again (LEADERBOARD 5) and bring the tables, LIMITS and the runs of this file up to date';
+        const numbers = function (cells) { return cells.split(/ [/|] /).map((n) => Number(n.replace(/[,%]/g, ''))); };
+        for (const way of Object.keys(WAYS)) {
+          const row = new RegExp('^\\| ' + way + ' \\| ([\\d,]+ / [\\d,]+ / [\\d,]+) \\| (\\d+ / \\d+ / \\d+) \\| (\\d+% / \\d+% / \\d+%) \\|$', 'm').exec(doc);
+          assert.ok(row, 'no row "' + way + '" in the first table');
+          assert.deepStrictEqual(numbers(row[1]), DIFFS.map((d) => measured[way].highest[d]), way + ', highest score' + again);
+          assert.deepStrictEqual(numbers(row[2]), DIFFS.map((d) => measured[way].shortest[d]), way + ', shortest cleared run' + again);
+          assert.deepStrictEqual(numbers(row[3]), DIFFS.map((d) => measured[way].densest[d]), way + ', most used of what the rate allows' + again);
+        }
+        const rows = { highest: 'Highest score \\(both stages\\)', shortest: 'Shortest cleared run in seconds \\(Level 1 alone\\)', densest: 'Most used of what the rate allows \\(Level 2 alone\\)' };
+        for (const kind of Object.keys(rows)) {
+          const row = new RegExp('^\\| ' + rows[kind] + ' \\| ([\\d,]+%? \\| [\\d,]+%? \\| [\\d,]+%?) \\|$', 'm').exec(doc);
+          assert.ok(row, 'no row "' + rows[kind] + '" in the second table');
+          assert.deepStrictEqual(numbers(row[1]), DIFFS.map((d) => found[kind][d]), 'the ' + kind + ' run found' + again);
+        }
+        // The list under the tables: how far each cap is above the highest scores, and each shortest
+        // cleared run below the shortest runs. The second of these is where the room is smallest: the
+        // shortest runs found are closer to their limit than SHORTER on two difficulties.
+        const above = function (runs) {
+          const shares = DIFFS.map((d) => Math.round(100 * (LIMITS[d].cap / runs[d] - 1)));
+          return Math.min.apply(null, shares) + '% to ' + Math.max.apply(null, shares) + '%';
+        };
+        const below = function (runs) {
+          return DIFFS.map((d) => (100 * (1 - LIMITS[d].minCleared / runs[d])).toFixed(1) + '%').join(' / ');
+        };
+        for (const told of [
+          'Each cap is ' + above(found.highest) + ' above the highest score found',
+          'It is ' + above(measured['Both stages'].highest) + ' above the best of the 360 bot runs',
+          'Each shortest cleared run is ' + below(measured['Level 1 alone'].shortest) + ' below the shortest of the 360 Level 1 runs',
+          'It is ' + below(found.shortest) + ' below the shortest run found',
+          'accepted with ' + DIFFS.map((d) => found.shortest[d] - LIMITS[d].minCleared).join(' / ') + ' seconds to spare'
+        ]) {
+          assert.ok(doc.includes(told), 'LEADERBOARD 5 does not say: ' + told + again);
+        }
+        assert.deepStrictEqual(DIFFS.filter((d) => Math.floor(found.shortest[d] * SHORTER) < LIMITS[d].minCleared), ['medium', 'hard'],
+          'LEADERBOARD 5 says a run ' + percent(1 - SHORTER) + ' shorter than the shortest found would be refused on Medium and Hard, and on Easy not' + again);
+      });
     }
 
     // Every rank the game gives, from the game's own rank rule, with the accuracy and the cleared flag
@@ -2352,8 +2568,8 @@ async function main() {
           play(d, { wpm: d === 'easy' ? 40 : d === 'medium' ? 60 : 90, accuracy: 0.9, react: 0.3 }),
           play(d, { wpm: d === 'easy' ? 40 : d === 'medium' ? 60 : 90, accuracy: 0.8, react: 0.3 })];
         for (const run of runs) {
-          await judge(d, run, true);
-          const sub = submissionFor(run.result);
+          await judge(d, run, 1);
+          const sub = run.sub;
           ranks[sub.rank] = (ranks[sub.rank] || []).concat([sub.accuracy]);
           if (run.result.continues > 0) continued++;
           // The rank the game gave is the highest that check 9 would take for this accuracy, or lower.
@@ -2367,30 +2583,163 @@ async function main() {
         '; ' + continued + ' runs with continues';
     });
 
-    await check('limits: a made-up score at the old caps, or cleared in less time than the level takes, is refused', async () => {
-      const s = service();
-      const old = { easy: 120000, medium: 200000, hard: 300000 };
+    // A run that goes on through NEXT STAGE and ends in Level 2 without clearing it. The stage that ended
+    // last was not cleared, but the run cleared a stage, so its entry says cleared and can carry S or A
+    // (LEVEL2 12.5). Sent with cleared read from result.cleared, such an S would be refused by check 9.
+    await check('limits: a run that goes on through NEXT STAGE and ends in Level 2 is entered as cleared, with the rank of the whole run, and is accepted', async () => {
+      const notes = [];
       for (const d of DIFFS) {
-        const body = { score: old[d], wpm: 100, accuracy: 100, rank: 'S', cleared: true, time: 400 };
-        expectError(await s.attempt(body, { difficulty: d }), 400, 'implausible', d + ' ' + old[d]);
-        expectError(await s.attempt(Object.assign({}, body, { score: LIMITS[d].cap + 10 }), { difficulty: d }), 400, 'implausible', d + ' just over the cap');
-        expectError(await s.attempt(Object.assign({}, body, { score: 50000, time: LIMITS[d].minCleared - 5 }), { difficulty: d }), 400, 'implausible', d + ' cleared too quickly');
+        // QUIT from the pause menu straight after NEXT STAGE: the entry TITLE would have given.
+        let atClear = null;
+        const quit = play(d, Object.assign({ wpm: 150, accuracy: 1, react: 0.05 }, WAYS['Both stages'], {
+          onStage: function (TG, session) {
+            atClear = submissionFor(TG.Game.state.result);
+            assert.ok(TG.Game.nextStage() && TG.Game.pause() !== false && TG.Game.endRun(), 'the run could not be ended straight after NEXT STAGE');
+            session.done = true;
+          }
+        }));
+        await judge(d, quit, 1);
+        assert.deepStrictEqual([quit.result.levelId, quit.result.cleared, quit.sub.cleared, quit.sub.rank], [2, false, true, 'S']);
+        assert.deepStrictEqual(quit.sub, atClear, 'pressing NEXT STAGE changed the entry');
+        // Level 1 cleared, then nothing typed in Level 2 until the game is over.
+        const over = play(d, Object.assign({ wpm: 150, accuracy: 1, react: 0.05, onGameOver: endAtGameOver }, WAYS['Both stages'], {
+          onStage: function (TG, session) { session.bot.noType = true; }
+        }));
+        await judge(d, over, 1);
+        assert.deepStrictEqual([over.result.levelId, over.result.cleared, over.sub.cleared], [2, false, true]);
+        assert.ok(over.sub.rank === 'B' || over.sub.rank === 'C', 'a game over gave rank ' + over.sub.rank);
+        assert.ok(over.sub.score >= atClear.score && over.sub.time > atClear.time, 'the run total fell after NEXT STAGE');
+        notes.push(d + ' ' + quit.sub.score + ' rank ' + quit.sub.rank + ' and ' + over.sub.score + ' rank ' + over.sub.rank);
       }
-      assert.strictEqual(s.d1.count('scores'), 0);
-      // The caps are above what the game gives by less than a third, and below the old ones.
-      const seen = { easy: 62480, medium: 108160, hard: 173530 };
+      return notes.join('; ');
+    });
+
+    // The limits as they were while the game was Level 1 alone (LEADERBOARD 5). The Worker of Level 2
+    // may only widen what was accepted, because copies of the released game go on sending to it.
+    const BEFORE = {
+      easy: { cap: 80000, minCleared: 300, rate: 400 },
+      medium: { cap: 140000, minCleared: 245, rate: 700 },
+      hard: { cap: 220000, minCleared: 215, rate: 1100 }
+    };
+
+    await check('limits: no limit is narrower than before Level 2, and a Level 1 run from a copy of the released game is the same submission and is still accepted', async () => {
+      const s = service();
       for (const d of DIFFS) {
-        assert.ok(LIMITS[d].cap < old[d] && LIMITS[d].cap > seen[d] && LIMITS[d].cap < seen[d] * 4 / 3, d + ' cap ' + LIMITS[d].cap);
+        const was = BEFORE[d];
+        assert.ok(LIMITS[d].cap >= was.cap && LIMITS[d].rate >= was.rate && LIMITS[d].minCleared <= was.minCleared, d + ': ' + JSON.stringify(LIMITS[d]));
+        // The edges of what was accepted: the old cap in the shortest time the old rate gave it, and
+        // the most a cleared run of the shortest length could claim.
+        const quick = Math.ceil((was.cap - RULES.base) / was.rate);
+        expectAccepted(await s.attempt({ score: was.cap, time: quick, cleared: false, rank: 'B', accuracy: 85 }, { difficulty: d }), d + ' ' + was.cap + ' in ' + quick + ' s');
+        const most = Math.min(was.cap, RULES.base + was.minCleared * was.rate);
+        expectAccepted(await s.attempt({ score: most, time: was.minCleared, cleared: true, rank: 'S', accuracy: 97 }, { difficulty: d }), d + ' ' + most + ', cleared in ' + was.minCleared + ' s');
+        // The released game reads cleared from result.cleared and sends no other field. For a run of
+        // one stage that is the submission of today, to the letter.
+        for (const options of [{ profile: 'target' }, { profile: 'target', noType: true, onGameOver: endAtGameOver }]) {
+          const run = play(d, options);
+          const sub = submissionFor(run.result);
+          assert.strictEqual(run.result.levelId, 1);
+          assert.strictEqual(JSON.stringify(Object.assign({}, sub, { cleared: run.result.cleared === true })), JSON.stringify(sub));
+          assert.strictEqual(W.validateSubmission(Object.assign({ token: 't' }, sub), { id: '7'.repeat(32), d: d, t: T0 }, T0 + Math.ceil(run.result.time * 1000)), null);
+          assert.ok(sub.score <= was.cap && sub.score <= RULES.base + sub.time * was.rate && (!sub.cleared || sub.time >= was.minCleared), d + ': the old limits refused ' + JSON.stringify(sub));
+        }
+      }
+      if (fs.existsSync(documentPath)) {
+        const told = 'Before Level 2 the caps were ' + DIFFS.map((d) => BEFORE[d].cap.toLocaleString('en-US')).join(' / ');
+        assert.ok(fs.readFileSync(documentPath, 'utf8').includes(told), 'LEADERBOARD 5 does not say: ' + told);
       }
     });
 
-    await check('limits: the end-of-level bonuses are part of the score that is checked, and are at most 14,000', async () => {
+    await check('limits: a made-up score over a cap, or cleared in less time than a stage takes, is refused; each cap is less than 30% above the highest run total found', async () => {
+      const s = service();
+      for (const d of DIFFS) {
+        // A run long enough that only the cap, not the rate of check 10, limits the score.
+        const time = Math.ceil((LIMITS[d].cap * 2 - RULES.base) / LIMITS[d].rate);
+        const body = { score: LIMITS[d].cap, wpm: 100, accuracy: 100, rank: 'S', cleared: true, time: time };
+        for (const score of [LIMITS[d].cap + 10, Math.round(LIMITS[d].cap * 1.5), LIMITS[d].cap * 2]) {
+          expectError(await s.attempt(Object.assign({}, body, { score: score }), { difficulty: d }), 400, 'implausible', d + ' ' + score);
+        }
+        expectError(await s.attempt(Object.assign({}, body, { score: 50000, time: LIMITS[d].minCleared - 5 }), { difficulty: d }), 400, 'implausible', d + ' cleared too quickly');
+        // Between the caps of before Level 2 and today's, the rate of check 10 is what limits a claim:
+        // the old cap and one point more need the time the rate gives them, and are refused a second short.
+        const least = Math.ceil((BEFORE[d].cap + 1 - RULES.base) / LIMITS[d].rate);
+        expectError(await s.attempt({ score: BEFORE[d].cap + 1, time: least - 1 }, { difficulty: d }), 400, 'implausible', d + ' ' + (BEFORE[d].cap + 1) + ' in ' + (least - 1) + ' s');
+      }
+      assert.strictEqual(s.d1.count('scores'), 0);
+      // The caps are set for a run through both stages (LEADERBOARD 2 and 5): above the highest run
+      // total found, by less than 30%, and more than twice the best Level 1 run of the 360.
+      const notes = [];
+      for (const d of DIFFS) {
+        const seen = found.highest[d];
+        assert.ok(seen > measured['Both stages'].highest[d], d + ': the highest run total found, ' + seen + ', is not above the bot\'s');
+        assert.ok(LIMITS[d].cap > seen && LIMITS[d].cap < seen * 1.3, d + ' cap ' + LIMITS[d].cap + ' against ' + seen);
+        assert.ok(LIMITS[d].cap > 2 * measured['Level 1 alone'].highest[d], d + ' cap ' + LIMITS[d].cap);
+        notes.push(d + ' ' + (100 * (LIMITS[d].cap / seen - 1)).toFixed(1) + '% above ' + seen);
+      }
+      return notes.join(', ');
+    });
+
+    // What LEADERBOARD 2 says a made-up score can be. The request has no field for the stage, so the
+    // size of a run through both stages can be claimed with nothing played: the cap, the rate of check
+    // 10 and the wait of check 11 are what bound the claim. A claim sent as early as its points allow
+    // has all of what the rate allows, which is what the last command of LEADERBOARD 8 lists rows by.
+    await check('limits: a made-up score the size of the cap, or of the highest run total found, is accepted after the wait LEADERBOARD 2 gives and not a second sooner; the command of LEADERBOARD 8 lists such rows above the real run', async () => {
+      const s = service();
+      const quickest = function (d, score) { return Math.ceil((score - RULES.base) / LIMITS[d].rate); };
+      for (const d of DIFFS) {
+        for (const score of [LIMITS[d].cap, found.highest[d]]) {
+          const time = quickest(d, score);
+          const claim = { score: score, time: time, wpm: 100, accuracy: 100, rank: 'S', cleared: true };
+          expectError(await s.attempt(Object.assign({}, claim, { time: time - 1 }), { difficulty: d }), 400, 'implausible', d + ' ' + score + ' in ' + (time - 1) + ' s');
+          expectError(await s.attempt(claim, { difficulty: d, age: time - RULES.tolerance - 1 }), 400, 'too_soon', d + ' ' + score + ' a second early');
+          expectAccepted(await s.attempt(claim, { difficulty: d, age: time - RULES.tolerance }), d + ' ' + score + ' in ' + time + ' s');
+        }
+        // The run that really gave that total, with the time it took.
+        expectAccepted(await s.attempt({ score: found.highest[d], time: found.took[d], wpm: RULES.maxWpm, accuracy: 100, rank: 'S', cleared: true }, { difficulty: d }), d + ' the real run');
+        assert.ok(quickest(d, found.highest[d]) < found.took[d], d + ': the total cannot be claimed sooner than it was played');
+      }
+      if (!fs.existsSync(documentPath)) return 'the document is absent';
+      const doc = fs.readFileSync(documentPath, 'utf8');
+      const three = function (value) { return DIFFS.map(value).join(' / '); };
+      for (const told of [
+        'a claimed time of ' + three((d) => quickest(d, LIMITS[d].cap)) + ' seconds',
+        'The highest run totals found (' + three((d) => found.highest[d].toLocaleString('en-US')) + ', section 5)',
+        'can be claimed after a wait of ' + three((d) => quickest(d, found.highest[d]) - RULES.tolerance) + ' seconds',
+        'where the runs themselves took ' + three((d) => found.took[d]) + ' seconds',
+        'use at most ' + three((d) => found.densest[d] + '%') + ' of it on Easy / Medium / Hard'
+      ]) {
+        assert.ok(doc.includes(told), 'LEADERBOARD 2 or 8 does not say: ' + told);
+      }
+      const command = /--remote --command "(SELECT [^"]* AS percent_of_rate[^"]*)"/.exec(doc);
+      assert.ok(command, 'LEADERBOARD 8 has no command that lists rows by percent_of_rate');
+      const rows = s.d1.rows(command[1]);
+      const real = DIFFS.map((d) => Math.round(100 * found.highest[d] / (RULES.base + found.took[d] * LIMITS[d].rate)));
+      assert.deepStrictEqual(rows.map((r) => r.percent_of_rate), [100, 100, 100, 100, 100, 100].concat(real.slice().sort((a, b) => b - a)),
+        'the command does not use the base and the rates of LIMITS');
+      const ascending = function (a, b) { return a - b; };
+      assert.deepStrictEqual(rows.slice(6).map((r) => r.time_s).sort(ascending), DIFFS.map((d) => found.took[d]).sort(ascending), 'the real runs are not the last rows');
+      assert.ok(Math.max.apply(null, real) <= ROOM * 100, 'a real run shows as ' + Math.max.apply(null, real) + '%');
+      return 'made-up 100%, the real runs ' + real.join('% / ') + '%';
+    });
+
+    await check('limits: the end-of-level bonuses are part of the score that is checked, and are at most 14,000 for each stage', async () => {
       const run = play('hard', { wpm: 150, accuracy: 1, react: 0.05 });
       const bonus = run.result.bonuses.reduce((sum, b) => sum + b.points, 0);
       assert.ok(bonus > 0 && bonus <= 14000, 'bonuses ' + bonus);
       assert.strictEqual(run.result.score, run.result.baseScore + bonus);
       assert.strictEqual(submissionFor(run.result).score, run.result.score);
-      return run.result.baseScore + ' + ' + bonus + ' = ' + run.result.score;
+      // In a run through both stages each stage adds its own, and the run total holds both.
+      let first = null;
+      const both = play('hard', Object.assign({ wpm: 150, accuracy: 1, react: 0.05 }, WAYS['Both stages'], {
+        onStage: function (TG) { first = TG.Game.state.result; }
+      }));
+      const second = both.result.bonuses.reduce((sum, b) => sum + b.points, 0);
+      assert.ok(second > 0 && second <= 14000, 'bonuses of the second stage ' + second);
+      assert.deepStrictEqual([first.score, first.baseScore], [run.result.score, run.result.baseScore], 'the first stage of the run is not the Level 1 run of the same seed');
+      assert.strictEqual(both.result.stageScore, first.score, 'the second stage did not start from the first stage\'s total');
+      assert.strictEqual(both.result.score, both.result.baseScore + second);
+      assert.strictEqual(submissionFor(both.result).score, both.result.score);
+      return run.result.baseScore + ' + ' + bonus + ' = ' + run.result.score + '; both stages ' + both.result.baseScore + ' + ' + second + ' = ' + both.result.score;
     });
   }
 
@@ -2489,6 +2838,108 @@ async function main() {
     assert.strictEqual(s.d1.count('scores'), 0, 'a counter request wrote a score');
     assert.strictEqual(s.d1.count('used'), 0, 'a counter request used up a token');
   });
+
+  // The rows of `stats` by label: [starts, finishes, cleared, time_s, reach0, reach1, reach2, reach3].
+  function statRows(s) {
+    const out = {};
+    for (const r of s.d1.rows('SELECT * FROM stats ORDER BY difficulty')) {
+      out[r.difficulty] = [r.starts, r.finishes, r.cleared, r.time_s, r.reach0, r.reach1, r.reach2, r.reach3];
+    }
+    return out;
+  }
+
+  await check('stats: each stage is counted on its own: level absent or 1 under the difficulty, as before Level 2, and level 2 under the difficulty with -s2', async () => {
+    const s = service();
+    const medium = await s.start('medium');
+    const hard = await s.start('hard');
+    const post = function (token, fields, ip) {
+      return s.call('POST', '/v1/stats', { body: Object.assign({ token: token }, fields), ip: ip || '203.0.113.5' });
+    };
+    // A run through both stages, as the game sends it: Level 1 without the field, Level 2 with it.
+    for (const fields of [{ event: 'start' }, { event: 'end', time: 286, cleared: true, section: 3 },
+      { event: 'start', level: 2 }, { event: 'end', time: 303, cleared: false, section: 1, level: 2 }]) {
+      const r = await post(medium, fields);
+      assert.strictEqual(r.status, 200, JSON.stringify(fields) + ' gave ' + r.text);
+      assert.deepStrictEqual(r.json, { ok: true });
+    }
+    assert.deepStrictEqual(statRows(s), { 'medium': [1, 1, 1, 286, 0, 0, 0, 1], 'medium-s2': [1, 1, 0, 303, 0, 1, 0, 0] });
+    // The Level 1 rows are the ones a service from before Level 2 would hold for the same two requests.
+    const old = service();
+    const token = await old.start('medium');
+    await old.call('POST', '/v1/stats', { body: { token: token, event: 'start' }, ip: '203.0.113.5' });
+    await old.call('POST', '/v1/stats', { body: { token: token, event: 'end', time: 286, cleared: true, section: 3 }, ip: '203.0.113.5' });
+    assert.deepStrictEqual(statRows(old), { 'medium': statRows(s).medium });
+    // level 1 written out is the same as no level.
+    await post(medium, { event: 'start', level: 1 });
+    await post(medium, { event: 'end', time: 40, cleared: false, section: 0, level: 1 });
+    // A run started at Level 2 from the stage row, on another difficulty and from another address.
+    await post(hard, { event: 'start', level: 2 }, '203.0.113.6');
+    await post(hard, { event: 'end', time: 261, cleared: true, section: 3, level: 2 }, '203.0.113.6');
+    assert.deepStrictEqual(statRows(s), {
+      'hard-s2': [1, 1, 1, 261, 0, 0, 0, 1],
+      'medium': [2, 2, 1, 326, 1, 0, 0, 1],
+      'medium-s2': [1, 1, 0, 303, 0, 1, 0, 0]
+    });
+    // A start at NEXT STAGE finds its source already counted; a start at the stage row counts its own.
+    assert.deepStrictEqual(s.d1.rows('SELECT players FROM days').map((r) => r.players), [2]);
+    assert.strictEqual(s.d1.count('seen'), 2);
+    // The labels are in this table only: no board and no token has them, and nothing was stored or used.
+    assert.deepStrictEqual(Object.keys((await s.call('GET', '/v1/scores')).json), ['ok', 'easy', 'medium', 'hard']);
+    expectError(await s.call('POST', '/v1/runs', { body: { difficulty: 'medium-s2' } }), 400, 'bad_request');
+    assert.strictEqual(s.d1.count('scores') + s.d1.count('used') + s.d1.count('hits'), 0);
+    // The token still works for its score afterwards: a count does not use it up, on either stage.
+    s.wait(600);
+    expectAccepted(await s.submit(medium, { score: 236060, time: 586, cleared: true, rank: 'S', accuracy: 100 }));
+    assert.deepStrictEqual(s.d1.rows('SELECT difficulty, score, time_s FROM scores'), [{ difficulty: 'medium', score: 236060, time_s: 586 }]);
+  });
+
+  await check('stats: a level that is not 1 or 2 is refused as bad_request and counts nothing', async () => {
+    const s = service();
+    const token = await s.start('easy');
+    for (const level of [0, 3, -1, 22, 1.5, 2.0000001, '1', '2', 'two', true, false, null, [2], { level: 2 }]) {
+      expectError(await s.call('POST', '/v1/stats', { body: { token: token, event: 'start', level: level } }), 400, 'bad_request', 'start, level ' + JSON.stringify(level));
+      expectError(await s.call('POST', '/v1/stats', { body: { token: token, event: 'end', time: 10, cleared: false, section: 0, level: level } }), 400, 'bad_request', 'end, level ' + JSON.stringify(level));
+    }
+    // The body is read before the token, as in check 1 of a submission.
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token + 'x', event: 'start', level: 3 } }), 400, 'bad_request');
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token + 'x', event: 'start', level: 2 } }), 400, 'bad_token');
+    // With a good level the other values are still checked, and an expired token is still refused.
+    for (const bad of [{ time: -1 }, { time: 10801 }, { cleared: 1 }, { section: 4 }]) {
+      const body = Object.assign({ token: token, event: 'end', time: 10, cleared: false, section: 0, level: 2 }, bad);
+      expectError(await s.call('POST', '/v1/stats', { body: body }), 400, 'bad_request', JSON.stringify(bad));
+    }
+    s.wait(3 * 3600 + 1);
+    expectError(await s.call('POST', '/v1/stats', { body: { token: token, event: 'start', level: 2 } }), 400, 'expired');
+    assert.strictEqual(s.d1.count('stats') + s.d1.count('days') + s.d1.count('seen'), 0);
+  });
+
+  if (fs.existsSync(documentPath)) {
+    await check('stats: the reading commands of LEADERBOARD 10 count runs from the Level 1 rows, minutes from every row, and list the Level 2 rows apart', async () => {
+      const text = fs.readFileSync(documentPath, 'utf8');
+      const section = text.slice(text.indexOf('### Reading the numbers'));
+      const commands = [];
+      const pattern = /--remote --command "([^"]+)"/g;
+      let m;
+      while ((m = pattern.exec(section)) !== null) commands.push(m[1]);
+      assert.strictEqual(commands.length, 3, 'section 10 gives ' + commands.length + ' commands');
+      const s = service();
+      const day = new Date(s.clock.now).toISOString().slice(0, 10);
+      const token = await s.start('easy');
+      const post = function (fields) { return s.call('POST', '/v1/stats', { body: Object.assign({ token: token }, fields), ip: '203.0.113.5' }); };
+      // Three runs started at Level 1, two finished, one cleared and taken on through NEXT STAGE.
+      await post({ event: 'start' }); await post({ event: 'start' }); await post({ event: 'start' });
+      await post({ event: 'end', time: 90, cleared: false, section: 1 });
+      await post({ event: 'end', time: 330, cleared: true, section: 3 });
+      await post({ event: 'start', level: 2 });
+      await post({ event: 'end', time: 360, cleared: true, section: 3, level: 2 });
+      assert.deepStrictEqual(s.d1.rows(commands[0]).map((r) => Object.assign({}, r)),
+        [{ day: day, players: 1, started: 3, finished: 2, cleared: 1, minutes: 13 }]);
+      assert.deepStrictEqual(s.d1.rows(commands[1]).map((r) => Object.assign({}, r)),
+        [{ day: day, difficulty: 'easy-s2', starts: 1, finishes: 1, cleared: 1, time_s: 360, reach0: 0, reach1: 0, reach2: 0, reach3: 1 }]);
+      assert.deepStrictEqual(s.d1.rows(commands[2]).map((r) => r.difficulty), ['easy', 'easy-s2']);
+      assert.match(commands[2], / LIMIT 180$/, 'six rows a day for 30 days');
+    });
+  }
 
   await check('stats: a source is counted as one player a day, by a hash that differs from day to day and is deleted the next day', async () => {
     const s = service();

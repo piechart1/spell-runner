@@ -34,6 +34,12 @@
 //   8. runs the Worker would refuse for what they are: a run under 10 s is not offered to the world
 //      scores, and a typing speed above the Worker's limit is sent as the limit and accepted
 //   9. the Worker's hourly limit shows its own line, not the one for a service that cannot be reached
+//  10. a run of two stages (Level 1, NEXT STAGE, Level 2) has one token and is entered once, at its end,
+//      with its run total; each stage is counted on its own in the daily totals
+//  11. a run started at Level 2 from the STAGE row goes on the board of its difficulty, and is counted
+//      in the totals of the second stage
+//  12. a run that takes NEXT STAGE and is ended at once from the pause menu is entered as cleared,
+//      with the rank it had at STAGE 1 CLEAR, and the Worker takes it
 //
 // Prints one line per check (ok / FAIL) and exits with 0 when every check passed.
 // No npm packages: Node's own modules only (node:sqlite needs Node 22.5 or later).
@@ -175,7 +181,8 @@ function pad7(n) {
   return s;
 }
 
-// What the game's result becomes in the Worker's database (LEADERBOARD 3.2 and 4).
+// What the game's result becomes in the Worker's database (LEADERBOARD 3.2 and 4). cleared: the run
+// cleared at least one stage, which for a run of one stage is result.cleared (LEVEL2 12.5).
 function rowFor(result, name) {
   return {
     difficulty: result.difficulty,
@@ -184,7 +191,7 @@ function rowFor(result, name) {
     wpm: Math.round(result.typing.wpm),
     accuracy: Math.floor(result.typing.accuracy * 100 + 1e-9),
     rank: result.rank,
-    cleared: result.cleared === true ? 1 : 0,
+    cleared: result.stages > 0 ? 1 : 0,
     time_s: Math.floor(result.time)
   };
 }
@@ -272,13 +279,16 @@ async function main() {
   // From the title menu with START selected: a run on `difficulty`, to the results screen with the
   // tally finished. options: wpm (the bot's speed, default 90), short (the run is ended from the pause
   // menu once the score is 2,000 or more), stopClock (the Worker's clock stops when the difficulty is
-  // confirmed, so the token is as old at the end of the run as it was at its start).
+  // confirmed, so the token is as old at the end of the run as it was at its start), stage (2: Level 2
+  // is opened on this computer and chosen on the STAGE row, so the run starts there).
   async function playRun(p, difficulty, options) {
     const o = options || {};
     const s = p.session;
     const before = p.requests.length;
+    if (o.stage === 2) shot.unlock(s, difficulty);
     s.press('enter');                              // START
     assert.strictEqual(s.screen(), 'difficultySelect');
+    if (o.stage === 2) s.press('down');            // the STAGE row: from STAGE 1 to STAGE 2
     if (o.stopClock) p.stopped = s.clock();
     s.type(difficulty);                            // confirming the difficulty asks for the run token
     assert.strictEqual(s.screen(), 'howToPlay');
@@ -307,6 +317,15 @@ async function main() {
     // The token on confirming the difficulty, then the two counter requests (LEADERBOARD 10): start and end.
     assert.strictEqual(p.requests.length, before + (p.TG.Board.enabled() ? 3 : 0), 'requests during the run');
     return p.TG.Game.state.result;
+  }
+
+  // The rows of the daily totals (LEADERBOARD 10), by label.
+  function totals(p) {
+    const out = {};
+    p.d1.rows('SELECT * FROM stats ORDER BY difficulty').forEach(function (r) {
+      out[r.difficulty] = [r.starts, r.finishes, r.cleared, r.time_s, r.reach0, r.reach1, r.reach2, r.reach3];
+    });
+    return out;
   }
 
   // The texts drawn in one frame.
@@ -840,6 +859,158 @@ async function main() {
     assert.strictEqual(seen.filter(function (t) { return /^\d{7}$/.test(t); }).length, 10, 'the board is shown');
     assert.ok(p.scores().every(function (r) { return r.name !== 'AMY'; }));
     assert.ok(result.score > 0);
+    assert.deepStrictEqual(s.env.errors, []);
+  });
+
+  await check('A run of two stages: one token, no request at STAGE 1 CLEAR but the count, one count and no token at NEXT STAGE, and one score at the end with the run total and the run time; each stage is counted on its own', async function () {
+    const p = pair();
+    const s = p.session;
+    const TG = p.TG;
+    toMenu(p);
+    const first = await playRun(p, 'medium');
+    assert.strictEqual(first.cleared, true, 'the bot cleared Level 1');
+    assert.strictEqual(first.levelId, 1);
+    assert.strictEqual(shot.nextStageOffered(s), true, 'NEXT STAGE is not offered');
+    const token = p.requests[0].json.token;
+    // Up to STAGE 1 CLEAR the requests are those of a Level 1 run of the released game, to the letter:
+    // the token, a start and an end, with no stage named.
+    assert.deepStrictEqual(p.requests.map(function (r) { return r.body; }), [
+      { difficulty: 'medium' },
+      { token: token, event: 'start' },
+      { token: token, event: 'end', time: Math.floor(first.time), cleared: true, section: 3 }
+    ]);
+    const atClear = { score: first.score, time: first.time };
+
+    // NEXT STAGE: the count of a second stage started, and nothing else. The token is still the run's.
+    assert.strictEqual(shot.nextStage(s), true, 'the run did not go on');
+    await p.settle();
+    assert.deepStrictEqual(p.paths(), ['POST /v1/runs 200', 'POST /v1/stats 200', 'POST /v1/stats 200', 'POST /v1/stats 200']);
+    assert.deepStrictEqual(p.requests[3].body, { token: token, event: 'start', level: 2 });
+    assert.strictEqual(TG.Board.hasToken('medium'), true, 'the token was dropped at NEXT STAGE');
+    assert.strictEqual(p.scores().length, 0, 'a score was stored before the run ended');
+
+    const bot = shot.createBot({ wpm: 90 });
+    assert.ok(shot.playUntil(s, 'results', bot, 1500), 'Level 2 ended on ' + s.screen());
+    s.seconds(4.5);
+    await p.settle();
+    const last = TG.Game.state.result;
+    assert.strictEqual(last.levelId, 2);
+    assert.strictEqual(last.cleared, true, 'the bot cleared Level 2');
+    assert.strictEqual(last.stages, 2);
+    assert.ok(last.score > atClear.score && last.time > atClear.time + 200, 'the result is not the whole run\'s: ' + last.score + ' in ' + last.time + ' s');
+    // The end of the second stage is counted with the stage's own time, not the run's.
+    assert.strictEqual(p.requests.length, 5, 'requests at STAGE 2 CLEAR: ' + p.paths().join(', '));
+    assert.deepStrictEqual(p.requests[4].body, { token: token, event: 'end', time: Math.floor(last.stageTime), cleared: true, section: 3, level: 2 });
+    assert.ok(Math.abs(last.stageTime - (last.time - atClear.time)) < 1e-6, 'the stage\'s time is ' + last.stageTime);
+    assert.strictEqual(p.scores().length, 0);
+
+    // The run is entered once, here.
+    shot.leaveResults(s);
+    assert.strictEqual(s.screen(), 'highScoreEntry');
+    s.type('dav');
+    s.press('enter');
+    await p.settle();
+    const send = posts(p);
+    assert.strictEqual(send.length, 1);
+    assert.strictEqual(send[0].status, 200, JSON.stringify(send[0].json));
+    const want = rowFor(last, 'DAV');
+    assert.deepStrictEqual(send[0].body, { token: token, name: 'DAV', score: want.score, wpm: want.wpm, accuracy: want.accuracy, rank: want.rank, cleared: true, time: want.time_s });
+    assert.deepStrictEqual(Object.keys(send[0].body).sort(), ['accuracy', 'cleared', 'name', 'rank', 'score', 'time', 'token', 'wpm']);
+    assert.deepStrictEqual(p.scores(), [want], 'the database does not hold one row with the run total');
+    assert.strictEqual(want.score, Math.floor(last.score));
+    assert.ok(want.score > W.LIMITS.medium.cap / 4 && want.time_s > 2 * W.LIMITS.medium.minCleared, JSON.stringify(want));
+    assert.deepStrictEqual(p.paths(), ['POST /v1/runs 200', 'POST /v1/stats 200', 'POST /v1/stats 200', 'POST /v1/stats 200', 'POST /v1/stats 200',
+      'POST /v1/scores 200', 'GET /v1/scores 200']);
+    assert.strictEqual(p.requests.filter(function (r) { return r.path === '/v1/runs'; }).length, 1, 'more than one token was asked for');
+    assert.strictEqual(TG.Board.state.send, 'sent');
+    assert.strictEqual(TG.Board.state.place, 1);
+    assert.strictEqual(TG.Save.scores('medium')[0].score, want.score, 'the table of this computer has the run total');
+    // The daily totals: Level 1 under the difficulty, as before Level 2, and Level 2 under its own label.
+    assert.deepStrictEqual(totals(p), {
+      'medium': [1, 1, 1, Math.floor(first.time), 0, 0, 0, 1],
+      'medium-s2': [1, 1, 1, Math.floor(last.stageTime), 0, 0, 0, 1]
+    });
+    assert.strictEqual(p.d1.rows('SELECT players FROM days')[0].players, 1, 'NEXT STAGE counted the player a second time');
+    assert.deepStrictEqual(s.env.errors, []);
+  });
+
+  await check('A run started at Level 2 from the STAGE row: one token, its score on the board of its difficulty, and its counts in the totals of the second stage only', async function () {
+    const p = pair();
+    const s = p.session;
+    const TG = p.TG;
+    toMenu(p);
+    const result = await playRun(p, 'easy', { stage: 2, wpm: 70 });
+    assert.strictEqual(result.levelId, 2);
+    assert.strictEqual(result.cleared, true, 'the bot cleared Level 2');
+    assert.strictEqual(result.stages, 1);
+    assert.strictEqual(result.stageTime, result.time, 'the run has one stage');
+    const token = p.requests[0].json.token;
+    assert.deepStrictEqual(p.requests.map(function (r) { return r.body; }), [
+      { difficulty: 'easy' },
+      { token: token, event: 'start', level: 2 },
+      { token: token, event: 'end', time: Math.floor(result.time), cleared: true, section: 3, level: 2 }
+    ]);
+    shot.leaveResults(s);
+    assert.strictEqual(s.screen(), 'highScoreEntry');
+    s.type('amy');
+    s.press('enter');
+    await p.settle();
+    const send = posts(p);
+    assert.strictEqual(send.length, 1);
+    assert.strictEqual(send[0].status, 200, JSON.stringify(send[0].json));
+    assert.deepStrictEqual(Object.keys(send[0].body).sort(), ['accuracy', 'cleared', 'name', 'rank', 'score', 'time', 'token', 'wpm']);
+    assert.deepStrictEqual(p.scores(), [rowFor(result, 'AMY')]);
+    assert.strictEqual(p.scores()[0].difficulty, 'easy');
+    assert.strictEqual(p.scores()[0].cleared, 1);
+    assert.strictEqual(TG.Board.state.sentDifficulty, 'easy');
+    assert.deepStrictEqual(totals(p), { 'easy-s2': [1, 1, 1, Math.floor(result.time), 0, 0, 0, 1] });
+    assert.strictEqual(p.d1.rows('SELECT players FROM days')[0].players, 1);
+    assert.deepStrictEqual(s.env.errors, []);
+  });
+
+  // The stage that ended last was not cleared, but the run cleared a stage, so its entry says cleared
+  // (LEVEL2 12.5, entryFor in js/ui.js). Sent with the mark of the last stage, a rank that needs a
+  // cleared run would be refused by the Worker's check 9 (LEADERBOARD 5).
+  await check('A run that takes NEXT STAGE and is ended at once from the pause menu: entered as cleared with the rank it had at STAGE 1 CLEAR, and the Worker takes it', async function () {
+    const p = pair();
+    const s = p.session;
+    const TG = p.TG;
+    toMenu(p);
+    const first = await playRun(p, 'medium');
+    assert.strictEqual(first.cleared, true, 'the bot cleared Level 1');
+    assert.ok(W.RANK_RULES[first.rank].cleared, 'the bot ranks ' + first.rank + ' at STAGE 1 CLEAR, which a run that was not cleared can have too');
+    const atClear = rowFor(first, 'DAV');
+    assert.strictEqual(shot.nextStage(s), true, 'the run did not go on');
+    s.frame();
+    s.press('esc');
+    s.press('up');                                 // from RESUME round to QUIT
+    s.press('enter');
+    s.press('enter');
+    assert.strictEqual(s.screen(), 'results');
+    s.seconds(4.5);
+    const last = TG.Game.state.result;
+    assert.deepStrictEqual([last.levelId, last.cleared, last.stages], [2, false, 1]);
+    assert.ok(last.time > first.time && last.time < first.time + 2, 'the run went on for ' + (last.time - first.time) + ' s');
+    shot.leaveResults(s);
+    assert.strictEqual(s.screen(), 'highScoreEntry');
+    s.type('dav');
+    s.press('enter');
+    await p.settle();
+    const send = posts(p);
+    assert.strictEqual(send.length, 1);
+    assert.strictEqual(send[0].status, 200, JSON.stringify(send[0].json));
+    assert.strictEqual(send[0].body.cleared, true, 'the entry is not marked cleared');
+    assert.deepStrictEqual(Object.keys(send[0].body).sort(), ['accuracy', 'cleared', 'name', 'rank', 'score', 'time', 'token', 'wpm']);
+    // One row, and it is the entry TITLE at STAGE 1 CLEAR would have made, but for the moment in Level 2.
+    assert.deepStrictEqual(p.scores(), [Object.assign({}, atClear, { time_s: Math.floor(last.time) })]);
+    assert.strictEqual(p.scores()[0].cleared, 1);
+    assert.strictEqual(TG.Board.state.send, 'sent');
+    // The second stage is counted as started and finished in its first part, and not as cleared.
+    assert.deepStrictEqual(totals(p), {
+      'medium': [1, 1, 1, Math.floor(first.time), 0, 0, 0, 1],
+      'medium-s2': [1, 1, 0, Math.floor(last.stageTime), 1, 0, 0, 0]
+    });
+    assert.strictEqual(p.requests.filter(function (r) { return r.path === '/v1/runs'; }).length, 1, 'more than one token was asked for');
     assert.deepStrictEqual(s.env.errors, []);
   });
 

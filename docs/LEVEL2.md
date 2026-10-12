@@ -1464,6 +1464,42 @@ Handed on from M6:
 | M8 | 12.1, 12.2, 12.4, 12.6 and 12.7 as above. CONTRACT 4.4, 4.16, 9.1, 9.2 and the results screen, which is described nowhere in the detail it was built: `js/ui.js` and section I of `test/test-ui.js` are the record. `node test/run-all.js` now takes about 200 s and `--quick` 32 s |
 | M9 | The smoke run should include what no test or still picture can judge: the motion of the creatures and of the fight, and one press of NEXT STAGE on each copy with the world scores on |
 
+**M7, world scores: built on 2026-10-12, on this computer only. Nothing is deployed.** The Worker's file is changed in the repository and waits for the owner to read its diff and deploy it at the release (M9, decision 12): `git diff main -- server/src/worker.js` shows 13 code lines and comments.
+
+The measurement of 12.5 was made with the real creatures, the real watch and the real `nextStage`: 360 bot runs for each difficulty on each of three paths, by the method of LEADERBOARD 5 (Easy / Medium / Hard):
+
+| Path | Highest score | Shortest cleared run |
+|---|---|---|
+| Level 1 only | 62,480 / 108,160 / 173,530, exactly LEADERBOARD 5's figures | 339 / 277 / 241 s |
+| Level 2 from the stage row | 71,820 / 123,110 / 197,080 | 361 / 297 / 252 s |
+| Both stages | 137,270 / 236,060 / 378,950 | 700 / 575 / 493 s |
+
+A player who knows the level can do a little more than the bot: holding the Golden quill's crate until words are on screen lifts the best two-stage totals to 141,290 / 248,200 / 392,490. The caps are set from those.
+
+| Limit | Before | Now | Why |
+|---|---|---|---|
+| The highest score accepted | 80,000 / 140,000 / 220,000 | 180,000 / 320,000 / 500,000 | 27% to 29% above the highest run found, the margin LEADERBOARD 5 states |
+| The shortest cleared run | 300 / 245 / 215 s | unchanged | Level 1 alone is still the shortest |
+| Points per second | 400 / 700 / 1,100 | unchanged | The densest run found uses 50% / 62% / 75% of it. 12.5 expected Hard's to rise; it did not need to |
+
+The Worker also counts games per stage: a counter request may carry `level`, 1 or 2, and Level 2 is counted under labels of its own (`easy-s2`, `medium-s2`, `hard-s2`), so the rows of today keep their meaning. The game sends a `start` at NEXT STAGE and the stage's own time on `end`, with `level: 2` from Stage 2 only. One token for the whole run, none requested at NEXT STAGE, one submission at the end. No new id and no schema change.
+
+Only widens, shown by playing the released game from its menus against the old and the new Worker code side by side: 318 requests, no answer different, the two databases the same. The one thing that is narrower on purpose, as 12.5 asks: a counter request with a `level` that is not 1 or 2 is refused, where the old code never read the field. No copy of the game sends one.
+
+For the owner, to settle before the Worker is deployed:
+
+- The boss's weak-point rounds. Letting the time on a weak-point word run out costs no life and no rank and brings another volley, so a run can keep adding points. The released game has this today: 8 or 9 such rounds take the best Level 1 run over its cap, and the service then refuses the score. About 20 take the best two-stage run over the new caps. Below the cap such a run is accepted and stands above a clean one, and with the higher caps a stretched Level 1 run is accepted up to the two-stage cap. No value of the caps settles it. The choices: leave it, as LEADERBOARD 5 now documents; or change what a repeated round pays, which changes the game and Level 1.
+- With one board per difficulty (decision 6) the service cannot tell which stages a run played, so a made-up score can be the size of a two-stage total after about 345 to 350 s of waiting. LEADERBOARD 2 says so, and LEADERBOARD 8 has a command that lists the rows using most of what the rate allows.
+- The shortest cleared run: 295 / 240 / 210 s in place of 300 / 245 / 215 would give a run 10% shorter than the shortest found the full margin. Not applied; 12.5 says it stays.
+- Hard's rate has the least room: the densest run found uses 75% of 1,100, and the test allows 80%.
+
+Handed on from M7:
+
+| To | What |
+|---|---|
+| M8 | CONTRACT 4.20 and 4.22 (the counter per stage, `info.level`, the stage's own time). The comments on `stats` in `server/schema.sql` and LEADERBOARD 4 still say runs where the rows now count stages; a test compares the two, so they change together. For a third level, README "Adding a level" and CONTRACT 4.22 need a step: the game module, the Worker's rule and the labels are extended together. 12.5's working figures in this plan are behind what was built |
+| M9 | The order: the Worker first, then the game, then the itch.io zip (LEADERBOARD 9). The smoke runs can read the counter's `-s2` rows with the second command of LEADERBOARD 10. The two decisions above are settled first, since either may change `LIMITS` or the game the limits were measured on. A later change to Level 2's layout or scoring fails the document checks of `test/test-server.js` with a message to measure again |
+
 ---
 
 ## 14. Decisions

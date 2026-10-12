@@ -25,8 +25,11 @@
 // World scores (TG.Board, js/board.js). This file makes no network request; it calls TG.Board and reads
 // TG.Board.state. It asks for a run token when a difficulty is confirmed, shows the initials screen
 // after a run that goes to the world scores, sends the score on confirm, and gives the High Scores
-// panel its WORLD pages. Every call is guarded, and with TG.Board absent, its URL empty or the
-// worldScores setting off, every screen looks and behaves as it did before world scores existed.
+// panel its WORLD pages. For the owner's daily totals it also tells TG.Board when a stage starts (from
+// the menus or at NEXT STAGE) and when it reaches its results screen (LEADERBOARD 10); nothing else is
+// asked of the service between the difficulty screen and the end of a run, however many stages it has.
+// Every call is guarded, and with TG.Board absent, its URL empty or the worldScores setting off, every
+// screen looks and behaves as it did before world scores existed.
 // A score leaves the computer only on Enter on the initials screen, which says so and has a key for
 // not sending (Esc); Enter and Esc are not read for the first half second of that screen, and Enter
 // alone never sends a score under the placeholder initials PIP.
@@ -783,7 +786,9 @@
     pendingCall('clearPending');                 // a pending entry belongs to the run before
     emit('ui:select');
     callGame('newRun', { difficulty: name, seed: (Date.now() >>> 0), levelId: level });
-    boardCall('stat', 'start');                  // the owner's daily totals; nothing about the player
+    // The owner's daily totals; nothing about the player. Each stage is counted on its own, and the
+    // request names the stage only when it is the second (LEVEL2 12.5, LEADERBOARD 10).
+    boardCall('stat', 'start', { level: level });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1830,7 +1835,11 @@
         report('TG.Save.recordRun', e);
       }
       if (!wasOpen && levelOpen(after)) unlockedResult = res;
-      boardCall('stat', 'end', { time: res.time, cleared: res.cleared === true, section: st ? st.section : 0 });
+      // The count of a stage finished, with the stage's own time: in a run that went on through NEXT
+      // STAGE, result.time is the whole run's and would count Level 1's seconds a second time.
+      boardCall('stat', 'end', {
+        time: num(res.stageTime, res.time), cleared: res.cleared === true, section: st ? st.section : 0, level: res.levelId
+      });
     }
     var next = nextLevel(res);
     // Lines under the rows, by page: what the next rank needs under the first page, and under the last
@@ -1989,14 +1998,16 @@
 
   // NEXT STAGE: the same run goes on into the next level, and nothing is entered. The run token of the
   // world scores is the one asked for at the difficulty screen and stays held: none is asked for here
-  // (LEVEL2 12.5). The entry this result would have made is kept as the pending entry, in case the run
-  // never ends in the game (LEVEL2 12.6); TG.Save keeps it only when its score would reach the table.
-  // The WPM this screen showed is kept for the note beside WPM on the run's later results screens.
+  // (LEVEL2 12.5). The one request made here is the count of a stage started, as when a run starts from
+  // the menus. The entry this result would have made is kept as the pending entry, in case the run never
+  // ends in the game (LEVEL2 12.6); TG.Save keeps it only when its score would reach the table. The WPM
+  // this screen showed is kept for the note beside WPM on the run's later results screens.
   function goNextStage(r) {
     var res = r.result;
     emit('ui:select');
     if (callGame('nextStage') !== true) return;  // refused: the screen stays, and the next Enter tries again
     r.leaving = true;
+    boardCall('stat', 'start', { level: res.levelId + 1 });
     var typing = res.typing && typeof res.typing === 'object' ? res.typing : {};
     shownWpm = Math.max(shownWpm, Math.round(num(typing.wpm, 0)));
     pendingCall('setPending', res.difficulty, entryFor(res, DEFAULT_INITIALS));

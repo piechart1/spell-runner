@@ -34,18 +34,23 @@ import { BLOCKLIST } from './blocklist.js';
 export const DIFFICULTIES = ['easy', 'medium', 'hard'];
 export const RANKS = ['S', 'A', 'B', 'C'];
 
-// Section 5, "Limits per difficulty". test/test-server.js plays the real game against these.
-//   cap         the highest score accepted
-//   minCleared  the shortest run, in seconds, that can have cleared the level
-//   rate        points per second: a score may be at most RULES.base + time x rate
+// Section 5, "Limits per difficulty". test/test-server.js plays the real game against these. A run is
+// entered once, with its run total, and can be Level 1 alone, Level 2 alone (started from the stage
+// row) or both stages; each limit is measured on the kind of run that comes nearest to it.
+//   cap         the highest score accepted: measured on runs through both stages, which score most
+//   minCleared  the shortest run, in seconds, that can have cleared a stage: measured on Level 1,
+//               the shorter of the two
+//   rate        points per second: a score may be at most RULES.base + time x rate. Measured on runs
+//               started at Level 2, which need the most
 export const LIMITS = Object.freeze({
-  easy:   Object.freeze({ cap: 80000,  minCleared: 300, rate: 400 }),
-  medium: Object.freeze({ cap: 140000, minCleared: 245, rate: 700 }),
-  hard:   Object.freeze({ cap: 220000, minCleared: 215, rate: 1100 })
+  easy:   Object.freeze({ cap: 180000, minCleared: 300, rate: 400 }),
+  medium: Object.freeze({ cap: 320000, minCleared: 245, rate: 700 }),
+  hard:   Object.freeze({ cap: 500000, minCleared: 215, rate: 1100 })
 });
 
 // Check 9: what the game's rank rule (rankOf in js/game.js) needs for each rank. S and A are given
-// only for a cleared run; each rank needs at least this accuracy in whole percent.
+// only for a cleared run; each rank needs at least this accuracy in whole percent. On an entry a
+// cleared run is one that cleared at least one stage, and the game sends `cleared` with that meaning.
 export const RANK_RULES = Object.freeze({
   S: Object.freeze({ cleared: true, accuracy: 97 }),
   A: Object.freeze({ cleared: true, accuracy: 93 }),
@@ -150,13 +155,14 @@ export const SQL = Object.freeze({
         OR (score = ?2 AND created_at < ?3)
         OR (score = ?2 AND created_at = ?3 AND id < (SELECT id FROM scores WHERE run_id = ?4)))`,
 
-  // Section 10: one row of totals per UTC day and difficulty.
-  // ?1 day, ?2 difficulty
+  // Section 10: one row of totals per UTC day and label. The label is the difficulty for Level 1 and
+  // the difficulty with -s2 for Level 2 (recordStat).
+  // ?1 day, ?2 label
   statStart: `
     INSERT INTO stats (day, difficulty, starts) VALUES (?1, ?2, 1)
     ON CONFLICT (day, difficulty) DO UPDATE SET starts = starts + 1`,
 
-  // ?1 day, ?2 difficulty, ?3 cleared (0 or 1), ?4 seconds played, ?5 to ?8: 1 for the part reached
+  // ?1 day, ?2 label, ?3 cleared (0 or 1), ?4 seconds played, ?5 to ?8: 1 for the part reached
   statEnd: `
     INSERT INTO stats (day, difficulty, finishes, cleared, time_s, reach0, reach1, reach2, reach3)
     VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -558,6 +564,11 @@ async function readBoards(url, env) {
 // about the player is kept: a start also counts the source once per day, through a hash that is made
 // with the day, so that it cannot be matched with another day's, and is deleted when the day is over.
 // The token only shows that the request comes from a game that asked for one; it is not used up.
+// Each stage of a run is counted on its own. `level` says which stage the request is about: 1 or 2,
+// and 1 when the field is absent, which is what a copy of the game from before Level 2 sends. Level 1
+// is counted under the token's difficulty and Level 2 under the difficulty with -s2 (easy-s2,
+// medium-s2, hard-s2), so the rows easy, medium and hard mean what they always have. These are labels
+// in the counter table only: no token and no board has them.
 async function recordStat(body, request, env) {
   const secret = secretOf(env);
   const db = databaseOf(env);
@@ -565,17 +576,20 @@ async function recordStat(body, request, env) {
   if (!isRecord(body) || typeof body.token !== 'string' || (body.event !== 'start' && body.event !== 'end')) {
     return fail('bad_request');
   }
+  const level = body.level === undefined ? 1 : body.level;
+  if (level !== 1 && level !== 2) return fail('bad_request');
   const payload = await verifyToken(secret, body.token);
   if (!payload) return fail('bad_token');
   if (now - payload.t > RULES.tokenLife * 1000) return fail('expired');
   const day = new Date(now).toISOString().slice(0, 10);
+  const label = level === 2 ? payload.d + '-s2' : payload.d;
 
   if (body.event === 'start') {
     const hash = await sourceHash(secret + day, request.headers.get('cf-connecting-ip'));
     const counted = await db.batch([
       db.prepare(SQL.pruneSeen).bind(day),
       db.prepare(SQL.addSeen).bind(day, hash),
-      db.prepare(SQL.statStart).bind(day, payload.d)
+      db.prepare(SQL.statStart).bind(day, label)
     ]);
     if (counted[1].results.length > 0) await db.prepare(SQL.addPlayer).bind(day).run();
     return reply(200, { ok: true });
@@ -584,7 +598,7 @@ async function recordStat(body, request, env) {
   if (!whole(body.time, 0, RULES.maxTime) || typeof body.cleared !== 'boolean' || !whole(body.section, 0, 3)) {
     return fail('bad_request');
   }
-  await db.prepare(SQL.statEnd).bind(day, payload.d, body.cleared ? 1 : 0, body.time,
+  await db.prepare(SQL.statEnd).bind(day, label, body.cleared ? 1 : 0, body.time,
     body.section === 0 ? 1 : 0, body.section === 1 ? 1 : 0, body.section === 2 ? 1 : 0, body.section === 3 ? 1 : 0).run();
   return reply(200, { ok: true });
 }
