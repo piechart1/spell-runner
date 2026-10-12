@@ -3413,16 +3413,18 @@ function speechShown(TG, env, s) {
 
 const BARON_LINE = 'MY MEADOW! MY WORDS!', RATCHET_LINE = 'TICK TOCK! WORDS INTO COGS!';      // Level 1's, and LEVEL2 10.6's
 
-check('the speech plate types 30 letters a second; a line that would not be whole before the intro ends is typed over the first half of its time and stands for the rest: both of Level 1\'s intros stay at 30; Lady Ratchet\'s plate runs on boss.stateT, so a pause does not start it again, and the Baron\'s on screenT, as Level 1 was released', function () {
+check('the speech plate types 30 letters a second; a line that would not be whole before the intro ends is typed over the first half of its time and stands for the rest: both of Level 1\'s intros stay at 30; the plate runs on boss.stateT for every boss, the Baron, Lady Ratchet and a level that names none, so a pause, which sets screenT back to 0, does not start a line again', function () {
   const env = loadEnv();
   const TG = env.TG;
   const C = TG.C;
   // `since` s after the half of an intro of introTime s, on the boss's intro clock. screenT, which a pause
-  // sets back to 0, is given apart where it is to differ, and the level's boss kind where it is not the Baron.
+  // sets back to 0, is given apart where it is to differ, and the level's boss kind where it is not the
+  // Baron: a name, or null for a level that names no kind.
   const shown = function (speech, introTime, since, screenT, kind) {
     const s = handState(TG, 'bossIntro', { screenT: screenT !== undefined ? screenT : introTime / 2 + since });
     s.level.boss.speech = speech;
-    if (kind) s.level.boss.kind = kind;
+    if (kind === null) delete s.level.boss.kind;
+    else if (kind) s.level.boss.kind = kind;
     Object.assign(s.boss, { state: 'intro', introTime: introTime, stateT: introTime / 2 + since });
     return speechShown(TG, env, s);
   };
@@ -3457,23 +3459,100 @@ check('the speech plate types 30 letters a second; a line that would not be whol
     }
   }
   if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, -0.1) !== -1) return 'a plate before the half';
-  // A pause and resume set screenT back to 0 and leave boss.stateT. Lady Ratchet's plate goes on from where
-  // it was, and is not there before the half of her intro whatever screenT says.
-  if (shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5, 0, 'ratchet') !== 15) return 'her plate with screenT back at 0, 0.5 s after the half: ' + shown(RATCHET_LINE, C.BOSS_INTRO_TIME, 0.5, 0, 'ratchet') + ' letters';
-  if (shown(RATCHET_LINE, C.BOSS_INTRO_TIME, -0.5, 3, 'ratchet') !== -1) return 'her plate in the first half of the intro, because screenT is past the half';
-  if (shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25, 0, 'ratchet') !== 18) return 'her plate in the short intro with screenT back at 0: ' + shown(RATCHET_LINE, C.BOSS_INTRO_SHORT, 0.25, 0, 'ratchet') + ' letters';
-  // The Baron's plate follows screenT, as Level 1 was released: after a pause it is gone until screenT is
-  // past the half of the intro's length again, and then it starts from its first letter.
-  if (shown(BARON_LINE, C.BOSS_INTRO_TIME, 0.5, 0) !== -1) return 'the Baron\'s plate with screenT back at 0, 0.5 s after the half: ' + shown(BARON_LINE, C.BOSS_INTRO_TIME, 0.5, 0) + ' letters';
-  if (shown(BARON_LINE, C.BOSS_INTRO_TIME, 1.5, 2.25) !== 7) return 'the Baron\'s plate with screenT at 2.25 s, 1.5 s after the half: ' + shown(BARON_LINE, C.BOSS_INTRO_TIME, 1.5, 2.25) + ' letters';
+  // A pause and resume set screenT back to 0 and leave boss.stateT. A plate goes on from where it was, and
+  // is not there before the half of the intro whatever screenT says. The same for every boss: when Level 1
+  // was released the Baron's plate followed screenT, and after a pause it was gone until screenT was past
+  // the half of the intro's length again.
+  // [the level's boss kind, the line, its letters 0.5 s after the half of the 4 s intro, and 0.25 s after
+  // the half of the 1.5 s intro]
+  for (const c of [['ratchet', RATCHET_LINE, 15, 18], ['baron', BARON_LINE, 15, 7], [null, BARON_LINE, 15, 7]]) {
+    const who = c[0] === null ? 'a level with no boss kind' : c[0];
+    let got = shown(c[1], C.BOSS_INTRO_TIME, 0.5, 0, c[0]);
+    if (got !== c[2]) return who + ': the plate with screenT back at 0, 0.5 s after the half: ' + got + ' letters, want ' + c[2];
+    got = shown(c[1], C.BOSS_INTRO_TIME, -0.5, 3, c[0]);
+    if (got !== -1) return who + ': a plate in the first half of the intro, because screenT is past the half';
+    got = shown(c[1], C.BOSS_INTRO_SHORT, 0.25, 0, c[0]);
+    if (got !== c[3]) return who + ': the plate in the short intro with screenT back at 0: ' + got + ' letters, want ' + c[3];
+    // Whatever screenT holds, the letters are those of the boss's clock.
+    for (const screenT of [0, 0.25, 2.25, 3.75, 60]) {
+      got = shown(c[1], C.BOSS_INTRO_TIME, 0.25, screenT, c[0]);
+      if (got !== 7) return who + ': 0.25 s after the half with screenT at ' + screenT + ' s: ' + got + ' letters, want 7';
+    }
+  }
+  // 1.5 s after the half the Baron's line is whole, also with screenT only just past the half.
+  if (shown(BARON_LINE, C.BOSS_INTRO_TIME, 1.5, 2.25) !== 20) return 'the Baron\'s plate with screenT at 2.25 s, 1.5 s after the half: ' + shown(BARON_LINE, C.BOSS_INTRO_TIME, 1.5, 2.25) + ' letters';
 });
+
+// A fresh load of the game and a way to start runs in it at the arena, for the two checks of the Baron's
+// plate below. start(difficulty, opts) begins a new run of Level 1, put a few steps before the arena flag,
+// and returns its state. opts.boss(table), if given, changes the boss table of a copy of Level 1 and the
+// run plays that copy; opts.run holds options for TG.Game.newRun.
+function arenaGame() {
+  const env = loadEnv({ sim: true });
+  const TG = env.TG;
+  TG.Input.clear();
+  TG.Game.init();
+  const start = function (difficulty, opts) {
+    const o = opts || {};
+    let levelId = 1;
+    if (o.boss) {
+      const data = JSON.parse(JSON.stringify(TG.Levels[1]));
+      o.boss(data.boss);
+      TG.Levels.scratch = data;
+      levelId = 'scratch';
+    }
+    TG.Input.clear();
+    const s = TG.Game.newRun(Object.assign({ difficulty: difficulty, seed: 1, levelId: levelId, adaptive: false, assist: 1, tutorial: false }, o.run || {}));
+    s.player.x = s.level.arenaX - 8;
+    s.camera.x = Math.max(0, s.player.x - TG.C.HERO_SCREEN_X);
+    return s;
+  };
+  return { env: env, TG: TG, start: start };
+}
+
+// Steps the game, as TG.Main.tick does, to the step that ends the next boss intro, and returns the frames
+// of that intro: for each one { t: boss.stateT, screenT: state.screenT, n: the letters the plate shows, or
+// -1 with no plate }. After each frame whose number, counted from 1, is in `pauses` the game is paused and
+// resumed, and the frame also holds `resumed`: the letters of the picture drawn after the resume, before
+// the next step. Null when a pause or a resume was refused, or the intro did not end.
+function introFrames(TG, env, pauses) {
+  const C = TG.C;
+  const frames = [];
+  for (let i = 0; i < 4000; i++) {
+    const was = TG.Game.state.screen;
+    TG.Game.step(C.DT);
+    const s = TG.Game.state;
+    TG.Effects.update(C.DT);
+    TG.Hud.update(C.DT, s);
+    if (s.screen !== 'bossIntro') {
+      if (was === 'bossIntro') return frames;
+      continue;
+    }
+    const f = { t: s.boss.stateT, screenT: s.screenT, n: speechShown(TG, env, s) };
+    frames.push(f);
+    if (pauses && pauses.indexOf(frames.length) !== -1) {
+      if (!(TG.Game.pause() && TG.Game.resume()) || s.screen !== 'bossIntro' || s.screenT !== 0) return null;
+      f.resumed = speechShown(TG, env, s);
+    }
+  }
+  return null;
+}
+
+// [value, count] pairs written out: runLengths([[-1, 2], [0, 1]]) is [-1, -1, 0].
+function runLengths(pairs) {
+  const out = [];
+  for (const p of pairs) for (let i = 0; i < p[1]; i++) out.push(p[0]);
+  return out;
+}
 
 if (!SIM_PRESENT) {
   skip('in the game, the last frame of the boss intro shows the whole speech line', 'the simulation files are not all present');
+  skip('in the game, a pause and resume in a boss intro leave the speech line where it was', 'the simulation files are not all present');
+  skip('in the game, with no pause the Baron\'s speech plate shows on every frame what it showed when Level 1 was released', 'the simulation files are not all present');
 } else {
-  check('in the game, the last frame of the boss intro shows the whole speech line, in the 4 s intro and in the 1.5 s intro after a continue: 20 letters and 27; a pause in Lady Ratchet\'s 4 s intro does not start her line again; in the 1.5 s intro the 27 letters stand whole for a third of a second, and the 20 as long as before', function () {
+  check('in the game, the last frame of the boss intro shows the whole speech line, in the 4 s intro and in the 1.5 s intro after a continue: 20 letters and 27; a pause in the 4 s intro does not start the line again, the Baron\'s or Lady Ratchet\'s; in the 1.5 s intro the 27 letters stand whole for a third of a second, and the 20 as long as before', function () {
     // [the line, the level's boss kind, the frame of the 4 s intro after which the game is paused and resumed]
-    for (const c of [[BARON_LINE, 'baron', undefined], [RATCHET_LINE, 'ratchet', 150]]) {
+    for (const c of [[BARON_LINE, 'baron', 150], [RATCHET_LINE, 'ratchet', 150]]) {
       const speech = c[0];
       const env = loadEnv({ sim: true });
       const TG = env.TG;
@@ -3504,9 +3583,9 @@ if (!SIM_PRESENT) {
         }
         return shown;
       };
-      // Her intro is paused 0.5 s after its half, with the line 14 or 15 letters in, and the line goes on
-      // from there. The Baron's is left to run: after a pause his plate follows screenT, as Level 1 was
-      // released (the check above), and the line is not whole on the last frame.
+      // The intro is paused 0.5 s after its half, with the line 14 or 15 letters in, and the line goes on
+      // from there. (When Level 1 was released the Baron's plate followed screenT: after this pause it did
+      // not come back before the intro ended.)
       const long = intro(c[2]);
       if (c[2] && long[c[2] - 1] !== 14 && long[c[2] - 1] !== 15) return 'the 4 s intro, frame ' + c[2] + ': ' + long[c[2] - 1] + ' letters';
       if (TG.Game.state.screen !== 'boss' || !TG.Game.pause() || !TG.Game.continueRun()) return 'the run did not reach the fight and continue from it';
@@ -3529,6 +3608,119 @@ if (!SIM_PRESENT) {
         for (let i = first + 1; i < shown.length; i++) if (shown[i] < shown[i - 1]) return frames[0] + ' intro: the line shrinks at frame ' + i;
       }
       if (env.errors.length || env.warnings.length) return 'console: ' + env.errors.concat(env.warnings)[0];
+    }
+  });
+
+  check('in the game, a pause and resume in a boss intro leave the speech line where it was: every frame after the pause shows the letters that the same intro shows without a pause at the same time on the boss\'s clock, and so does the picture drawn after the resume; paused before the half, on the last frame without a plate and the first with one, while the line is typed, when it is whole, on the last frame, and twice, in the 4 s intro and in the 1.5 s intro after a continue; the Baron on each difficulty, a level that names no boss kind, and Lady Ratchet\'s line', function () {
+    // The frames, counted from 1, after which the game is paused and resumed. The 4 s intro has 240 frames:
+    // the plate is there from frame 122 and the Baron's line is whole from frame 162. The 1.5 s intro has
+    // 89, the first of them one step in: the plate is there from frame 45 and his line is whole from 86.
+    const LONG = [[60], [121], [122], [150], [200], [240], [100, 170], [150, 151]];
+    const SHORT = [[20], [44], [45], [60], [87], [89], [20, 60], [60, 61]];
+    // [what, the difficulty, the change to Level 1's boss table]
+    const CASES = [['the Baron on easy', 'easy', null], ['the Baron on medium', 'medium', null], ['the Baron on hard', 'hard', null],
+      ['a level that names no boss kind', 'medium', function (boss) { delete boss.kind; }],
+      ['Lady Ratchet\'s line and kind', 'medium', function (boss) { boss.kind = 'ratchet'; boss.speech = RATCHET_LINE; }]];
+    for (const c of CASES) {
+      const game = arenaGame();
+      const TG = game.TG, env = game.env;
+      // One run: the 4 s intro, then RESTART FROM CHECKPOINT from the pause menu in the fight, and the
+      // 1.5 s intro that follows. Null when the run did not go that way.
+      const run = function (pausesLong, pausesShort) {
+        game.start(c[1], { boss: c[2] });
+        const long = introFrames(TG, env, pausesLong);
+        if (!long || TG.Game.state.screen !== 'boss' || !TG.Game.pause() || !TG.Game.continueRun()) return null;
+        if (TG.Game.state.screen !== 'bossIntro' || TG.Game.state.boss.introTime !== TG.C.BOSS_INTRO_SHORT) return null;
+        const short = introFrames(TG, env, pausesShort);
+        return short ? { long: long, short: short } : null;
+      };
+      const plain = run(null, null);
+      if (!plain) return c[0] + ': the run without a pause did not play both intros';
+      if (plain.long.length !== 240 || plain.short.length !== 89) return c[0] + ': ' + plain.long.length + ' and ' + plain.short.length + ' frames without a pause';
+      const whole = TG.Game.state.level.boss.speech.length;
+      if (plain.long[239].n !== whole || plain.short[88].n !== whole) return c[0] + ': the line is not whole on the last frame without a pause';
+      for (let k = 0; k < LONG.length; k++) {
+        const got = run(LONG[k], SHORT[k]);
+        if (!got) return c[0] + ': the run paused after frames ' + LONG[k].join(' and ') + ' and ' + SHORT[k].join(' and ') + ' did not play both intros';
+        for (const which of ['long', 'short']) {
+          const a = plain[which], b = got[which], pauses = which === 'long' ? LONG[k] : SHORT[k];
+          const what = c[0] + ', the ' + (which === 'long' ? '4 s' : '1.5 s') + ' intro paused after frame ' + pauses.join(' and ') + ': ';
+          if (b.length !== a.length) return what + b.length + ' frames, ' + a.length + ' without the pause';
+          for (let i = 0; i < a.length; i++) {
+            if (b[i].t !== a[i].t) return what + 'frame ' + (i + 1) + ' is at ' + b[i].t + ' s on the boss\'s clock, ' + a[i].t + ' without the pause';
+            if (b[i].n !== a[i].n) return what + 'frame ' + (i + 1) + ' shows ' + b[i].n + ' letters, ' + a[i].n + ' without the pause';
+            if (b[i].resumed !== undefined && b[i].resumed !== a[i].n) return what + 'the picture after the resume shows ' + b[i].resumed + ' letters, ' + a[i].n + ' before the pause';
+          }
+          // The pauses were made, and each set screenT back: the frame after it is one step into the screen.
+          const paused = b.filter(function (f) { return f.resumed !== undefined; }).length;
+          if (paused !== pauses.length) return what + paused + ' pauses were made';
+          for (const n of pauses) {
+            if (n < b.length && b[n].screenT !== TG.C.DT) return what + 'screenT is ' + b[n].screenT + ' on the frame after the pause, with the boss\'s clock at ' + b[n].t;
+          }
+        }
+      }
+      if (env.errors.length || env.warnings.length) return c[0] + ': console: ' + env.errors.concat(env.warnings)[0];
+    }
+  });
+
+  check('in the game, with no pause the Baron\'s speech plate shows on every frame of his intros what it showed when Level 1 was released, on each difficulty: in the 4 s intro no plate for 121 frames, then 0 to 19 letters for two frames each and the whole line for 79; in the 1.5 s intro after a continue, from game over or from the pause menu, no plate for 44 frames, then 0 to 18 letters for two frames each, 19 for three and the whole line for four; state.screenT and boss.stateT hold the same value on every one of those frames, also with an Hourglass and a Golden quill running when the intro starts and adaptive pace on, which is why the plate could change clocks and keep these frames', function () {
+    const twoEach = function (to) { const out = []; for (let n = 0; n <= to; n++) out.push([n, 2]); return out; };
+    // The 4 s intro: its first frame is the step on which Pip reaches the arena, with both clocks at 0.
+    // The 121st is at 120 steps, a sum a little under 2 s, so the empty plate comes with the 122nd.
+    const LONG = runLengths([[-1, 121]].concat(twoEach(19), [[20, 79]]));
+    // The 1.5 s intro: the picture between the continue and the first step has both clocks at 0 and no
+    // plate (checked apart below); the frames here start one step in.
+    const SHORT = runLengths([[-1, 44]].concat(twoEach(18), [[19, 3], [20, 4]]));
+    if (LONG.length !== 240 || SHORT.length !== 89) return 'the expected frames are ' + LONG.length + ' and ' + SHORT.length;
+    const differs = function (what, frames, want) {
+      if (!frames) return what + ': the intro did not end';
+      if (frames.length !== want.length) return what + ': ' + frames.length + ' frames, want ' + want.length;
+      for (let i = 0; i < want.length; i++) {
+        if (frames[i].n !== want[i]) return what + ': frame ' + (i + 1) + ' shows ' + frames[i].n + ' letters, want ' + want[i];
+        if (frames[i].screenT !== frames[i].t) return what + ': frame ' + (i + 1) + ' has screenT ' + frames[i].screenT + ' and boss.stateT ' + frames[i].t;
+      }
+      return null;
+    };
+    // [what, the options of the run, a change to the state before the first step]
+    const PLAIN = ['', null, null];
+    const POWERS = [', an Hourglass and a Golden quill running, adaptive pace on at 0.7', { adaptive: true, assist: 0.7 }, function (TG, s) {
+      Object.assign(s.power, { slowT: 1.5, quillT: 3, last: 'hourglass' });
+      s.slowScale = TG.C.HOURGLASS_SCALE;
+    }];
+    for (const difficulty of ['easy', 'medium', 'hard']) {
+      for (const variant of difficulty === 'medium' ? [PLAIN, POWERS] : [PLAIN]) {
+        for (const how of ['game over', 'the pause menu']) {
+          const game = arenaGame();
+          const TG = game.TG, env = game.env, C = TG.C;
+          const what = difficulty + variant[0] + ', continue from ' + how;
+          const s0 = game.start(difficulty, { run: variant[1] });
+          if (variant[2]) variant[2](TG, s0);
+          let bad = differs(what + ', the 4 s intro', introFrames(TG, env), LONG);
+          if (bad) return bad;
+          if (TG.Game.state.screen !== 'boss') return what + ': the run did not reach the fight';
+          if (how === 'game over') {
+            // Nothing is typed and nothing dodged until the lives are gone.
+            for (let i = 0; i < 60 * 600 && TG.Game.state.screen !== 'gameOver'; i++) {
+              TG.Game.step(C.DT);
+              TG.Effects.update(C.DT);
+              TG.Hud.update(C.DT, TG.Game.state);
+            }
+            if (TG.Game.state.screen !== 'gameOver') return what + ': no game over in the fight';
+          } else if (!TG.Game.pause()) {
+            return what + ': the fight could not be paused';
+          }
+          if (!TG.Game.continueRun()) return what + ': continueRun was refused';
+          const s = TG.Game.state;
+          if (s.screen !== 'bossIntro' || s.boss.introTime !== C.BOSS_INTRO_SHORT) return what + ': after the continue, ' + s.screen + ' with an intro of ' + (s.boss && s.boss.introTime) + ' s';
+          if (s.screenT !== 0 || s.boss.stateT !== 0 || speechShown(TG, env, s) !== -1) {
+            return what + ': between the continue and the first step, screenT ' + s.screenT + ', boss.stateT ' + s.boss.stateT + ' and ' + speechShown(TG, env, s) + ' letters';
+          }
+          if (variant[2]) variant[2](TG, s);
+          bad = differs(what + ', the 1.5 s intro', introFrames(TG, env), SHORT);
+          if (bad) return bad;
+          if (env.errors.length || env.warnings.length) return what + ': console: ' + env.errors.concat(env.warnings)[0];
+        }
+      }
     }
   });
 }

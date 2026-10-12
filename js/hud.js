@@ -603,20 +603,20 @@
   // first half of the time it has and stands whole for the other half. The test for "would not be whole"
   // counts two letters more than the line: the last frame of the intro is drawn one step before its end,
   // and the line has to be whole on it. Level 1's 20 letters keep 30 a second on both of its intros.
-  // The clock. A pause starts screenT again from 0 while the intro goes on from where it was (js/game.js).
-  // The Baron's plate is timed by screenT, as Level 1 was released: after a pause in his intro his line
-  // comes late, is cut short or does not come back. Any other boss's plate is timed by the boss's own intro
-  // clock, as Lady Ratchet's intro is drawn, and a pause leaves her line where it was. Giving the Baron
-  // that clock too is a change to one line here; it changes Level 1's picture after such a pause, and
-  // waits for the owner's word.
+  // The clock is the boss's own intro clock, boss.stateT, for every boss: the clock the end of the intro
+  // is timed by (js/game.js) and the intro is drawn from (js/render.js). A pause starts screenT again
+  // from 0 and leaves boss.stateT where it was, so a line goes on after a pause from the letter it had
+  // reached. In an intro that is not paused the two clocks hold the same value on every drawn frame: both
+  // start at 0 when the screen is entered and take the same step. The Baron's plate was timed by screenT
+  // when Level 1 was released, so his line came late, was cut short or did not come back after a pause;
+  // with no pause his frames are what they were.
   function drawSpeech(c, state) {
     if (state.screen !== 'bossIntro' || !state.boss) return;
     var data = state.level ? state.level.boss : null;
     var speech = data && data.speech ? String(data.speech) : '';
     if (!speech) return;
     var intro = num(state.boss.introTime, num(TG.C.BOSS_INTRO_TIME, 4));
-    var baron = !data.kind || data.kind === 'baron';
-    var since = num(baron ? state.screenT : state.boss.stateT, 0) - intro / 2;
+    var since = num(state.boss.stateT, 0) - intro / 2;
     if (since < 0) return;
     var n = speech.length;
     var w = 8 * n + 5, h = 13;

@@ -25,8 +25,9 @@
 //      difficulty
 //   3. a whole run by the test/sim.js bot on each difficulty with TG.Main.tick, TG.Audio.update and
 //      TG.Render.draw on every step (skipped with --quick)
-//   4. pause and resume on playing, bossIntro and boss; a pause during lifeLost is deferred; pauses are
-//      ignored on levelComplete; losing focus and a hidden tab; a long frame
+//   4. pause and resume on playing, bossIntro and boss, and the Baron's speech line after the pause in
+//      his intro; a pause during lifeLost is deferred; pauses are ignored on levelComplete; losing focus
+//      and a hidden tab; a long frame
 //   5. game over, then continue, at each checkpoint including the boss: in Level 1, in Level 2 from the
 //      STAGE row and in Level 2 after NEXT STAGE; game over, then the countdown runs out
 //   6. quit to the title from pause, then a new run with nothing left over; a second run after
@@ -536,7 +537,7 @@ for (const difficulty of ['easy', 'medium', 'hard']) {
 // 4. Pause, focus and long frames
 // ---------------------------------------------------------------------------------------------
 
-check('pause and resume on playing, bossIntro and boss (Esc, the 3-2-1 countdown, Esc again); ignored on levelComplete', function () {
+check('pause and resume on playing, bossIntro and boss (Esc, the 3-2-1 countdown, Esc again); after the pause in the Baron\'s intro his speech line goes on by the intro\'s own clock; ignored on levelComplete', function () {
   const s = session();
   const TG = s.TG;
   assert(startRun(s, 'medium'), 'run did not start');
@@ -565,7 +566,25 @@ check('pause and resume on playing, bossIntro and boss (Esc, the 3-2-1 countdown
     s.seconds(0.4);
     assert(s.screen() === where, where + ': not resumed (' + s.screen() + ')');
     assert(!loopSeq(TG).paused, where + ': the sequencer did not restart');
-    if (where === 'bossIntro') assert(TG.Game.state.boss.stateT >= introT, 'the intro restarted after the pause');
+    if (where === 'bossIntro') {
+      assert(TG.Game.state.boss.stateT >= introT, 'the intro restarted after the pause');
+      // The Baron's speech line is timed by the intro's own clock (CONTRACT 4.18): half a second after the
+      // half of the intro it is that far typed, 15 or 16 letters, though the pause set screenT back by the
+      // third of a second the intro had run; and the line is whole on the last frame of the intro.
+      const boss = TG.Game.state.boss, line = TG.Game.state.level.boss.speech;
+      let texts = [];
+      while (s.screen() === 'bossIntro' && boss.stateT < boss.introTime / 2 + 0.5) texts = drawnTexts(s);
+      const letters = Math.floor((boss.stateT - boss.introTime / 2) * 30);
+      assert(s.screen() === 'bossIntro' && letters >= 15 && letters <= 16, 'the intro at ' + boss.stateT + ' s after the pause, on ' + s.screen());
+      assert(TG.Game.state.screenT < boss.stateT - 0.25, 'the pause did not set screenT back: ' + TG.Game.state.screenT + ' with the intro at ' + boss.stateT);
+      assert(texts.indexOf(line.slice(0, letters)) !== -1, 'the speech line is not ' + letters + ' letters in, ' + boss.stateT + ' s into the intro paused at ' + introT + ' s');
+      let last = texts;
+      for (let i = 0; i < 300 && s.screen() === 'bossIntro'; i++) {
+        const t = drawnTexts(s);
+        if (s.screen() === 'bossIntro') last = t;
+      }
+      assert(last.indexOf(line) !== -1, 'the speech line is not whole on the last frame of the intro');
+    }
   }
   assert(stepUntil(s, bot, () => s.screen() === 'levelComplete', 600), 'never reached levelComplete');
   s.frame();
