@@ -1433,6 +1433,37 @@ Handed on from M5:
 | M6 | The How To Play row for the watch (the row `{ sprite: 'pw_watch', name: 'POCKET WATCH', text: 'STOPS TIME' }` in `POWERS` of `js/ui.js`, the row pitch 21 to 18, the test-ui case, and new howToPlay reference frames for the Level 1 pixel set). `nextStage` must treat `state.sceneTime` exactly as it treats `state.time`, and clear `watchT` and `power.last` with the other timed powers: the sim asserts on every step that the two clocks are equal until a run's first watch. The look in a browser at the level at real size |
 | M8 | CONTRACT 4.16, 4.19, 5.1 (`state.sceneTime`) and 5.9 (the three keys); 3.1, 3.4, 6.3 and Appendix B of this plan as above. After a watch the scene clock is behind `state.time` by the held time, so a shot at a given `state.time` after the first watch shows other backdrop frames than before M5 |
 
+**M6, progression and save: built on 2026-10-12.** Level 2 can now be reached. After a cleared Level 1 run the results screen has a strip, NEXT STAGE on Enter and TITLE on Esc, and `TG.Game.nextStage()` takes the run on in the same state; once Level 1 has been cleared on any difficulty the difficulty screen has a STAGE row. `TG.Save` keeps version 1 and gains `lastLevel`, the three cleared numbers, the unlock and the pending entry; a record stored by the released game loads with nothing lost, shown on stored strings written by the released copy itself (`test/fixtures/save-before-level2.json`). The result has `stages`, `stageScore`, `stageTime` and `bestScore`, and the rank needs a cleared stage of the run. The results screen has STAGE 2 UNLOCKED, STAGE 1 SCORE, BEST RUN, the rank line and the hook line; How To Play has its seventh row and HOLD FOR ARCHES AND TUNNELS; the title has the second story panel and the cavern in its idle rotation. `test/sim.js` has the `campaign` option with the checks `campaign` and `campaign-targets` (72 runs, 49 checks), and `test/test-integration.js` plays a whole Level 2 run from the menus with drawing and sound on, the NEXT STAGE chain to STAGE 2 CLEAR, a continue at each Level 2 checkpoint, a reload of today's record, and the pending entry. Every Tier 2 item of M6 is built. One reviewer's whole task was to lose saved data or reach Stage 2 without the unlock, and found no way.
+
+Inside a Level 1 run nothing changed: every frame is identical to the released game's, and every event but `level:clear`, whose result now carries the four new fields. The How To Play screen is new by plan.
+
+Measured for a run that arrives through NEXT STAGE, seeds 1 to 3 (Easy / Medium / Hard): floor bot continues in Stage 2: 0 / 0 / 0 (the target allows 1 / 2 / 2); target bot window use 0.52 to 0.55 / 0.59 to 0.61 / 0.66 to 0.69, Easy under the band on 2 seeds of 3 (decision 1). The stage starts with 5 / 4 / 3 lives, no shield and the pace the stage before ended at.
+
+As built, where section 12 says otherwise:
+
+- 12.2, `nextLifeAt`: moved at NEXT STAGE to the first threshold above the carried score. Kept as the table has it, a life would be paid on the first points of Level 2 (in 13 of 18 measured runs) and after every continue from its first checkpoint.
+- 12.1, the strip's line THE SCORE IS ENTERED WHEN THE RUN ENDS: shown only when a run ending at that point has an entry to make. For the owner to confirm.
+- 12.2, the WPM note on the last results screen of a two-stage run: measured against the WPM the run already showed at STAGE 1 CLEAR, so it reads BEST 86 beside 82 where it would have read NEW BEST!. For the owner to confirm.
+- 12.4, the idle rotation: the cavern is drawn behind Level 2's story panel and the High Scores panel, without Pip running in it.
+- 12.7: the example line A NEEDS NO CONTINUES cannot appear in play.
+
+For the owner, none of it blocking:
+
+- Rollback and cached copies (12.6). Once the new game has saved, a Level 1 clear made afterwards in the released copy does not open the STAGE row until the next clear in the new game, because the dated entries are read only when all three cleared numbers are absent. Nothing stored is lost either way.
+- The pending entry. A tab closed on the last results screen or the initials screen of a two-stage run leaves the Stage 1 total in the table, not the run total. It arrives at the next start with no notice, and under PIP for a player who never entered initials.
+- Enter pressed repeatedly at STAGE 1 CLEAR starts Level 2 as soon as the strip appears. Nothing is lost by it: QUIT from the pause menu gives the entry TITLE would have given.
+- The difficulty screen with the STAGE row no longer spells out WORDS A MINUTE and the lives.
+- A copy played from this computer can reach the live scores service, which accepts local addresses: play it with WORLD SCORES off until the Worker's new limits are deployed (12.5, M9).
+- Motion has been judged from frame sheets only: the creatures, the fight and the level at real size need a person at a browser.
+
+Handed on from M6:
+
+| To | What |
+|---|---|
+| M7 | The daily counts are not per stage yet: no `start` is sent at NEXT STAGE, and the `end` on the second results screen carries the whole run's time (`result.stageTime` is there for it). `test/test-server.js`'s copy of the rank rule still reads `cleared` where the game ranks on `stages > 0`. The strip's line reads `TG.Board.hasToken`; no request is made for it |
+| M8 | 12.1, 12.2, 12.4, 12.6 and 12.7 as above. CONTRACT 4.4, 4.16, 9.1, 9.2 and the results screen, which is described nowhere in the detail it was built: `js/ui.js` and section I of `test/test-ui.js` are the record. `node test/run-all.js` now takes about 200 s and `--quick` 32 s |
+| M9 | The smoke run should include what no test or still picture can judge: the motion of the creatures and of the fight, and one press of NEXT STAGE on each copy with the world scores on |
+
 ---
 
 ## 14. Decisions

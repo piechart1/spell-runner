@@ -7,7 +7,7 @@
 // File layout:
 //   1. helpers, the transition table and the empty state
 //   2. screens: canGo, setScreen, pause, resume
-//   3. newRun and continueRun
+//   3. newRun, continueRun and nextStage
 //   4. step (the fixed order of CONTRACT 4.16) and its parts: input, typing results, screen timers,
 //      power-up timers, adaptive pacing, camera
 //   5. scoring, lives and power-ups: addScore, addLife, applyPower
@@ -17,6 +17,12 @@
 //   state.tutorial.enabled   the tutorial slow-down applies on this run (newRun option `tutorial`)
 //   state.tutorial.done      ids of the tutorial threats that have had their slow-down
 //   state.run.bestWpm        the saved personal best WPM for the difficulty, read once by newRun
+//   state.run.bestScore      the saved best score for the difficulty, read once by newRun (LEVEL2 12.2). Both
+//                            bests are kept through nextStage: by then the save holds this run's own first stage
+//   state.run.stages         the stages this run has cleared: 0, 1 or 2 (LEVEL2 12.5). buildResult raises it
+//   state.run.stageScore     the score the run held when the stage being played began: 0 in a run's first
+//                            stage, the carried total after nextStage
+//   state.run.stageStart     state.time when the stage being played began: 0 in a run's first stage
 //   state.power.watchT       real seconds left of a Pocket Watch, 0 when none runs (LEVEL2 6.3). While it is
 //                            above 0 the world is stopped: timeScale is 0 and so is the world step. `last`
 //                            can also be 'watch'
@@ -51,7 +57,7 @@
     levelComplete: ['results'],
     paused: ['playing', 'bossIntro', 'boss', 'results'],
     gameOver: ['playing', 'bossIntro', 'results'],
-    results: ['highScoreEntry', 'title'],
+    results: ['highScoreEntry', 'title', 'playing'],
     highScoreEntry: ['title']
   };
 
@@ -98,7 +104,8 @@
         continues: 0, livesLost: 0, sectionLivesLost: 0, hits: 0, falls: 0,
         damageTypable: 0, damageOther: 0,
         threatsCleared: 0, threatsMissed: 0, cratesCleared: 0, cratesMissed: 0,
-        cleared: false, ended: false, bonuses: [], bestWpm: 0
+        cleared: false, ended: false, bonuses: [], bestWpm: 0, bestScore: 0,
+        stages: 0, stageScore: 0, stageStart: 0
       },
       result: null
     };
@@ -218,7 +225,9 @@
       nextLifeAt: config.extraLifeFirst, bossPhase: 1, continuesHere: 0
     };
     s.tutorial.enabled = tutorial && s.level.tutorial;
-    s.run.bestWpm = save.best(difficulty).wpm;
+    var best = save.best(difficulty);
+    s.run.bestWpm = best.wpm;
+    s.run.bestScore = best.score;
     s.timeScale = timeScaleOf(s);
     s.screen = 'playing';
     TG.Game.state = s;
@@ -292,6 +301,83 @@
     emit('game:continue', { checkpoint: cp.index, continues: s.run.continues, assist: s.assist });
     emit('level:start', levelStartPayload(s, true));
     emit('section:enter', sectionPayload(s.level, s.section));
+    return true;
+  }
+
+  // NEXT STAGE (LEVEL2 12.2): from the results screen of a cleared stage, the same run goes on into the
+  // next level. False when there is no such stage to go on from, or no next level. Like continueRun it
+  // works on the state of the run and does not start from emptyState. The run keeps its score and its ink,
+  // its clocks (time, sceneTime, frame, worldTime), the typing engine with every statistic, the multiplier
+  // and the streaks, the run counters, the bests read by newRun, the pacing (assist, assistTarget,
+  // adaptive, adapt), the seed and its generator, nextId and the difficulty. The stage starts as a run from
+  // the menus starts it: the difficulty's own lives and no shield charges (decision 21), no timed power, a
+  // new picker, and its own checkpoint 0. Like newRun it sets the screen itself and emits its own events.
+  function nextStage() {
+    var C = TG.C;
+    var s = TG.Game.state;
+    if (s.screen !== 'results' || !s.result || s.result.cleared !== true) return false;
+    var levelId = s.levelId + 1;
+    var data = hasOwn(TG.Levels, levelId) ? TG.Levels[levelId] : null;
+    if (!data) return false;
+    var config = TG.Difficulty.resolve(s.difficulty, data.tune);
+
+    // 1. The level, with a picker of its own flavour on the run's generator, and nothing live in it.
+    s.levelId = levelId;
+    s.config = config;
+    s.pace = config.pace;
+    s.level = TG.Level.build(data, config);
+    s.picker = TG.Words.createPicker(s.difficulty, s.rng, { flavour: data.theme && data.theme.wordFlavour });
+    s.entities = [];
+    s.items = TG.Level.makeItems(s.level, 0);
+    s.boss = null;
+    s.section = 0;
+    // 2. A new player at the level's start, with the stage's own lives; no shield charges.
+    s.player = TG.Entities.createPlayer(config, s.level.checkpoints[0].x);
+    s.camera.x = Math.max(0, s.player.x - C.HERO_SCREEN_X);
+    s.power.shield = 0;
+    // 3. Timed power-ups end without events, as on a continue.
+    s.power.slowT = 0;
+    s.power.quillT = 0;
+    s.power.watchT = 0;
+    s.power.last = null;
+    s.slowScale = 1;
+    s.tutorScale = 1;
+    s.finisherScale = 1;
+    s.resumeTo = null;
+    s.pausePending = false;
+    s.lifeLost = { cause: 'hit', t: 0, duration: C.HIT_FREEZE, gapId: null, last: false };
+    s.tutorial = { active: false, targetId: null, enabled: false, done: [] };
+    // 4. The next extra life is due at the first threshold above the carried score. buildResult adds the
+    // end-of-stage bonuses without the test for extra lives, so the score can stand past nextLifeAt here.
+    // A threshold the bonuses passed is not kept for later, as one passed at MAX_LIVES is not (DESIGN
+    // 8.5): its life would be paid on the first points of the stage, on top of the stage's own lives, and
+    // again on the first points after every continue from this checkpoint.
+    while (config.extraLifeEvery > 0 && s.score >= s.nextLifeAt) s.nextLifeAt += config.extraLifeEvery;
+    // 5. The checkpoint banks what the run carries. continueRun restores all four values, and a nextLifeAt
+    // put back at the first threshold would pay a life for every threshold up to the carried score.
+    s.checkpoint = {
+      index: 0, x: s.level.checkpoints[0].x, score: s.score, ink: s.ink, inkTotal: s.inkTotal,
+      nextLifeAt: s.nextLifeAt, bossPhase: 1, continuesHere: 0
+    };
+    // 6. The section counters start again: the level's first checkpoint reads them for its bonuses, and
+    // they still hold the arena of the stage before.
+    TG.Typing.sectionReset(s.typing);
+    s.run.sectionLivesLost = 0;
+    // 7. The stage's own record. run.stages and the bests stay as they are.
+    s.run.bonuses = [];
+    s.run.cleared = false;
+    s.run.ended = false;
+    s.run.stageScore = s.score;
+    s.run.stageStart = s.time;
+    s.result = null;
+    s.timeScale = timeScaleOf(s);
+    s.screen = 'playing';
+    s.screenT = 0;
+    s.screenData = null;
+    // 8. Events, as newRun emits them. Presentation resets on level:start.
+    emit('screen:change', { from: 'results', to: 'playing', data: null });
+    emit('level:start', levelStartPayload(s, false));
+    emit('section:enter', sectionPayload(s.level, 0));
     return true;
   }
 
@@ -733,8 +819,10 @@
   // ---------------------------------------------------------------------------------------------
 
   // DESIGN 8.6. Two cases the table does not cover are decided here: a run in which no letter key was
-  // pressed ranks C (its accuracy of 1 means nothing), and S and A need the level to be cleared, so a
-  // run quit early from the pause menu cannot rank above B.
+  // pressed ranks C (its accuracy of 1 means nothing), and S and A need a cleared stage, so a run quit
+  // early from the pause menu cannot rank above B. cleared: the run has cleared at least one stage
+  // (LEVEL2 12.5, decision 28). The other values are the whole run's, so a run that goes on through
+  // NEXT STAGE keeps its letter at the step and can gain or lose it in the stage that follows.
   function rankOf(summary, livesLost, continues, cleared) {
     if (summary.correct + summary.wrong === 0) return 'C';
     var accuracy = summary.accuracy;
@@ -744,9 +832,11 @@
     return 'C';
   }
 
-  // CONTRACT 5.11. End-of-level bonuses are added only for a cleared run.
+  // CONTRACT 5.11. cleared: the stage that has just ended was cleared. End-of-level bonuses are added
+  // only then, and run.stages counts it.
   function buildResult(s, cleared) {
     var C = TG.C;
+    if (cleared) s.run.stages++;
     var summary = TG.Typing.summary(s.typing);
     var baseScore = s.score;
     var lives = s.player ? s.player.lives : 0;
@@ -785,11 +875,17 @@
       livesLost: s.run.livesLost,
       lives: lives,
       continues: s.run.continues,
-      rank: rankOf(summary, s.run.livesLost, s.run.continues, cleared),
+      rank: rankOf(summary, s.run.livesLost, s.run.continues, s.run.stages > 0),
       suggestion: suggestion,
       bestWpm: s.run.bestWpm,
       assist: s.assist,
-      adaptive: s.adaptive
+      adaptive: s.adaptive,
+      // LEVEL2 12.2 and 12.5: the stages the run has cleared, the score it held when this stage began,
+      // this stage's own time, and the best score of the difficulty before the run.
+      stages: s.run.stages,
+      stageScore: s.run.stageScore,
+      stageTime: s.time - s.run.stageStart,
+      bestScore: s.run.bestScore
     };
   }
 
@@ -847,6 +943,7 @@
     pause: pause,
     resume: resume,
     continueRun: continueRun,
+    nextStage: nextStage,
     endRun: endRun,
     addScore: addScore,
     addLife: addLife,

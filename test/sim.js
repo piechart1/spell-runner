@@ -9,13 +9,17 @@
 //   node test/sim.js --check NAME          one extra check, no matrix runs
 //   node test/sim.js --measure             also a MEASURE line after each RUN line (LEVEL2 13.5: window use,
 //                                          the fight, the arena flag, the watch crates, lives, the dangles)
+//   node test/sim.js --campaign            the matrix played as whole campaigns: each run starts at the first level
+//                                          and goes on through NEXT STAGE to the end of the last (RUN lines with
+//                                          level=1+2), then the `campaign` and `campaign-targets` checks
 //   node test/sim.js --difficulty medium --profile target --seed 1 --until boss --verbose
 //   node test/sim.js --difficulty easy --wpm 12 --accuracy 0.9 --react 1.2   (one custom run, INFO)
 //   node test/sim.js --help                the options
 //
 // As a module:  const { runBot } = require('./sim');  runBot({ difficulty, wpm, accuracy, react, ... })
-//               levelId picks the level (1 without it) and startAssist the assist the run starts at (1
-//               without it); the Session class in part 4 lists every option
+//               levelId picks the level (1 without it), startAssist the assist the run starts at (1
+//               without it) and campaign: true makes the run go on through NEXT STAGE while there is a
+//               next level; the Session class in part 4 lists every option
 //
 // File layout:
 //   1. tuning tables (CONSTANT_OVERRIDES, EXPECTED_COUNTS and the other tables keyed by level) and settings
@@ -106,6 +110,8 @@ const BOSS_EXPECTED = {
 //   liveAtFlag      threats still live at the arena flag, target and floor bots (the floor bot from both
 //                   starts), at most
 //   watchLive       threat words live at each watch crate's word:clear, target and floor bots, at least
+// The floor and u rows are taken a second time, by the `campaign-targets` check, for a run that arrives in the
+// level through NEXT STAGE from level `savedFrom`.
 const LEVEL_TARGETS = {
   2: {
     floorContinues: { easy: 1, medium: 2, hard: 2 }, savedFrom: 1,
@@ -195,6 +201,18 @@ function loadEnv(files) {
 // What TG.Level.update emits. None of it may come on a step a Pocket Watch holds (the `watch` assertion).
 const LEVEL_EVENTS = { 'section:enter': true, 'checkpoint': true, 'hazard:cue': true, 'boss:warning': true, 'boss:enter': true };
 
+function newMeasure() {
+  return {
+    uSum: 0, uCount: 0,              // window use of each threat word typed or missed
+    bossEnterAt: null, fightTime: null,
+    liveAtFlag: 0, cratesAtFlag: 0,  // threats and crates that never came to anything before the arena flag
+    pastFlag: 0,                     // threats that were due at or past the arena flag when they appeared
+    watch: [],                       // { id, tile, live } for each watch crate that appeared; live null: not cleared
+    minLives: null,
+    dangles: 0, dangleNearest: null  // dangles spawned; the least distance from an anchor to a duck hazard, px
+  };
+}
+
 class Checker {
   constructor(session) {
     this.session = session;
@@ -215,16 +233,12 @@ class Checker {
     this.announced = [];               // boss:attack for shock and pick not yet followed by attack:spawn
     this.volleyHits = 0;               // volley entries typed since the volley began
     this.volleySize = 0;
-    // Measurements for the run's report (LEVEL2 8.6 and 13.5). They assert nothing.
-    this.measure = {
-      uSum: 0, uCount: 0,              // window use of each threat word typed or missed
-      bossEnterAt: null, fightTime: null,
-      liveAtFlag: 0, cratesAtFlag: 0,  // threats and crates that never came to anything before the arena flag
-      pastFlag: 0,                     // threats that were due at or past the arena flag when they appeared
-      watch: [],                       // { id, tile, live } for each watch crate that appeared; live null: not cleared
-      minLives: null,
-      dangles: 0, dangleNearest: null  // dangles spawned; the least distance from an anchor to a duck hazard, px
-    };
+    // Measurements for the run's report (LEVEL2 8.6 and 13.5). They assert nothing. They are the stage's
+    // own: a run that goes on through NEXT STAGE starts them again (onStageStart), and `stages` keeps those
+    // of each stage it has cleared.
+    this.measure = newMeasure();
+    this.stageStart = null;            // what the run held when the stage being played began
+    this.stages = [];                  // one record for each stage cleared (stageRecord)
     const TG = this.TG;
     this.names = new Set(TG.Events.NAMES);
     this.fields = TG.Events.FIELDS || null;
@@ -298,6 +312,8 @@ class Checker {
     }
     this.checkBoss(payload, name);
     this.note(payload, name);
+    if (name === 'level:start' && !payload.continued) this.onStageStart();
+    else if (name === 'level:clear') this.stages.push(this.stageRecord(payload.result));
 
     if (name === 'checkpoint' && STOP_INDEX[session.until] === payload.index) this.stopReached = true;
 
@@ -392,6 +408,34 @@ class Checker {
     if (nominal > need + 1e-6 && !atZoneEnd) {
       this.fail('budget', e.kind + ' "' + e.word + '" budget ' + fmt(nominal, 3) + ' is longer than the rules give (' + fmt(need, 3) + ')');
     }
+  }
+
+  // A stage begins: newRun, or nextStage in a run that goes on (LEVEL2 12.2). Its measurements start from
+  // nothing, and what the run holds at this moment is kept for the stage's record.
+  onStageStart() {
+    const s = this.TG.Game.state;
+    this.measure = newMeasure();
+    this.announced = [];
+    this.stageStart = {
+      time: s.time, score: s.score, lives: s.player.lives, shield: s.power.shield, assist: s.assist,
+      continues: s.run.continues, livesLost: s.run.livesLost
+    };
+  }
+
+  // The record of a stage that has just been cleared: the level, what the run held when the stage began
+  // (`start`), the game's own result for it, and the stage's own measurements, named as on the report.
+  stageRecord(res) {
+    return Object.assign({ levelId: res.levelId, start: this.stageStart, result: res }, this.measured());
+  }
+
+  // The measurements of the stage being played, as the report has them.
+  measured() {
+    const m = this.measure;
+    return {
+      meanU: m.uCount > 0 ? m.uSum / m.uCount : null, fightTime: m.fightTime, liveAtFlag: m.liveAtFlag,
+      cratesAtFlag: m.cratesAtFlag, pastFlag: m.pastFlag, watch: m.watch.map((w) => ({ tile: w.tile, live: w.live })),
+      minLives: m.minLives, dangles: m.dangles, dangleNearest: m.dangleNearest
+    };
   }
 
   // The measurements of LEVEL2 8.6 ("How the figures are taken"), kept for the run's report.
@@ -601,14 +645,22 @@ class Bot {
       if (p.reason === 'gone') this.waitUntil = TG.Game.state.time + TG.C.DISCARD_TIME;
       this.forget();
     });
-    TG.Events.on('game:continue', () => {
-      this.presses.clear();
-      if (this.held) {
-        TG.Input.keyUp(this.held.key);
-        this.held = null;
-      }
-      this.forget();
-    });
+    TG.Events.on('game:continue', () => this.restart());
+    // NEXT STAGE (LEVEL2 8.6): hazard ids are `h` and a number in every level, so the records of the level
+    // before would stop the bot from jumping or ducking at the first hazards of the next. This is the
+    // level:start of TG.Game.nextStage; the one of newRun comes before the bot is made.
+    TG.Events.on('level:start', (p) => { if (!p.continued) this.restart(); });
+  }
+
+  // The level is laid out again from a checkpoint, or a new level begins: the press records go, a held
+  // key is let go and the word in hand is forgotten.
+  restart() {
+    this.presses.clear();
+    if (this.held) {
+      this.TG.Input.keyUp(this.held.key);
+      this.held = null;
+    }
+    this.forget();
   }
 
   forget() {
@@ -727,11 +779,20 @@ class Session {
   // opts: CONTRACT 10.3 (difficulty, wpm, accuracy, react, seed, adaptive, until, noType, noJump, noDuck,
   // files, maxSeconds, verbose), plus profile (floor | target | fast | exact | custom), levelId,
   // startAssist (the assist the run starts at; 1 without it, which is a player with nothing saved; LEVEL2
-  // 8.6 and 13.5) and setup (a function called with TG before newRun, used by the checks).
+  // 8.6 and 13.5), setup (a function called with TG before newRun, used by the checks) and:
+  //   campaign   true: on the results screen of a cleared stage the run goes on with TG.Game.nextStage(), as
+  //              NEXT STAGE does in the game, while there is a next level (LEVEL2 12.1 and 13.5). The run
+  //              starts at levelId and is finished when the last level is cleared. maxSeconds is then the
+  //              limit for each stage. The report's time, score, lives lost and continues are the whole
+  //              run's; its measurements are the last stage's, and report.stages has every stage's
+  //   onStage    a function called with (TG, session) on that results screen, before the run goes on
+  //   onGameOver a function called with (TG, session) on the game over screen, before the continue
   constructor(opts) {
     this.opts = opts;
     this.difficulty = opts.difficulty || 'medium';
     this.levelId = opts.levelId !== undefined ? opts.levelId : 1;
+    this.campaign = opts.campaign === true;
+    this.stageT0 = 0;                // state.time when the stage being played began
     this.startAssist = typeof opts.startAssist === 'number' ? opts.startAssist : 1;
     this.seed = typeof opts.seed === 'number' ? opts.seed : 1;
     this.until = opts.until || 'results';
@@ -749,7 +810,10 @@ class Session {
       reportedWpm: 0, reportedAccuracy: 0, assistEnd: 0, rank: null, error: null, fatal: false,
       // The measurements of LEVEL2 8.6 and 13.5 (Checker.note); measureLine below says what each is.
       startAssist: this.startAssist, meanU: null, fightTime: null, liveAtFlag: 0, cratesAtFlag: 0, pastFlag: 0,
-      watch: [], minLives: null, dangles: 0, dangleNearest: null
+      watch: [], minLives: null, dangles: 0, dangleNearest: null,
+      // The levels the run is to play (more than one with the campaign option), and a record for each
+      // stage it cleared (Checker.stageRecord).
+      levels: [this.levelId], stages: []
     };
     try {
       this.env = loadEnv(opts.files);
@@ -772,6 +836,9 @@ class Session {
       if (!TG.Levels[levelId]) {
         this.abort('level ' + levelId + ' is not built: no file registers TG.Levels[' + levelId + ']', true);
         return;
+      }
+      if (this.campaign) {
+        for (let next = levelId + 1; TG.Levels[next]; next++) this.report.levels.push(next);
       }
       const config = TG.Difficulty.resolve(this.difficulty, TG.Levels[levelId].tune);
       const profileKey = this.profile === 'exact' || this.profile === 'custom' ? 'target' : this.profile;
@@ -842,6 +909,7 @@ class Session {
       return false;
     }
     if (s.screen === 'results') {
+      if (this.campaign && s.result && s.result.cleared && TG.Levels[s.levelId + 1]) return this.nextStage();
       this.report.finished = this.until === 'results' && !!(s.result && s.result.cleared);
       this.done = true;
       return false;
@@ -860,12 +928,27 @@ class Session {
       this.abort('the run reached the screen "' + s.screen + '"', true);
       return false;
     }
-    if (s.time >= this.maxSeconds) {
+    if (s.time - this.stageT0 >= this.maxSeconds) {
       this.abort('timed out: ' + this.maxSeconds + ' s of simulated time without reaching ' + this.until +
         ' (screen ' + s.screen + ', x=' + fmt(s.player.x, 0) + ')', true);
       return false;
     }
     return this.stepOnce();
+  }
+
+  // The campaign option: NEXT STAGE on the results screen of a cleared stage. The bot and the checker
+  // hear the step themselves, from its level:start. False when the run is over.
+  nextStage() {
+    const TG = this.TG;
+    const from = TG.Game.state.levelId;
+    if (typeof this.opts.onStage === 'function') this.opts.onStage(TG, this);
+    if (this.done) return false;
+    if (!TG.Game.nextStage()) {
+      this.abort('TG.Game.nextStage() refused to go on from level ' + from, true);
+      return false;
+    }
+    this.stageT0 = TG.Game.state.time;
+    return true;
   }
 
   run() {
@@ -876,17 +959,9 @@ class Session {
   finish() {
     const r = this.report;
     if (this.checker) {
-      const m = this.checker.measure;
       r.words = this.checker.words.slice();
-      r.meanU = m.uCount > 0 ? m.uSum / m.uCount : null;
-      r.fightTime = m.fightTime;
-      r.liveAtFlag = m.liveAtFlag;
-      r.cratesAtFlag = m.cratesAtFlag;
-      r.pastFlag = m.pastFlag;
-      r.watch = m.watch.map((w) => ({ tile: w.tile, live: w.live }));
-      r.minLives = m.minLives;
-      r.dangles = m.dangles;
-      r.dangleNearest = m.dangleNearest;
+      Object.assign(r, this.checker.measured());
+      r.stages = this.checker.stages.slice();
     }
     const TG = this.TG;
     const s = TG && TG.Game ? TG.Game.state : null;
@@ -3594,13 +3669,19 @@ CHECKS['boss-continue'] = function (ctx) {
 
 // --- result-rank --------------------------------------------------------------------------------
 // state.result (CONTRACT 5.11): bonuses, final score, rank (DESIGN 8.6), suggestion (Tier 2), events.
+// The rank is the whole run's, and S and A need the run to have cleared a stage: `stages`, not `cleared`,
+// which is the stage that has just ended (LEVEL2 12.5, decision 28). In a run of one stage the two agree.
 function rankFor(r) {
   const a = r.typing.accuracy;
   if (r.typing.correct + r.typing.wrong === 0) return 'C';
-  if (r.cleared && a >= 0.97 && r.livesLost === 0 && r.continues === 0) return 'S';
-  if (r.cleared && a >= 0.93 && r.livesLost <= 2 && r.continues === 0) return 'A';
+  if (r.stages > 0 && a >= 0.97 && r.livesLost === 0 && r.continues === 0) return 'S';
+  if (r.stages > 0 && a >= 0.93 && r.livesLost <= 2 && r.continues === 0) return 'A';
   return a >= 0.85 ? 'B' : 'C';
 }
+
+// The fields of state.result.
+const RESULT_KEYS = ['cleared', 'levelId', 'difficulty', 'score', 'baseScore', 'bonuses', 'time', 'typing', 'ink', 'livesLost', 'lives',
+  'continues', 'rank', 'suggestion', 'bestWpm', 'assist', 'adaptive', 'stages', 'stageScore', 'stageTime', 'bestScore'];
 
 CHECKS['result-rank'] = function () {
   const bad = [];
@@ -3615,9 +3696,14 @@ CHECKS['result-rank'] = function () {
       const s = TG.Game.state;
       const res = s.result;
       if (!res || !res.cleared || clears.length !== 1 || clears[0] !== res) return result(false, d + ': no level:clear with the result');
-      const keys = ['cleared', 'levelId', 'difficulty', 'score', 'baseScore', 'bonuses', 'time', 'typing', 'ink', 'livesLost', 'lives', 'continues', 'rank', 'suggestion', 'bestWpm', 'assist', 'adaptive'];
-      const missing = keys.filter((k) => !(k in res));
+      const missing = RESULT_KEYS.filter((k) => !(k in res));
       if (missing.length) errs.push('result lacks ' + missing.join(','));
+      const extra = Object.keys(res).filter((k) => RESULT_KEYS.indexOf(k) === -1);
+      if (extra.length) errs.push('result has ' + extra.join(',') + ', which RESULT_KEYS does not list');
+      // A run of one stage: it has cleared one, it began with nothing, and the stage's time is the run's.
+      if (res.stages !== 1 || res.stageScore !== 0 || res.stageTime !== res.time || res.bestScore !== 0) {
+        errs.push('stages ' + res.stages + ', stageScore ' + res.stageScore + ', stageTime ' + res.stageTime + ' of ' + res.time + ', bestScore ' + res.bestScore);
+      }
       const sum = res.bonuses.reduce((t, x) => t + x.points, 0);
       if (res.score !== res.baseScore + sum || res.score !== s.score) errs.push('score ' + res.score + ' != ' + res.baseScore + ' + ' + sum);
       const want = [];
@@ -3649,6 +3735,8 @@ CHECKS['result-rank'] = function () {
   const ends = events.filter((e) => e.name === 'run:end');
   if (!res || res.cleared !== false || res.bonuses.length !== 0 || res.rank !== 'C' || res.suggestion !== null || ends.length !== 1 || TG.Game.state.screen !== 'results') {
     bad.push('ended run: ' + JSON.stringify(stubs.plain(res && { cleared: res.cleared, bonuses: res.bonuses, rank: res.rank })) + ', run:end ' + ends.length);
+  } else if (res.stages !== 0 || res.stageScore !== 0 || res.stageTime !== res.time) {
+    bad.push('ended run: stages ' + res.stages + ', stageScore ' + res.stageScore + ', stageTime ' + res.stageTime + ' of ' + res.time);
   }
   return bad.length ? result(false, bad.join(' | ')) : result(true, details.join('; ') + '; a run quit before typing ranks C with no bonuses');
 };
@@ -3884,6 +3972,424 @@ CHECKS['level1-events'] = function () {
     ' steps, the same again: ' + names.map((n) => count(n) + ' ' + n).join(', '));
 };
 
+// --- campaign -----------------------------------------------------------------------------------
+// LEVEL2 12.2, 12.5 and 13.5: one run through a level, NEXT STAGE and the level after it. `campaign` follows
+// every clause of its row in 13.5 on the target and the floor bot, on each difficulty and seed. On each
+// difficulty one more run takes a continue inside the second stage, and another presses NEXT STAGE and is
+// ended at once from the pause menu. `campaign-targets` holds the floor and window-use rows of the target
+// table for the stage such a run arrives in. Both read the same runs, which are played once (CAMPAIGN_RUNS).
+//
+// Where the game's interface acts, the runs do what it does, on TG.Save: the result is recorded on each
+// results screen, the entry the first stage would have made is kept as pending when the run goes on, and
+// one entry is made when the run ends. What the interface itself does with the keys, the initials screen
+// and the world scores is not played here (test/test-ui.js and test/test-integration.js).
+const CAMPAIGN_RUNS = new Map();
+// The bests the save holds before a campaign run starts, so that a result can be told to carry them.
+const CAMPAIGN_BEST = { wpm: 4.5, score: 1230 };
+// The setting that holds the highest level cleared on each difficulty (LEVEL2 12.6).
+const CLEARED_SETTING = { easy: 'clearedEasy', medium: 'clearedMedium', hard: 'clearedHard' };
+
+// The table entry for a result, as entryFor in js/ui.js builds it, with the mark of LEVEL2 12.5: on an
+// entry a run counts as cleared when it cleared at least one stage.
+function entryFor(res, name) {
+  return {
+    name: name, score: Math.floor(res.score), wpm: Math.round(res.typing.wpm), accuracy: Math.floor(res.typing.accuracy * 100 + 1e-9),
+    rank: res.rank, cleared: res.stages > 0, date: '2026-10-12'
+  };
+}
+
+// What a run holds that NEXT STAGE must carry (the "kept" column of the table in LEVEL2 12.2), as text.
+// The typing statistics are every statistic but the section's, which starts again. nextLifeAt is not here:
+// it goes to the first threshold above the carried score (settledLifeAt).
+function carriedBy(TG) {
+  const s = TG.Game.state;
+  const stats = stubs.plain(s.typing.stats);
+  delete stats.section;
+  const run = stubs.plain(s.run);
+  for (const k of ['sectionLivesLost', 'bonuses', 'cleared', 'ended', 'stageScore', 'stageStart']) delete run[k];
+  return JSON.stringify({
+    score: s.score, ink: s.ink, inkTotal: s.inkTotal,
+    time: s.time, sceneTime: s.sceneTime, frame: s.frame, worldTime: s.worldTime,
+    stats: stats, summary: TG.Typing.summary(s.typing), run: run,
+    assist: s.assist, assistTarget: s.assistTarget, adaptive: s.adaptive, adapt: s.adapt,
+    seed: s.seed, rng: s.rng.getState(), nextId: s.nextId, difficulty: s.difficulty, pace: s.pace
+  });
+}
+
+// The score at which the next extra life is due after NEXT STAGE: the first threshold above the carried
+// score. The end-of-stage bonuses can take the score past nextLifeAt, and those thresholds pay no life in the
+// stage that follows.
+function settledLifeAt(nextLifeAt, score, every) {
+  let t = nextLifeAt;
+  while (every > 0 && score >= t) t += every;
+  return t;
+}
+
+// One run from level `from` through NEXT STAGE to the end of the last level. Returns { report, bad, facts }:
+// the report of runBot, what the run did against the clauses (bad, empty when all held) and figures for the
+// check's line.
+function campaignRun(from, difficulty, profile, seed) {
+  const key = [from, difficulty, profile, seed].join('|');
+  if (CAMPAIGN_RUNS.has(key)) return CAMPAIGN_RUNS.get(key);
+  const bad = [];
+  const facts = { carried: null, arenaWouldDiffer: false, rankAtStep: null, thresholdsPassed: 0 };
+  let session = null, TG = null, C = null;
+  let step = null;             // what the run held on the results screen it went on from
+  let stepping = false;        // inside TG.Game.nextStage: its events are being emitted
+  let stepEvents = [];
+  let firstCheckpoint = false;
+
+  const afterStep = () => {
+    const s = TG.Game.state;
+    const data = TG.Levels[s.levelId];
+    const config = TG.Difficulty.resolve(difficulty, data.tune);
+    const to = step.levelId + 1;
+    // Carried: the score, the clocks, the typing statistics, the counters, the pacing, the generator.
+    if (carriedBy(TG) !== step.carried) bad.push('NEXT STAGE changed what the run carries: ' + clip(step.carried, 120) + ' became ' + clip(carriedBy(TG), 120));
+    if (s.typing !== step.typing || s.rng !== step.rng) bad.push('NEXT STAGE replaced the typing engine or the generator');
+    if (s.run.bestWpm !== CAMPAIGN_BEST.wpm || s.run.bestScore !== CAMPAIGN_BEST.score || s.run.stages !== step.levelId - from + 1) {
+      bad.push('after NEXT STAGE run.bestWpm ' + s.run.bestWpm + ', bestScore ' + s.run.bestScore + ', stages ' + s.run.stages);
+    }
+    // Set for the stage: the level's data, the stage's own lives, no shield charges, no timed power.
+    if (s.levelId !== to || s.level.name !== data.name || s.level.boss.kind !== BOSS_EXPECTED[to].kind || s.picker === step.picker) bad.push('the level after NEXT STAGE is ' + s.levelId + ' ' + s.level.name);
+    if (JSON.stringify(s.config) !== JSON.stringify(config)) bad.push('state.config is not the level\'s on ' + difficulty);
+    if (s.player.lives !== config.lives || s.power.shield !== 0) bad.push('the stage starts with ' + s.player.lives + ' lives and ' + s.power.shield + ' shield charges (' + config.lives + ' and 0)');
+    if (s.power.slowT !== 0 || s.power.quillT !== 0 || s.power.watchT !== 0 || s.power.last !== null || s.slowScale !== 1 || s.tutorScale !== 1 || s.finisherScale !== 1) bad.push('a timed power is still running after NEXT STAGE');
+    if (s.timeScale !== s.pace * s.assist) bad.push('timeScale ' + s.timeScale + ' after NEXT STAGE');
+    // The next extra life: at the first threshold above the carried score, and banked there.
+    step.lifeAt = settledLifeAt(step.nextLifeAt, step.score, config.extraLifeEvery);
+    facts.thresholdsPassed = (step.lifeAt - step.nextLifeAt) / config.extraLifeEvery;
+    if (s.nextLifeAt !== step.lifeAt || !(s.nextLifeAt > s.score)) bad.push('nextLifeAt is ' + s.nextLifeAt + ' after NEXT STAGE with a score of ' + s.score + ', expected ' + step.lifeAt + ' (' + step.nextLifeAt + ' before)');
+    const cp = { index: 0, x: s.level.checkpoints[0].x, score: step.score, ink: step.ink, inkTotal: step.inkTotal, nextLifeAt: step.lifeAt, bossPhase: 1, continuesHere: 0 };
+    if (JSON.stringify(s.checkpoint) !== JSON.stringify(cp)) bad.push('checkpoint 0 banks ' + JSON.stringify(s.checkpoint) + ', expected ' + JSON.stringify(cp));
+    if (s.player.x !== cp.x || s.player.state !== 'run' || s.camera.x !== Math.max(0, cp.x - C.HERO_SCREEN_X) || s.section !== 0) bad.push('Pip starts at ' + s.player.x + ' in section ' + s.section);
+    if (s.entities.length !== 0 || s.boss !== null || s.items.length !== INK_COUNTS[to][difficulty]) bad.push('the stage starts with ' + s.entities.length + ' entities, boss ' + (s.boss && s.boss.kind) + ', ' + s.items.length + ' ink drops');
+    const sec = s.typing.stats.section;
+    if (sec.correct !== 0 || sec.wrong !== 0 || sec.words !== 0 || s.run.sectionLivesLost !== 0) bad.push('the section counters were not started again');
+    if (s.result !== null || s.run.cleared || s.run.ended || s.run.bonuses.length !== 0 || s.run.stageScore !== step.score || s.run.stageStart !== step.time) {
+      bad.push('the stage record: result ' + (s.result === null ? 'null' : 'kept') + ', stageScore ' + s.run.stageScore + ', stageStart ' + s.run.stageStart);
+    }
+    if (s.screen !== 'playing' || s.screenT !== 0 || s.tutorial.enabled || s.tutorial.active || s.pausePending || s.resumeTo !== null) bad.push('the screen after NEXT STAGE is ' + s.screen);
+    // The three events of newRun, in order, and no other (LEVEL2 12.2).
+    const names = stepEvents.map((e) => e.name).join(',');
+    const ls = stepEvents[1] ? stepEvents[1].payload : {};
+    if (names !== 'screen:change,level:start,section:enter') bad.push('NEXT STAGE emitted ' + names);
+    else if (stepEvents[0].payload.from !== 'results' || stepEvents[0].payload.to !== 'playing' || ls.levelId !== to || ls.continued !== false ||
+      ls.name !== data.name || ls.music !== s.level.theme.music || ls.music.level !== data.theme.music.level || stepEvents[2].payload.index !== 0) {
+      bad.push('the events of NEXT STAGE: ' + JSON.stringify(stubs.plain(stepEvents.map((e) => e.payload))).slice(0, 200));
+    }
+    // The bot's press records (LEVEL2 8.6).
+    if (!(step.presses > 0) || session.bot.presses.size !== 0 || session.bot.held !== null) bad.push('the bot holds ' + session.bot.presses.size + ' press records after NEXT STAGE (' + step.presses + ' before)');
+    facts.carried = step.score;
+  };
+
+  session = new Session({
+    campaign: true, levelId: from, difficulty: difficulty, profile: profile, seed: seed, until: 'results', adaptive: PROFILE_ADAPTIVE[profile],
+    setup: (T) => {
+      TG = T;
+      C = TG.C;
+      // No `assist` on this result, so the saved assist stays 1.
+      TG.Save.recordRun({ difficulty: difficulty, score: CAMPAIGN_BEST.score, typing: { wpm: CAMPAIGN_BEST.wpm } });
+      TG.Events.on('*', (payload, name) => {
+        if (stepping) stepEvents.push({ name: name, payload: payload });
+        if (name === 'section:enter' && stepping) {
+          // The last event of nextStage: every listener of its level:start has run.
+          stepping = false;
+          afterStep();
+        } else if (name === 'life:gain' && payload.cause === 'score' && step && step.lifeAt !== undefined && TG.Game.state.run.continues === step.continues) {
+          // A life for score in the new stage comes at a threshold above the carried score, and the
+          // stage's first points pay none for the thresholds the bonuses of the stage before had passed.
+          const s = TG.Game.state;
+          const due = step.lifeAt + step.scoreLives * s.config.extraLifeEvery;
+          step.scoreLives++;
+          if (s.score < due) bad.push('a life was paid for score at ' + s.score + ' after NEXT STAGE; the next was due at ' + due + ' (carried score ' + step.score + ')');
+        } else if (name === 'checkpoint' && step && !firstCheckpoint && payload.index === 1) {
+          // The first checkpoint of the stage: its bonuses come from this stage's first section only.
+          firstCheckpoint = true;
+          const s = TG.Game.state;
+          const st = s.typing.stats;
+          const correct = st.correct - step.correct, wrong = st.wrong - step.wrong;
+          const accuracy = correct + wrong > 0 ? correct / (correct + wrong) : 1;
+          const lost = s.run.livesLost - step.livesLost;
+          const want = (correct + wrong > 0 && accuracy >= C.CP_ACC ? C.PTS_CP_ACC : 0) + (lost === 0 ? C.PTS_CP_NODAMAGE : 0);
+          if (payload.bonus !== want || Math.abs(payload.accuracy - accuracy) > 1e-12) {
+            bad.push('the first checkpoint after NEXT STAGE paid ' + payload.bonus + ' at accuracy ' + fmt(payload.accuracy, 4) + ', expected ' + want + ' at ' + fmt(accuracy, 4) + ' from the stage\'s own section');
+          }
+          // What the arena of the stage before would have made of it, had its counters been left: the
+          // clause shows something only in a run where the figures would then have been different.
+          const allC = correct + step.sectionCorrect, allW = wrong + step.sectionWrong;
+          const mixedAccuracy = allC + allW > 0 ? allC / (allC + allW) : 1;
+          const mixed = (allC + allW > 0 && mixedAccuracy >= C.CP_ACC ? C.PTS_CP_ACC : 0) + (lost + step.sectionLivesLost === 0 ? C.PTS_CP_NODAMAGE : 0);
+          if (mixed !== want || Math.abs(mixedAccuracy - accuracy) > 1e-12) facts.arenaWouldDiffer = true;
+        }
+      });
+    },
+    onStage: (T, ses) => {
+      const s = TG.Game.state;
+      const res = s.result;
+      // As the interface does on this results screen: the result is recorded, and the entry the stage
+      // would have made is kept as pending (LEVEL2 12.6).
+      TG.Save.recordRun(res);
+      TG.Save.setPending(difficulty, entryFor(res, 'BOT'));
+      step = {
+        levelId: s.levelId, carried: carriedBy(TG), typing: s.typing, rng: s.rng, picker: s.picker,
+        score: s.score, time: s.time, ink: s.ink, inkTotal: s.inkTotal, nextLifeAt: s.nextLifeAt, scoreLives: 0,
+        correct: s.typing.stats.correct, wrong: s.typing.stats.wrong, livesLost: s.run.livesLost, continues: s.run.continues,
+        sectionCorrect: s.typing.stats.section.correct, sectionWrong: s.typing.stats.section.wrong, sectionLivesLost: s.run.sectionLivesLost,
+        presses: ses.bot.presses.size, result: res
+      };
+      facts.rankAtStep = res.rank;
+      // The first stage's own result: one stage cleared, begun with nothing, the bests of before the run.
+      if (res.stages !== s.levelId - from + 1 || res.stageScore !== 0 || res.stageTime !== res.time || res.bestWpm !== CAMPAIGN_BEST.wpm || res.bestScore !== CAMPAIGN_BEST.score) {
+        bad.push('the result of level ' + s.levelId + ': stages ' + res.stages + ', stageScore ' + res.stageScore + ', stageTime ' + res.stageTime + ', bests ' + res.bestWpm + ' and ' + res.bestScore);
+      }
+      if (!TG.Game.canGo('results', 'playing')) bad.push('canGo refuses results -> playing');
+      stepEvents = [];
+      firstCheckpoint = false;
+      stepping = true;
+    }
+  });
+  const out = { report: null, bad: bad, facts: facts };
+  CAMPAIGN_RUNS.set(key, out);
+  if (session.done) {
+    out.report = session.finish();
+    return out;
+  }
+  const clears = [], ends = [];
+  TG.Events.on('level:clear', (p) => clears.push(p.result));
+  TG.Events.on('run:end', (p) => ends.push(p.result));
+  const r = out.report = session.run();
+  if (r.error || !r.finished || !step) return out;
+
+  // The end of the run: the result is the whole run's, with the stage's own part beside it.
+  const s = TG.Game.state;
+  const res = s.result;
+  const last = r.levels[r.levels.length - 1];
+  if (res.levelId !== last || res.cleared !== true || res.stages !== r.levels.length || clears.length !== r.levels.length || ends.length !== 0) {
+    bad.push('the last result: levelId ' + res.levelId + ', stages ' + res.stages + ', ' + clears.length + ' level:clear, ' + ends.length + ' run:end');
+  }
+  if (res.time !== s.time || !(res.time > step.time) || res.stageTime !== res.time - step.time || res.stageScore !== step.score || !(res.score > step.score) || res.score !== s.score) {
+    bad.push('the last result: time ' + res.time + ' (stage ' + res.stageTime + ', the step at ' + step.time + '), score ' + res.score + ' (carried ' + res.stageScore + ', the step at ' + step.score + ')');
+  }
+  if (!(res.typing.correct > step.correct) || !(res.typing.wordsCleared > step.result.typing.wordsCleared)) bad.push('the typing statistics of the last result are not the whole run\'s');
+  // The bests are those of before the run, though the save has held the first stage since its results screen.
+  if (res.bestWpm !== CAMPAIGN_BEST.wpm || res.bestScore !== CAMPAIGN_BEST.score || TG.Save.best(difficulty).score !== step.result.score) {
+    bad.push('bests on the last result ' + res.bestWpm + ' and ' + res.bestScore + ' (read at the start: ' + CAMPAIGN_BEST.wpm + ' and ' + CAMPAIGN_BEST.score + '); the save holds ' + TG.Save.best(difficulty).score);
+  }
+  if (res.rank !== rankFor(res)) bad.push('rank ' + res.rank + ', expected ' + rankFor(res));
+  const missing = RESULT_KEYS.filter((k) => !(k in res));
+  if (missing.length) bad.push('the last result lacks ' + missing.join(','));
+  if (TG.Game.nextStage() !== false || s.screen !== 'results' || s.result !== res) bad.push('nextStage went on from the last level');
+  // One entry for the run, made at its end: the pending entry goes with it and nothing is entered later.
+  TG.Save.recordRun(res);
+  const pos = TG.Save.addScore(difficulty, entryFor(res, 'BOT'));
+  TG.Save.clearPending();
+  const late = TG.Save.enterPending();
+  const mine = TG.Save.scores(difficulty).filter((e) => e.date !== '');
+  if (pos < 0 || late !== null || TG.Save.pending() !== null || mine.length !== 1 || mine[0].score !== res.score || mine[0].cleared !== true) {
+    bad.push('the table holds ' + mine.length + ' entries of the run (' + mine.map((e) => e.score).join(', ') + '), position ' + pos + ', a late entry ' + JSON.stringify(late));
+  }
+  if (TG.Save.getSetting(CLEARED_SETTING[difficulty]) !== last || !TG.Save.levelOpen(last)) bad.push('the save holds level ' + TG.Save.getSetting(CLEARED_SETTING[difficulty]) + ' as cleared on ' + difficulty);
+  return out;
+}
+
+// A continue inside the stage a run arrived in through NEXT STAGE: it returns to that level's checkpoint 0
+// with what the checkpoint banked, and the next points pay no life the carried score has already had.
+function campaignContinue(from, difficulty) {
+  return withSession({ campaign: true, levelId: from, difficulty: difficulty, profile: 'target', seed: 2, until: 'results' }, (session, TG) => {
+    const bad = [];
+    let stepped = false;
+    TG.Events.on('level:start', (p) => { if (!p.continued) stepped = true; });
+    while (!stepped && session.tick()) { /* run to NEXT STAGE */ }
+    if (!stepped) return result(false, difficulty + ': NEXT STAGE was not reached: ' + session.report.error);
+    const bank = JSON.parse(JSON.stringify(TG.Game.state.checkpoint));
+    const to = TG.Game.state.levelId;
+    const t0 = TG.Game.state.time;
+    if (!(bank.nextLifeAt > bank.score)) bad.push('checkpoint 0 banks a nextLifeAt of ' + bank.nextLifeAt + ' with a score of ' + bank.score);
+    session.bot.noType = true;
+    session.bot.noJump = true;
+    const playing = () => TG.Game.isSimScreen(TG.Game.state.screen);
+    while (playing() && TG.Game.state.time - t0 < 600 && session.stepOnce()) { /* lose every life */ }
+    const g = TG.Game.state;
+    if (g.screen !== 'gameOver' || g.checkpoint.index !== 0) return result(false, difficulty + ': no game over before the first checkpoint of level ' + to + ' (' + g.screen + ', ' + session.report.error + ')');
+    const moved = g.score !== bank.score || g.inkTotal !== bank.inkTotal;
+    const events = recordEvents(TG);
+    if (!TG.Game.continueRun()) return result(false, difficulty + ': continueRun returned false');
+    const c = TG.Game.state;
+    const ls = events.find((e) => e.name === 'level:start');
+    if (c.score !== bank.score || c.ink !== bank.ink || c.inkTotal !== bank.inkTotal || c.nextLifeAt !== bank.nextLifeAt) {
+      bad.push('after the continue ' + [c.score, c.ink, c.inkTotal, c.nextLifeAt].join('/') + ', banked ' + [bank.score, bank.ink, bank.inkTotal, bank.nextLifeAt].join('/'));
+    }
+    if (c.levelId !== to || c.player.x !== bank.x || c.player.lives !== c.config.lives || c.screen !== 'playing' || c.section !== 0 || !ls || ls.payload.levelId !== to || ls.payload.continued !== true) {
+      bad.push('the continue returned to level ' + c.levelId + ' at ' + c.player.x + ' with ' + c.player.lives + ' lives');
+    }
+    // Typing again. The lives paid for score are the thresholds passed from the banked nextLifeAt on, which
+    // is above the banked score: none on the first points.
+    session.bot.noType = false;
+    session.bot.noJump = false;
+    const scored = () => events.filter((e) => e.name === 'score:add').length;
+    while (scored() < 20 && playing() && session.stepOnce()) { /* the next points */ }
+    if (scored() < 20) return result(false, difficulty + ': no points after the continue (' + c.screen + ', ' + session.report.error + ')');
+    const every = c.config.extraLifeEvery;
+    const count = (start) => { let n = 0; for (let t = start; c.score >= t; t += every) n++; return n; };
+    const paid = events.filter((e) => e.name === 'life:gain' && e.payload.cause === 'score').length;
+    if (paid !== count(bank.nextLifeAt)) bad.push(paid + ' lives paid for score on the next points, expected ' + count(bank.nextLifeAt));
+    // The clause can fail: a checkpoint built as newRun builds it would have paid more.
+    if (!(count(c.config.extraLifeFirst) > count(bank.nextLifeAt)) || !moved) bad.push('the continue clause is not sensitive (carried score ' + bank.score + ')');
+    const r = session.run();
+    const res = TG.Game.state.result;
+    if (!r.finished || res.continues !== 1 || res.stages !== r.levels.length || res.bonuses.some((b) => b.id === 'nocontinue')) {
+      bad.push('after the continue the run ' + (r.finished ? 'ended with ' + res.continues + ' continues, stages ' + res.stages : 'did not finish: ' + r.error));
+    }
+    return bad.length ? result(false, difficulty + ': ' + bad.join('; ')) : result(true, String(bank.score));
+  });
+}
+
+// NEXT STAGE, then the run is ended at once from the pause menu: the result has the score and the rank of
+// the results screen it left, and the run counts as cleared on its entry (LEVEL2 12.5). On the way, the
+// step is taken with every timed power running and two shield charges held, which no bot run has on a
+// results screen: it ends the powers without an event and leaves no charge.
+function campaignQuit(from, difficulty) {
+  return withSession({ campaign: true, levelId: from, difficulty: difficulty, profile: 'target', seed: 1, until: 'results' }, (session, TG) => {
+    const C = TG.C;
+    let before = null, stepped = false;
+    const events = [];
+    session.opts.onStage = () => {
+      const s = TG.Game.state;
+      before = s.result;
+      s.power = { shield: 2, slowT: 3, quillT: 5, watchT: 2, last: 'watch' };
+      s.slowScale = C.HOURGLASS_SCALE;
+      s.finisherScale = C.FINISHER_SCALE;
+      TG.Events.on('*', (payload, name) => events.push(name));
+    };
+    TG.Events.on('level:start', (p) => { if (!p.continued) stepped = true; });
+    while (!stepped && session.tick()) { /* run to NEXT STAGE */ }
+    if (!stepped || !before) return result(false, difficulty + ': NEXT STAGE was not reached: ' + session.report.error);
+    const bad = [];
+    const n = TG.Game.state;
+    if (JSON.stringify(n.power) !== JSON.stringify({ shield: 0, slowT: 0, quillT: 0, watchT: 0, last: null }) || n.timeScale !== n.pace * n.assist || events.indexOf('power:end') !== -1) {
+      bad.push('after NEXT STAGE power is ' + JSON.stringify(n.power) + ', timeScale ' + n.timeScale + ', events ' + events.join(','));
+    }
+    const ends = [];
+    TG.Events.on('run:end', (p) => ends.push(p.result));
+    if (!TG.Game.pause() || !TG.Game.endRun()) return result(false, difficulty + ': pause and quit were refused');
+    const res = TG.Game.state.result;
+    const entry = entryFor(res, 'BOT'), was = entryFor(before, 'BOT');
+    if (res.cleared !== false || res.stages !== 1 || res.levelId !== before.levelId + 1 || ends.length !== 1 || ends[0] !== res) bad.push('the result: cleared ' + res.cleared + ', stages ' + res.stages + ', level ' + res.levelId);
+    if (res.rank !== before.rank || res.rank !== rankFor(res) || res.score !== before.score || res.bonuses.length !== 0) bad.push('rank ' + before.rank + ' and score ' + before.score + ' became ' + res.rank + ' and ' + res.score);
+    if (JSON.stringify(entry) !== JSON.stringify(was) || entry.cleared !== true) bad.push('the entry ' + JSON.stringify(was) + ' became ' + JSON.stringify(entry));
+    return bad.length ? result(false, difficulty + ': ' + bad.join('; ')) : result(true, res.rank);
+  });
+}
+
+// Where there is nothing to go on from, nextStage answers false and changes nothing: before a run, in
+// play, and on the results screen of a run that was ended.
+function campaignRefused(from) {
+  const env = simEnv();
+  const TG = env.TG;
+  const bad = [];
+  const refused = (where) => {
+    const before = JSON.stringify(TG.Game.snapshot());
+    const events = recordEvents(TG);
+    if (TG.Game.nextStage() !== false || JSON.stringify(TG.Game.snapshot()) !== before || events.length !== 0) bad.push('nextStage went on ' + where);
+  };
+  TG.Game.init();
+  refused('before a run');
+  TG.Game.newRun({ difficulty: 'medium', seed: 1, levelId: from, adaptive: false, assist: 1, tutorial: false });
+  for (let i = 0; i < 120; i++) TG.Game.step(TG.C.DT);
+  refused('in play');
+  TG.Game.pause();
+  refused('from the pause menu');
+  TG.Game.endRun();
+  if (TG.Game.state.screen !== 'results' || TG.Game.state.result.cleared !== false) bad.push('the run was not ended');
+  refused('from the results screen of a run that was ended');
+  if (env.errors.length || env.warnings.length) bad.push('console: ' + (env.errors[0] || env.warnings[0]));
+  return bad;
+}
+
+CHECKS['campaign'] = function (ctx) {
+  if (ctx.until !== 'results') return { pass: true, skip: true, detail: 'skipped with --until' };
+  const from = LEVELS[0];
+  if (LEVELS.indexOf(from + 1) === -1) return null;
+  const bad = campaignRefused(from);
+  const runs = [];
+  for (const d of DIFFICULTIES) {
+    for (const profile of ['target', 'floor']) {
+      for (const seed of SEEDS) {
+        const c = campaignRun(from, d, profile, seed);
+        const who = d + ' ' + profile + ' seed ' + seed;
+        runs.push(c);
+        if (c.report.error || !c.report.finished) bad.push(who + ' did not finish' + (c.report.error ? ': ' + c.report.error : ''));
+        else if (c.report.levels.length < 2 || c.report.stages.length !== c.report.levels.length) bad.push(who + ' played ' + c.report.stages.length + ' stages of ' + c.report.levels.join('+'));
+        for (const b of c.bad) bad.push(who + ': ' + b);
+      }
+    }
+  }
+  const continues = DIFFICULTIES.map((d) => campaignContinue(from, d));
+  const quits = DIFFICULTIES.map((d) => campaignQuit(from, d));
+  for (const r of continues.concat(quits)) if (!r.pass) bad.push(r.detail);
+  // The quit clause can fail only where the rank at the step was S or A: B needs no cleared stage.
+  if (!quits.some((r) => r.detail === 'S' || r.detail === 'A')) bad.push('no run held S or A when it went on, so the quit clause shows nothing');
+  const differ = runs.filter((c) => c.facts.arenaWouldDiffer).length;
+  if (differ === 0) bad.push('in no run would the arena before have changed the first checkpoint\'s figures, so that clause shows nothing');
+  const passed = runs.filter((c) => c.facts.thresholdsPassed > 0).length;
+  if (passed === 0) bad.push('in no run had the bonuses taken the score past an extra-life threshold, so that clause shows nothing');
+  if (bad.length) return result(false, bad.length + ' not met: ' + bad.slice(0, 3).join(' | '));
+  const first = (d) => runs.find((c) => c.report.difficulty === d && c.report.profile === 'target');
+  return result(true, runs.length + ' target and floor runs through levels ' + runs[0].report.levels.join('+') + ': the step carries score, clocks, statistics and pacing; ' +
+    DIFFICULTIES.map((d) => first(d).report.stages[1].start.lives).join(' / ') + ' lives, no shield, no life for a threshold the bonuses passed (' + passed + ' runs); checkpoint 0 banks ' +
+    DIFFICULTIES.map((d) => first(d).facts.carried).join(' / ') + ' (seed 1) and a continue returns to it; the first checkpoint reads its own section; ' +
+    'the last result is the run\'s, stages 2; one table entry; ended at once keeps rank ' + quits.map((r) => r.detail).join(' / '));
+};
+
+// The floor and window-use rows of the target table for a run that arrives through NEXT STAGE (LEVEL2 13.5):
+// the bounds of LEVEL_TARGETS for the level, on every seed, measured on the stage itself. The stage starts as
+// decision 21 has it: the difficulty's own lives, no shield charges, and the assist the stage before ended
+// at, which is the one its results screen saves.
+CHECKS['campaign-targets'] = function (ctx) {
+  const t = LEVEL_TARGETS[ctx.levelId];
+  if (!t) return null;
+  if (ctx.until !== 'results') return { pass: true, skip: true, detail: 'skipped with --until' };
+  const bad = [];
+  const of = (rows, d) => rows.filter((x) => x.d === d);
+  const perDifficulty = (fn) => DIFFICULTIES.map(fn).join(' / ');
+  const Difficulty = simEnv().TG.Difficulty;
+  const rows = { floor: [], target: [] };
+  for (const d of DIFFICULTIES) {
+    const own = Difficulty.get(d).lives;
+    for (const profile of ['floor', 'target']) {
+      for (const seed of SEEDS) {
+        const r = campaignRun(t.savedFrom, d, profile, seed).report;
+        const who = d + ' ' + profile + ' seed ' + seed;
+        const i = r.stages.findIndex((x) => x.levelId === ctx.levelId);
+        if (r.error || !r.finished || i < 1) { bad.push(who + ' did not finish' + (r.error ? ': ' + r.error : '')); continue; }
+        const stage = r.stages[i], before = r.stages[i - 1];
+        if (stage.start.lives !== own || stage.start.shield !== 0 || stage.start.assist !== before.result.assist) {
+          bad.push(who + ' started the stage with ' + stage.start.lives + ' lives, ' + stage.start.shield + ' shield charges and assist ' + fmt(stage.start.assist, 2) +
+            ' (' + own + ', 0 and ' + fmt(before.result.assist, 2) + ')');
+        }
+        rows[profile].push({ d: d, who: who, continues: stage.result.continues - stage.start.continues, u: stage.meanU, assist: stage.start.assist, lives: stage.start.lives });
+      }
+    }
+  }
+  for (const x of rows.floor) {
+    if (x.continues > t.floorContinues[x.d]) bad.push(x.who + ': ' + x.continues + ' continues in the stage (at most ' + t.floorContinues[x.d] + ')');
+  }
+  let noted = 0;
+  for (const x of rows.target) {
+    const under = typeof x.u !== 'number' || x.u < t.u[0];
+    if (under && x.d === t.uNoted && x.u >= t.uNotedFrom) noted++;
+    else if (under || x.u > t.u[1]) bad.push(x.who + ': window use ' + fmt(x.u, 3) + ' in the stage (' + t.u.join(' to ') + ')');
+  }
+  // One figure for each difficulty, from the runs that finished.
+  const each = (list, key, digits) => perDifficulty((d) => (of(list, d).length ? span(of(list, d).map((x) => x[key]), digits) : '-'));
+  const measured = 'through NEXT STAGE from level ' + t.savedFrom + ': floor continues in the stage ' + each(rows.floor, 'continues', 0) +
+    ' (at most ' + perDifficulty((d) => t.floorContinues[d]) + '), started with ' + each(rows.floor, 'lives', 0) +
+    ' lives, no shield and the assist of the stage before, ' + each(rows.floor, 'assist', 2) + '; window use ' + each(rows.target, 'u', 2) +
+    ' (' + t.u.join(' to ') + (noted ? '; ' + t.uNoted + ' under it on ' + noted + ' of ' + of(rows.target, t.uNoted).length + ' seeds: the noted exception' : '') + ')';
+  return bad.length ? result(false, bad.length + ' not met: ' + bad.slice(0, 3).join('; ') + ' | ' + measured) : result(true, measured);
+};
+
 // ===============================================================================================
 // 6. The matrix, milestones, output and the command line
 // ===============================================================================================
@@ -3892,8 +4398,9 @@ CHECKS['level1-events'] = function () {
 // list with `length`, `deterministic`, `no-presentation` and `words-by-difficulty`); the others are the
 // WP-E acceptance items of CONTRACT 12 written as checks; `anchored-kinds`, `attack-windows` and `spawn-skin`
 // are the groundwork of LEVEL2 13.1 in js/entities.js and js/boss.js, and `level1-events` is the regression
-// check of LEVEL2 13.5; `new-kinds`, `skins` and `watch-freeze` are the checks of those names in LEVEL2 13.5, and
-// `targets` holds the rows of its target table. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
+// check of LEVEL2 13.5; `new-kinds`, `skins`, `watch-freeze` and `campaign` are the checks of those names in LEVEL2 13.5,
+// `targets` holds the rows of its target table, and `campaign-targets` the two of them that are taken again for a
+// run that arrives through NEXT STAGE. A check marked perLevel is run once for each level played (LEVEL2 13.5, "Checks keyed by
 // level"); the others are run once. `deterministic` and `no-presentation` are marked as well, though 13.5
 // does not list them: each plays a whole run, and a level's own kinds are only met on that level. `skins`
 // is marked too: it reads the data of one level. A check marked dataOnly reads the level's data and plays
@@ -3935,7 +4442,9 @@ const CHECK_LIST = [
   { name: 'tutorial-slowdown', milestone: 5 },
   { name: 'adaptive-pacing', milestone: 5 },
   { name: 'level1-events', milestone: 6 },
-  { name: 'targets', milestone: 6, perLevel: true }
+  { name: 'targets', milestone: 6, perLevel: true },
+  { name: 'campaign', milestone: 6 },
+  { name: 'campaign-targets', milestone: 6, perLevel: true }
 ];
 
 const MILESTONES = {
@@ -3968,7 +4477,7 @@ function failReason(profile, r) {
 }
 
 function runLine(r, status) {
-  return 'RUN  level=' + r.levelId + ' difficulty=' + r.difficulty + ' profile=' + r.profile + ' seed=' + r.seed + ' wpm=' + r.wpm + ' acc=' + r.accuracy +
+  return 'RUN  level=' + r.levels.join('+') + ' difficulty=' + r.difficulty + ' profile=' + r.profile + ' seed=' + r.seed + ' wpm=' + r.wpm + ' acc=' + r.accuracy +
     ' adaptive=' + (r.adaptive ? 'on' : 'off') + ' until=' + r.until + ' result=' + status + ' finished=' + (r.finished ? 1 : 0) +
     ' time=' + fmt(r.time, 1) + ' score=' + r.score + ' lives=' + r.lives + ' continues=' + r.continues +
     ' dmgTyp=' + r.damageTypable + ' dmgOther=' + r.damageOther + ' repWpm=' + fmt(r.reportedWpm, 1) +
@@ -3985,12 +4494,20 @@ function runLine(r, status) {
 //                   word was cleared, or `missed` when it drifted off
 //   dangles, dangleNearest   dangles spawned; the least distance from an anchor to a hazard to duck, px
 //   startAssist     the assist the run started at (assist at the end is on the RUN line)
+// In a run of more than one stage (the campaign option) these are the last stage's, but for livesLost and
+// startAssist, which are the run's, and the line ends with:
+//   stages          each stage cleared, as level:score/time/lives/continues/u/assist: the run's score and time at
+//                   its results screen, the lives held there, the continues taken in the stage, its window use
+//                   and the assist it started at
 function measureLine(r) {
   const watch = r.watch.map((w) => w.tile + ':' + (w.live === null ? 'missed' : w.live)).join(',');
-  return 'MEASURE level=' + r.levelId + ' difficulty=' + r.difficulty + ' profile=' + r.profile + ' seed=' + r.seed +
+  const stages = r.stages.map((x) => [x.levelId + ':' + x.result.score, fmt(x.result.time, 1), x.result.lives, x.result.continues - x.start.continues,
+    fmt(x.meanU, 3), fmt(x.start.assist, 2)].join('/')).join(',');
+  return 'MEASURE level=' + r.levels.join('+') + ' difficulty=' + r.difficulty + ' profile=' + r.profile + ' seed=' + r.seed +
     ' u=' + fmt(r.meanU, 3) + ' fight=' + fmt(r.fightTime, 1) + ' livesLost=' + r.livesLost + ' minLives=' + r.minLives +
     ' liveAtFlag=' + r.liveAtFlag + ' cratesAtFlag=' + r.cratesAtFlag + ' pastFlag=' + r.pastFlag + ' watch=' + (watch || '-') +
-    ' dangles=' + r.dangles + ' dangleNearest=' + fmt(r.dangleNearest, 1) + ' startAssist=' + fmt(r.startAssist, 2);
+    ' dangles=' + r.dangles + ' dangleNearest=' + fmt(r.dangleNearest, 1) + ' startAssist=' + fmt(r.startAssist, 2) +
+    (r.levels.length > 1 ? ' stages=' + (stages || '-') : '');
 }
 
 function parseArgs(argv) {
@@ -4013,6 +4530,7 @@ function parseArgs(argv) {
     else if (a === '--verbose') o.verbose = true;
     else if (a === '--quick') o.quick = true;
     else if (a === '--measure') o.measure = true;
+    else if (a === '--campaign') o.campaign = true;
     else if (a === '--help') o.help = true;
     else bad.push(a);
   }
@@ -4024,6 +4542,8 @@ function parseArgs(argv) {
   if (o.milestone !== undefined && !MILESTONES[o.milestone]) bad.push('--milestone ' + o.milestone);
   if (o.seed !== undefined && !(Number.isInteger(o.seed))) bad.push('--seed');
   if (o.level !== undefined && !(Number.isInteger(o.level) && o.level >= 1)) bad.push('--level');
+  // A campaign starts at the first level and is played to the end of the last.
+  if (o.campaign && (o.level !== undefined || o.quick || o.milestone !== undefined || o.until !== undefined)) bad.push('--campaign goes without --level, --quick, --milestone and --until');
   const custom = o.wpm !== undefined || o.accuracy !== undefined || o.react !== undefined;
   if (custom && (!(o.wpm > 0) || !(o.accuracy > 0 && o.accuracy <= 1) || !(o.react >= 0) || !o.difficulty)) {
     bad.push('--wpm, --accuracy and --react go together, with --difficulty');
@@ -4033,7 +4553,7 @@ function parseArgs(argv) {
 }
 
 const OPTIONS_LINE = 'Options: --difficulty easy|medium|hard --profile floor|target|fast|exact --wpm N --accuracy A --react R ' +
-  '--seed N --level N --quick --adaptive on|off --until checkpoint1|checkpoint2|boss|results --check NAME --milestone N --measure --verbose --help';
+  '--seed N --level N --quick --campaign --adaptive on|off --until checkpoint1|checkpoint2|boss|results --check NAME --milestone N --measure --verbose --help';
 
 function main(argv) {
   const { opts, bad } = parseArgs(argv);
@@ -4051,8 +4571,9 @@ function main(argv) {
     console.log('SUMMARY runs=0 passed=0 checks=0 checksPassed=0 result=NOT_BUILT');
     return 1;
   }
-  // One level with --level, the first with --quick, every level otherwise.
-  const levels = opts.level !== undefined ? [opts.level] : (opts.quick ? LEVELS.slice(0, 1) : LEVELS);
+  // One level with --level, the first with --quick, every level otherwise. With --campaign the runs start
+  // at the first level and go on through the others.
+  const levels = opts.level !== undefined ? [opts.level] : (opts.quick || opts.campaign ? LEVELS.slice(0, 1) : LEVELS);
 
   // What to run.
   let profiles = PROFILES;
@@ -4075,6 +4596,7 @@ function main(argv) {
   } else if (MILESTONES_BUILT < 6 && !opts.check && !opts.custom && until === 'results') {
     console.log('NOTE milestones ' + (MILESTONES_BUILT + 1) + ' to 6 are not built yet (second WP-E engineer); runs to "results" cannot finish until the boss is built.');
   }
+  if (opts.campaign) checks = ['campaign', 'campaign-targets'];
   if (opts.check) {
     checks = [opts.check];
     runsWanted = false;
@@ -4090,7 +4612,7 @@ function main(argv) {
   const ctxs = levels.map((levelId) => (all[levelId] = { until: until, levelId: levelId, runs: {}, all: all }));
 
   if (opts.custom) {
-    const r = runBot({ levelId: levels[0], difficulty: opts.difficulty, wpm: opts.wpm, accuracy: opts.accuracy, react: opts.react,
+    const r = runBot({ levelId: levels[0], campaign: !!opts.campaign, difficulty: opts.difficulty, wpm: opts.wpm, accuracy: opts.accuracy, react: opts.react,
       seed: opts.seed !== undefined ? opts.seed : 1, until: until, profile: 'custom',
       adaptive: opts.adaptive ? opts.adaptive === 'on' : false, verbose: opts.verbose, printLog: opts.verbose });
     console.log(runLine(r, 'INFO') + (r.error ? ' error="' + clip(r.error) + '"' : ''));
@@ -4105,7 +4627,7 @@ function main(argv) {
       for (const profile of profiles) {
         for (const seed of seeds) {
           const adaptive = opts.adaptive ? opts.adaptive === 'on' : PROFILE_ADAPTIVE[profile];
-          const r = runBot({ levelId: ctx.levelId, difficulty: d, profile: profile, seed: seed, until: until, adaptive: adaptive, verbose: opts.verbose, printLog: false });
+          const r = runBot({ levelId: ctx.levelId, campaign: !!opts.campaign, difficulty: d, profile: profile, seed: seed, until: until, adaptive: adaptive, verbose: opts.verbose, printLog: false });
           const pass = passCondition(profile, r);
           runs++;
           if (pass) runsPassed++;
@@ -4118,9 +4640,11 @@ function main(argv) {
       }
     }
     // The checks that read whole runs of a profile take the matrix's own (profileRuns), when it played all
-    // of them as the profile has them.
-    if (!filtered && !opts.adaptive) for (const profile of Object.keys(played)) ctx.runs[profile] = played[profile];
+    // of them as the profile has them. Campaign runs are not runs of one level.
+    if (!filtered && !opts.adaptive && !opts.campaign) for (const profile of Object.keys(played)) ctx.runs[profile] = played[profile];
   }
+  // With --campaign the checks about one level are asked for every level the runs went through.
+  const checked = opts.campaign ? LEVELS.map((levelId) => ctxFor(ctxs[0], levelId)) : ctxs;
 
   // With --quick, the levels that are not played: each still gets its dataOnly checks.
   const unplayed = opts.quick && opts.level === undefined ? LEVELS.slice(1).map((levelId) => ({ until: until, levelId: levelId, runs: {}, all: all })) : [];
@@ -4128,7 +4652,7 @@ function main(argv) {
   for (const name of checks) {
     const entry = CHECK_LIST.find((c) => c.name === name);
     const perLevel = !!(entry && entry.perLevel);
-    for (const ctx of perLevel ? (entry.dataOnly ? ctxs.concat(unplayed) : ctxs) : ctxs.slice(0, 1)) {
+    for (const ctx of perLevel ? (entry.dataOnly ? checked.concat(unplayed) : checked) : checked.slice(0, 1)) {
       const label = 'CHECK name=' + name + (perLevel ? ' level=' + ctx.levelId : '');
       let r;
       try {

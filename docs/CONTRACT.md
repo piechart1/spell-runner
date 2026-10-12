@@ -391,8 +391,15 @@ TG.Save.addScore(difficulty, entry) -> number     // 0-based position, or -1; al
 TG.Save.best(difficulty) -> { wpm, score }
 TG.Save.assist(difficulty) -> number    // the saved assist value for the difficulty, clamped to ASSIST_MIN_CONTINUE..ASSIST_MAX; 1 when nothing is saved
 TG.Save.recordRun(result) -> void       // updates best wpm and best score for result.difficulty and stores result.assist; also saves.
-                                        // A result with adaptive === false (adaptive pacing off) leaves the saved assist as it was
-TG.Save.resetScores() -> void
+                                        // A result with adaptive === false (adaptive pacing off) leaves the saved assist as it was.
+                                        // A result with cleared === true raises the `cleared` setting of the difficulty to result.levelId
+TG.Save.resetScores() -> void           // the tables and the bests only: the settings, the `cleared` numbers among them, are kept
+TG.Save.levelOpen(levelId) -> boolean   // level 1: true. Level 2: true once level 1 has been cleared on any difficulty (section 5.12)
+TG.Save.pending() -> { difficulty, entry } | null   // a copy of the pending entry (section 5.12)
+TG.Save.setPending(difficulty, entry) -> boolean    // keeps the entry when its score would reach the table, and saves; false, with nothing kept, when not
+TG.Save.clearPending() -> void          // forgets the pending entry and saves; writes nothing when there is none
+TG.Save.enterPending() -> { difficulty, pos } | null   // adds the pending entry to its table under settings.initials, forgets it and saves;
+                                        // null when there was none or its score no longer reaches the table
 ```
 
 - Every storage access is inside `try/catch`, including the first read of `root.localStorage`, which throws in some browsers when storage is blocked. If storage is missing, throws, or holds invalid JSON, the module works from memory and never throws.
@@ -787,6 +794,9 @@ TG.Game.pause() -> boolean               // from playing, bossIntro or boss: sto
                                          // From lifeLost: sets state.pausePending = true and returns false (section 9.2). Elsewhere: false
 TG.Game.resume() -> boolean              // from paused: returns to resumeTo
 TG.Game.continueRun() -> boolean         // from gameOver or paused: DESIGN 6 "Continue". Goes to 'playing', or 'bossIntro' at the boss checkpoint. See below
+TG.Game.nextStage() -> boolean           // from results, when state.result.cleared and TG.Levels[state.levelId + 1] exists: the same run goes on
+                                         // into that level (LEVEL2 12.2). Goes to 'playing' and emits screen:change, level:start with
+                                         // continued: false, section:enter for section 0. Elsewhere: false, and nothing changes
 TG.Game.endRun() -> boolean              // from gameOver or paused: builds state.result with cleared: false, goes to 'results'
 TG.Game.addScore(points, info) -> void   // info: { reason, x, y }. Adds, checks extra-life thresholds, emits score:add
 TG.Game.addLife(cause) -> boolean        // false at MAX_LIVES
@@ -1765,27 +1775,31 @@ summary = {
 
 The results screen leaves out the AVERAGE REACTION line when `avgReaction` is 0 and the SLOWEST KEYS line when `slowKeys` is empty.
 
-`state.result`, built by `TG.Game` when the run finishes (`level:clear` or `endRun`):
+`state.result`, built by `TG.Game` when a stage finishes (`level:clear` or `endRun`). A run can cover two stages (`TG.Game.nextStage`, LEVEL2 12.2): each stage that ends has a result of its own, and `nextStage` sets `state.result` back to `null`.
 
 ```js
 result = {
-  cleared: true,            // false when the run was ended from game over
+  cleared: true,            // the stage that has just ended was cleared; false when the run was ended from game over or the pause menu
   levelId: 1, difficulty: 'medium',
-  score: 48210,             // final, bonuses included
+  score: 48210,             // the run's score, bonuses included
   baseScore: 41210,
   bonuses: [ { id: 'lives', label: 'LIVES X3', points: 3000 }, { id: 'accuracy', label: 'ACCURACY 95%', points: 3000 }, { id: 'nocontinue', label: 'NO CONTINUES', points: 2000 } ],
-  time: 301.4,              // s, real
-  typing: { /* summary, as above */ },
+  time: 301.4,              // s, real: the whole run's
+  typing: { /* summary, as above: the whole run's */ },
   ink: 131, livesLost: 2, lives: 3, continues: 0,
-  rank: 'A',                // 'S' | 'A' | 'B' | 'C' (DESIGN 8.6)
+  rank: 'A',                // 'S' | 'A' | 'B' | 'C' (DESIGN 8.6), from the whole run. S and A need stages > 0
   suggestion: null,         // 'READY FOR MEDIUM?' | 'READY FOR HARD?' | null. Tier 2: always null if left out
-  bestWpm: 26.0,            // previous personal best for the difficulty, 0 if none
-  assist: 1.0,              // assist value at the end of the run
-  adaptive: true            // adaptive pacing was on for the run; TG.Save.recordRun stores assist only when this is not false
+  bestWpm: 26.0,            // personal best WPM for the difficulty before the run, 0 if none
+  assist: 1.0,              // assist value at the end of the stage
+  adaptive: true,           // adaptive pacing was on for the run; TG.Save.recordRun stores assist only when this is not false
+  stages: 1,                // stages the run has cleared, this one included: 0, 1 or 2
+  stageScore: 0,            // the score the run held when this stage began: 0 in a run's first stage, the carried total after nextStage
+  stageTime: 301.4,         // s, real: this stage's own time. Equal to time in a run's first stage
+  bestScore: 40000          // best score for the difficulty before the run, 0 if none
 };
 ```
 
-End-of-level bonuses are added only when `cleared` is true.
+End-of-level bonuses are added only when `cleared` is true. On a high score entry, a run counts as cleared when `stages > 0` (LEVEL2 12.5).
 
 ### 5.12 Save data and high score entry
 
@@ -1804,11 +1818,16 @@ data = {
     tutorialDone: false,    // set true the first time checkpoint 1 is reached
     lastDifficulty: 'medium',
     initials: 'PIP',
-    worldScores: true       // world scores (section 4.22): send finished runs and show the world boards. false: no request is made
+    worldScores: true,      // world scores (section 4.22): send finished runs and show the world boards. false: no request is made
+    lastLevel: 1,           // the stage last chosen on the STAGE row: 1 or 2, and never a level that is not open
+    clearedEasy: 0,         // the highest level cleared on each difficulty: 0, 1 or 2. TG.Save.recordRun raises the one
+    clearedMedium: 0,       // of result.difficulty to result.levelId when result.cleared. Level 2 is open when any of the
+    clearedHard: 0          // three is 1 or more (TG.Save.levelOpen)
   },
   scores: { easy: [ /* SCORE_SLOTS entries */ ], medium: [ /* ... */ ], hard: [ /* ... */ ] },
   best:   { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } },
-  assist: { easy: 1, medium: 1, hard: 1 }
+  assist: { easy: 1, medium: 1, hard: 1 },
+  pending: null             // { difficulty, entry }: the entry of a run that went on to the next stage (LEVEL2 12.6), or null
 };
 
 entry = {
@@ -1817,10 +1836,12 @@ entry = {
   wpm: 28,                  // rounded
   accuracy: 95,             // whole percent
   rank: 'A',
-  cleared: true,
+  cleared: true,            // the run cleared at least one stage
   date: '2026-09-29'        // set by TG.UI; '' for seeded entries
 };
 ```
+
+The version is 1, and the fields added for Level 2 (`lastLevel`, the three `cleared` numbers and `pending`) are added under it: nothing is migrated (LEVEL2 12.6). A record stored before them loads as it is and takes their defaults, with one exception: when it has none of the three `cleared` numbers, the number of a difficulty is 1 if its table holds an entry with `cleared: true` and a date. A number setting is kept as a whole number in its range, and a value that is not a number takes the default.
 
 Seeded entries (name, score, wpm, accuracy, rank), highest first:
 
@@ -2505,9 +2526,10 @@ Listeners: A = `TG.Audio`, E = `TG.Effects`, H = `TG.Hud`, U = `TG.UI`, M = `TG.
 | `gameOver` | `results` | Esc or countdown reaches 0: `TG.Game.endRun` | UI |
 | `results` | `highScoreEntry` | Confirm, and `TG.Save.qualifies` | UI |
 | `results` | `title` | Confirm, score does not qualify | UI |
+| `results` | `playing` | NEXT STAGE after a cleared stage, when there is a next level: `TG.Game.nextStage` | UI |
 | `highScoreEntry` | `title` | Initials confirmed | UI |
 
-Any other transition is refused by `setScreen`. Two calls are exceptions. `TG.Game.newRun` sets `playing` from any screen, so tests can start a run without the menus. `TG.Game.init` sets `boot` and emits `screen:change` with `from: null`; no transition leads back to `boot`.
+Any other transition is refused by `setScreen`. Three calls are exceptions. `TG.Game.newRun` sets `playing` from any screen, so tests can start a run without the menus. `TG.Game.nextStage` sets `playing` itself, as `newRun` does, and only from the `results` screen of a cleared stage with a level after it; elsewhere it returns false and changes nothing. `TG.Game.init` sets `boot` and emits `screen:change` with `from: null`; no transition leads back to `boot`.
 
 ### 9.2 Rules
 

@@ -8,8 +8,15 @@
 // story and goodbye panels), difficultySelect, howToPlay, paused (menu and resume countdown), gameOver
 // (continue countdown), results (tally and rank) and highScoreEntry. It reads keys from the TG.Input
 // queue in update(), changes screens only through TG.Game (setScreen, newRun, resume, continueRun,
-// endRun) and emits the ui:* events that TG.Audio plays. It also does the saving that follows from
-// play (CONTRACT 4.20), because the simulation never writes to TG.Save.
+// endRun, nextStage) and emits the ui:* events that TG.Audio plays. It also does the saving that follows
+// from play (CONTRACT 4.20), because the simulation never writes to TG.Save.
+//
+// Stages (docs/LEVEL2.md section 12). A run can cover two stages. After a cleared stage that has a level
+// after it, the results screen offers NEXT STAGE (Enter) or TITLE (Esc); NEXT STAGE goes on with the same
+// run through TG.Game.nextStage, and the run is entered once, when it ends: the initials screen, the table
+// of this computer and the world scores all come after its last results screen. Once Level 1 has been
+// cleared on this computer (TG.Save.levelOpen), the difficulty screen has a STAGE row that starts a run
+// at Level 2, and the title's idle rotation shows Level 2's premise in turn with Level 1's.
 //
 // EXIT on the title menu emits ui:exit, which TG.Main answers by trying to close the window (this
 // file never touches the window), and opens the goodbye panel, which is what stays on screen when
@@ -92,6 +99,22 @@
 
   var PREMISE = 'BARON VON BURROW HAS DUG UP THE MEADOW AND CARRIED OFF ITS WORDS. ' +
     'PIP THE SCRIBE SETS OUT TO SPELL THEM BACK.';
+  // Level 2's premise (LEVEL2 section 2): three lines at the story panel's width of 34 letters.
+  var PREMISE_2 = 'THE BARON FLED TO LADY RATCHET, WHO WINDS WORDS INTO CLOCKWORK. ' +
+    'PIP CLIMBS DOWN AFTER HIM.';
+
+  // The sample words of a stage on the STAGE row of the difficulty screen (LEVEL2 7.5), by level id: one
+  // word of the level's flavour from each difficulty. Level 1 has no entry: the three panels show its words.
+  var STAGE_SAMPLES = { 2: ['gear', 'piston', 'clockwork'] };
+
+  // The line under STAGE N CLEAR! that leads on from a level's ending (LEVEL2 12.4, decision 25), by
+  // level id.
+  var HOOK = { 2: 'A COLD WIND BLOWS DOWN THE SHAFT.' };
+
+  // The bottom of the results screen after a cleared stage that has a level after it (LEVEL2 12.1): what
+  // the two keys do, and over it, for a run with an entry to make, what the choice means.
+  var STRIP_KEYS = 'ENTER: NEXT STAGE   ESC: TITLE';
+  var STRIP_LINE = 'THE SCORE IS ENTERED WHEN THE RUN ENDS';
 
   // Shown on a touch screen until the first key arrives (TG.Main, DESIGN 2).
   var KEYBOARD_NOTE = 'SPELL RUNNER NEEDS A KEYBOARD.';
@@ -147,8 +170,10 @@
     { sprite: 'pw_quill', name: 'GOLDEN QUILL', text: '2X POINTS' },
     { sprite: 'pw_blast', name: 'INK BLAST', text: 'CLEARS WORDS' },
     { sprite: 'pw_cap', name: 'RED CAP', text: 'EXTRA LIFE' },
+    { sprite: 'pw_watch', name: 'POCKET WATCH', text: 'STOPS TIME' },
     { sprite: 'item_ink', name: 'INK DROPS', text: '100 = 1 LIFE' }
   ];
+  var POWER_PITCH = 18;           // px per row: seven rows from y 62 end above the bottom strip at y 192
 
   // Keyboard rows for the How to Play picture, with the finger colour of each key (DESIGN 13.4:
   // little CORAL, ring GOLD, middle GRASS, index AQUA, mirrored per hand).
@@ -204,6 +229,9 @@
   var lastSent = null;            // the same, kept until the next run starts: the WORLD page of that difficulty
                                   // shows what became of the score each time the panel is opened
   var recordedResult = null;      // the result passed to TG.Save.recordRun
+  var unlockedResult = null;      // the result whose recording opened the next level for the first time
+  var shownWpm = 0;               // the highest WPM, rounded, on a results screen the run in play went on from
+                                  // (NEXT STAGE); 0 while a run is in its first stage
   var focusLost = false;          // the window has no focus: the continue countdown waits (TG.Main)
   var keyboardHint = false;       // a touch screen with no keyboard seen yet (TG.Main)
 
@@ -250,6 +278,39 @@
 
   function setSetting(key, value) {
     if (TG.Save && typeof TG.Save.setSetting === 'function') TG.Save.setSetting(key, value);
+  }
+
+  // The data of a level (TG.Levels), or null when there is no such level or no level file is loaded.
+  function levelData(id) {
+    var levels = TG.Levels;
+    return levels && Object.prototype.hasOwnProperty.call(levels, id) && levels[id] ? levels[id] : null;
+  }
+
+  // The level can be started on this computer (LEVEL2 12.3): its data is loaded and TG.Save says it is
+  // open. Level 2 opens when Level 1 has been cleared on any difficulty.
+  function levelOpen(id) {
+    try {
+      return !!(levelData(id) && TG.Save && typeof TG.Save.levelOpen === 'function' && TG.Save.levelOpen(id));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // The level NEXT STAGE leads to from a result (LEVEL2 12.1), or null: the stage that has just ended
+  // was cleared and there is a level after it. It is what TG.Game.nextStage accepts, so a level whose id
+  // is not a number (the harness plays one called 'test') has no level after it.
+  function nextLevel(res) {
+    return res && res.cleared === true && typeof res.levelId === 'number' ? levelData(res.levelId + 1) : null;
+  }
+
+  // The pending entry (LEVEL2 12.6): calls TG.Save[fn], which is setPending, clearPending or
+  // enterPending. Without the function, or if the call fails, nothing happens.
+  function pendingCall(fn, a, b) {
+    try {
+      if (TG.Save && typeof TG.Save[fn] === 'function') TG.Save[fn](a, b);
+    } catch (e) {
+      report('TG.Save.' + fn, e);
+    }
   }
 
   // World scores (TG.Board). Calls TG.Board[fn]; without the module, or if the call fails, the answer
@@ -531,24 +592,41 @@
     }
   }
 
-  // The Level 1 backdrop behind the title. TG.Render.drawBackdrop draws it when WP-F is present; the
-  // private fallback below follows CONTRACT 6.5 for the day palette.
-  function backdrop(ctx, camX, time) {
+  // The scene behind the title: a backdrop with one of its palettes, and the two ground tiles. Level 1's
+  // is the scene of the menu. The idle rotation also shows a later level's (LEVEL2 12.4), read from the
+  // level's theme and its first section; a level that names no backdrop has Level 1's.
+  var MEADOW = { backdrop: 'meadow', palette: 'day', top: 'tile_grass', fill: 'tile_soil' };
+
+  function sceneOf(level) {
+    var data = level === 1 ? null : levelData(level);
+    var theme = data && data.theme;
+    if (!theme || typeof theme.backdrop !== 'string') return MEADOW;
+    var tiles = theme.tiles || {};
+    var first = Array.isArray(data.sections) && data.sections[0] ? data.sections[0] : {};
+    return {
+      backdrop: theme.backdrop, palette: typeof first.palette === 'string' ? first.palette : MEADOW.palette,
+      top: typeof tiles.top === 'string' ? tiles.top : MEADOW.top, fill: typeof tiles.fill === 'string' ? tiles.fill : MEADOW.fill
+    };
+  }
+
+  // The backdrop of a scene. TG.Render.drawBackdrop draws it when WP-F is present; the private fallback
+  // below follows CONTRACT 6.5.
+  function backdrop(ctx, scene, camX, time) {
     var R = TG.Render;
     if (R && typeof R.drawBackdrop === 'function') {
       try {
-        R.drawBackdrop(ctx, 'meadow', 'day', camX, time, 0);
+        R.drawBackdrop(ctx, scene.backdrop, scene.palette, camX, time, 0);
         return;
       } catch (e) {
         report('TG.Render.drawBackdrop', e);
       }
     }
-    fallbackBackdrop(ctx, camX, time);
+    fallbackBackdrop(ctx, scene, camX, time);
   }
 
-  function fallbackBackdrop(ctx, camX, time) {
-    var bd = TG.Backdrops && TG.Backdrops.meadow;
-    var pal = bd && bd.palettes && bd.palettes.day;
+  function fallbackBackdrop(ctx, scene, camX, time) {
+    var bd = TG.Backdrops && TG.Backdrops[scene.backdrop];
+    var pal = bd && bd.palettes && bd.palettes[scene.palette];
     if (!pal || !Array.isArray(pal.sky)) {
       fill(ctx, 0, 0, SW, GROUND, SKY);
       return;
@@ -577,16 +655,16 @@
     }
   }
 
-  // Ground tiles (L5) under the title backdrop.
-  function ground(ctx, camX) {
+  // Ground tiles (L5) under the title backdrop: the scene's top and fill tiles.
+  function ground(ctx, scene, camX) {
     var first = Math.floor(camX / 16);
-    var tiles = hasSprite('tile_grass') && hasSprite('tile_soil');
+    var tiles = hasSprite(scene.top) && hasSprite(scene.fill);
     for (var i = 0; i <= Math.ceil(SW / 16) + 1; i++) {
       var col = first + i;
       var x = col * 16 - camX;
       if (tiles) {
-        spr(ctx, 'tile_grass', col % 2, x, GROUND);
-        spr(ctx, 'tile_soil', (col + 1) % 2, x, GROUND + 16);
+        spr(ctx, scene.top, col % 2, x, GROUND);
+        spr(ctx, scene.fill, (col + 1) % 2, x, GROUND + 16);
       } else {
         fill(ctx, x, GROUND, 16, 4, GRASS);
         fill(ctx, x, GROUND + 4, 16, SH - GROUND - 4, SOIL);
@@ -602,6 +680,24 @@
     spr(ctx, 'boss_arm', 'rest', bx - 20, by - 26);
     spr(ctx, 'boss_mound', 0, bx, by);
   }
+
+  // Lady Ratchet, composed from her parts as TG.Render draws her at rest (LEVEL2 10.1): body, far arm,
+  // the key on her back, head, near arm and the engine she stands in.
+  function ratchet(ctx, bx, by, t) {
+    spr(ctx, 'boss2_body', Math.floor(t) % 2, bx, by - 8);
+    spr(ctx, 'boss2_arm', 'rest', bx + 20, by - 26, { flipX: true });
+    spr(ctx, 'boss2_key', Math.floor(t * 2) % 4, bx + 14, by - 30);
+    spr(ctx, 'boss2_head', Math.floor(t) % 4 === 3 ? 'laugh' : 'normal', bx - 2, by - 34);
+    spr(ctx, 'boss2_arm', 'rest', bx - 20, by - 26);
+    spr(ctx, 'boss2_engine', 'shut', bx, by);
+  }
+
+  // The story panel of the title (DESIGN 12; LEVEL2 12.4), by level id: the level's premise and the
+  // villain who stands beside Pip. The idle rotation shows the panels of the open levels in turn.
+  var STORY = {
+    1: { text: PREMISE, villain: baron },
+    2: { text: PREMISE_2, villain: ratchet }
+  };
 
   // ---------------------------------------------------------------------------------------------
   // 3. Screen set-up and the saving that follows from play
@@ -675,13 +771,18 @@
     return v === true ? 'ON' : 'OFF';
   }
 
-  // Starts a run from the menus (CONTRACT 4.20).
+  // Starts a run from the menus (CONTRACT 4.20), at the stage last chosen on the STAGE row while that
+  // level is open (LEVEL2 12.3), and otherwise at Level 1.
   function startRun(difficulty) {
     var name = NAMES.indexOf(difficulty) !== -1 ? difficulty : getSetting('lastDifficulty', 'medium');
+    var level = getSetting('lastLevel', 1);
+    if (level !== 1 && !levelOpen(level)) level = 1;
     setSetting('lastDifficulty', name);
     lastSent = null;                             // the status line of the run before goes with it
+    shownWpm = 0;                                // and so does the WPM it showed on the way
+    pendingCall('clearPending');                 // a pending entry belongs to the run before
     emit('ui:select');
-    callGame('newRun', { difficulty: name, seed: (Date.now() >>> 0) });
+    callGame('newRun', { difficulty: name, seed: (Date.now() >>> 0), levelId: level });
     boardCall('stat', 'start');                  // the owner's daily totals; nothing about the player
   }
 
@@ -708,8 +809,12 @@
 
   function setupTitle(from) {
     var animate = from === 'boot' || from === 'results' || from === 'highScoreEntry' || from === null;
+    // A run that reaches the title has ended in the game, by whatever route, so the entry kept for it
+    // at NEXT STAGE is not needed (LEVEL2 12.6).
+    pendingCall('clearPending');
     var t = {
-      panel: 'menu', auto: false, rotT: 0, idleT: 0,
+      // story: the level whose premise the story panel shows, and whose scene is behind the idle rotation.
+      panel: 'menu', auto: false, rotT: 0, idleT: 0, story: 1,
       stamped: animate ? 0 : LOGO_LETTERS, stampT: 0,
       opt: 0, confirmReset: false, resetT: 0, highlight: null, byeT: 0,
       // The High Scores panel while world scores are on: paged, the page shown, the next WORLD page of
@@ -827,14 +932,20 @@
           t.panel = 'story';
           t.auto = true;
           t.rotT = 0;
+          t.story = 1;
           boardCall('refresh');                // once per rotation: the boards are known when it reaches them
         }
       } else if (t.auto) {
         t.rotT += dt;
         if (t.rotT >= ROTATE_TIME) {
           t.rotT = 0;
-          if (t.panel === 'story') autoScores(t);
-          else t.panel = 'story';
+          if (t.panel === 'story') {
+            autoScores(t);
+          } else {
+            // The premise of the next open level, and after the last one Level 1's again (LEVEL2 12.4).
+            t.panel = 'story';
+            t.story = STORY[t.story + 1] && levelOpen(t.story + 1) ? t.story + 1 : 1;
+          }
         }
       }
       return;
@@ -959,12 +1070,14 @@
   function drawTitle(ctx) {
     var t = S;
     var camX = Math.floor(clock * TITLE_SPEED);
-    backdrop(ctx, camX, clock);
-    ground(ctx, camX);
+    // The idle rotation shows a level's premise, and the high scores after it, over that level's scene.
+    var scene = sceneOf(t.auto ? t.story : 1);
+    backdrop(ctx, scene, camX, clock);
+    ground(ctx, scene, camX);
     if (t.panel === 'menu') spr(ctx, 'hero_run', Math.floor(clock * 12) % 6, 60, GROUND);
     if (t.panel === 'scores') drawScores(ctx, t);
     else if (t.panel === 'options') drawOptions(ctx, t);
-    else if (t.panel === 'story') drawStory(ctx);
+    else if (t.panel === 'story') drawStory(ctx, t);
     else if (t.panel === 'bye') drawBye(ctx);
     else drawMenu(ctx, t);
   }
@@ -1147,13 +1260,14 @@
     centerText(ctx, 'ENTER OR ARROWS: CHANGE   ESC: BACK', y + 186, STONE);
   }
 
-  function drawStory(ctx) {
+  function drawStory(ctx, t) {
     var x = 24, y = 26, w = SW - 48, h = 150;
+    var story = STORY[t.story] || STORY[1];
     panelBox(ctx, x, y, w, h, SILVER);
-    var lines = wrap(PREMISE, 34);
+    var lines = wrap(story.text, 34);
     for (var i = 0; i < lines.length; i++) centerText(ctx, lines[i], y + 14 + i * 12, WHITE);
     spr(ctx, 'hero_idle', Math.floor(clock * 2) % 2, 120, y + h - 8, { scale: 2 });
-    baron(ctx, 272, y + h - 8, clock);
+    story.villain(ctx, 272, y + h - 8, clock);
     if (keyboardHint) titleFooter(ctx, KEYBOARD_NOTE, GOLD);
     else titleFooter(ctx, 'PRESS ANY KEY', blink(1, 0.65) ? WHITE : STONE);
   }
@@ -1172,10 +1286,22 @@
   // 4c. Difficulty select
   // ---------------------------------------------------------------------------------------------
 
+  // The stages of the STAGE row (LEVEL2 12.3): the ids of the levels that are open, in order, once there
+  // is more than one. null before the unlock: the screen then has no row and is as it was.
+  function openStages() {
+    var list = [1];
+    while (levelOpen(list.length + 1)) list.push(list.length + 1);
+    return list.length > 1 ? list : null;
+  }
+
+  // stages: the STAGE row's stages, or null when there is no row. level: the stage the row shows, which
+  // is the one last chosen there.
   function setupDifficulty(from) {
     var last = from === 'howToPlay' && chosenDifficulty ? chosenDifficulty : getSetting('lastDifficulty', 'medium');
     var i = NAMES.indexOf(last);
-    return { cursor: i < 0 ? 1 : i, typed: '' };
+    var stages = openStages();
+    var level = getSetting('lastLevel', 1);
+    return { cursor: i < 0 ? 1 : i, typed: '', stages: stages, level: stages && stages.indexOf(level) !== -1 ? level : 1 };
   }
 
   // Confirming a difficulty also asks the world scores for a run token (TG.Board.startRun), so that it
@@ -1191,7 +1317,14 @@
     var d = S;
     for (var i = 0; i < acts.length; i++) {
       var a = acts[i];
-      if (a.act === 'left' || a.act === 'right' || a.act === 'up' || a.act === 'down') {
+      if (d.stages && (a.act === 'up' || a.act === 'down')) {
+        // The STAGE row: Up and Down go round the open stages, and the choice is remembered.
+        var at = d.stages.indexOf(d.level);
+        d.level = d.stages[(at + (a.act === 'up' ? d.stages.length - 1 : 1)) % d.stages.length];
+        setSetting('lastLevel', d.level);
+        emit('ui:move');
+        d.typed = '';
+      } else if (a.act === 'left' || a.act === 'right' || a.act === 'up' || a.act === 'down') {
         var dir = (a.act === 'left' || a.act === 'up') ? -1 : 1;
         var next = Math.max(0, Math.min(NAMES.length - 1, d.cursor + dir));
         if (next !== d.cursor) {
@@ -1240,9 +1373,33 @@
     for (var i = 0; i < NAMES.length; i++) drawDiffPanel(ctx, i, i === d.cursor);
     var name = NAMES[d.cursor];
     var info = diffInfo(name);
-    var lines = DETAIL[name].concat(['FOR ' + info.wpmGuide + ' WORDS A MINUTE. ' + info.lives + ' LIVES.']);
-    for (var k = 0; k < lines.length; k++) centerText(ctx, lines[k], 158 + k * 12, k === 2 ? GOLD : WHITE);
+    if (d.stages) {
+      // With the STAGE row, the lines about the words and the speed stay under it. The third line gives
+      // way: the selected panel shows the WPM guide and the lives itself.
+      drawStageRow(ctx, d);
+      for (var j = 0; j < DETAIL[name].length; j++) centerText(ctx, DETAIL[name][j], 180 + j * 11, WHITE);
+    } else {
+      var lines = DETAIL[name].concat(['FOR ' + info.wpmGuide + ' WORDS A MINUTE. ' + info.lives + ' LIVES.']);
+      for (var k = 0; k < lines.length; k++) centerText(ctx, lines[k], 158 + k * 12, k === 2 ? GOLD : WHITE);
+    }
     footer(ctx, 'ARROWS AND ENTER, OR TYPE THE NAME', STONE);
+  }
+
+  // The STAGE row under the three panels (LEVEL2 12.3): the stage a run starts at and its name, between
+  // the arrows that change it, and under it the stage's sample words on plates, when it has its own.
+  function drawStageRow(ctx, d) {
+    var data = levelData(d.level) || {};
+    var label = 'STAGE ' + d.level + '  ' + String(data.name || '').toUpperCase();
+    var half = textWidth(label) / 2;
+    centerText(ctx, label, 153, GOLD);
+    txt(ctx, sym('UP', '^'), CX - half - 16, 153, WHITE);
+    txt(ctx, sym('DOWN', 'v'), CX + half + 8, 153, WHITE);
+    var words = STAGE_SAMPLES[d.level];
+    if (!words) return;
+    var total = -6;
+    for (var i = 0; i < words.length; i++) total += words[i].length * 8 + 4 + 6;
+    var x = Math.floor(CX - total / 2);
+    for (var k = 0; k < words.length; k++) x += plate(ctx, words[k], x, 164, -1, STONE, false) + 6;
   }
 
   function drawDiffPanel(ctx, i, selected) {
@@ -1401,25 +1558,27 @@
     }
   }
 
-  // Column 2: jump, duck (held for the arch, DESIGN 5), let go of a word (DESIGN 3.3), pause.
+  // Column 2: jump, duck (held for the arch, DESIGN 5, and for Level 2's tunnel, LEVEL2 3.4), let go of
+  // a word (DESIGN 3.3), pause. The lines are 9 px apart.
   function drawHowMove(ctx, x0) {
     var cx = x0 + 62;
     txt(ctx, 'JUMP AND DUCK', cx, 28, GOLD, { align: 'center' });
     var press = Math.floor(clock * 2) % 4;
-    keycap(ctx, x0 + 2, 40, keycapWidth('SPACE'), 'SPACE', press === 0);
-    txt(ctx, 'JUMP', x0 + 56, 45, WHITE);
-    txt(ctx, 'OVER GAPS AND', x0 + 2, 58, SILVER);
-    txt(ctx, 'BRAMBLES', x0 + 2, 67, SILVER);
-    keycap(ctx, x0 + 2, 80, keycapWidth('ENTER'), 'ENTER', press === 2);
-    txt(ctx, 'DUCK', x0 + 56, 85, WHITE);
-    txt(ctx, 'UNDER BRANCHES.', x0 + 2, 98, SILVER);
-    txt(ctx, 'HOLD FOR ARCHES', x0 + 2, 107, SILVER);
-    keycap(ctx, x0 + 2, 119, keycapWidth('BACKSPACE'), 'BACKSPACE', false);
-    txt(ctx, 'LETS GO OF A', x0 + 2, 136, SILVER);
-    txt(ctx, 'WORD. MISTAKES', x0 + 2, 145, SILVER);
-    txt(ctx, 'NEED NO FIXING.', x0 + 2, 154, SILVER);
-    keycap(ctx, x0 + 2, 165, keycapWidth('ESC'), 'ESC', false);
-    txt(ctx, 'PAUSE', x0 + 40, 170, WHITE);
+    keycap(ctx, x0 + 2, 39, keycapWidth('SPACE'), 'SPACE', press === 0);
+    txt(ctx, 'JUMP', x0 + 56, 44, WHITE);
+    txt(ctx, 'OVER GAPS AND', x0 + 2, 56, SILVER);
+    txt(ctx, 'BRAMBLES', x0 + 2, 65, SILVER);
+    keycap(ctx, x0 + 2, 76, keycapWidth('ENTER'), 'ENTER', press === 2);
+    txt(ctx, 'DUCK', x0 + 56, 81, WHITE);
+    txt(ctx, 'UNDER BRANCHES.', x0 + 2, 93, SILVER);
+    txt(ctx, 'HOLD FOR ARCHES', x0 + 2, 102, SILVER);
+    txt(ctx, 'AND TUNNELS', x0 + 2, 111, SILVER);
+    keycap(ctx, x0 + 2, 121, keycapWidth('BACKSPACE'), 'BACKSPACE', false);
+    txt(ctx, 'LETS GO OF A', x0 + 2, 138, SILVER);
+    txt(ctx, 'WORD. MISTAKES', x0 + 2, 147, SILVER);
+    txt(ctx, 'NEED NO FIXING.', x0 + 2, 156, SILVER);
+    keycap(ctx, x0 + 2, 166, keycapWidth('ESC'), 'ESC', false);
+    txt(ctx, 'PAUSE', x0 + 40, 171, WHITE);
     txt(ctx, 'OR USE ARROWS', x0 + 2, 183, STONE);
   }
 
@@ -1431,7 +1590,7 @@
     txt(ctx, 'ON A CRATE:', cx, 49, SILVER, { align: 'center' });
     for (var i = 0; i < POWERS.length; i++) {
       var p = POWERS[i];
-      var y = 62 + i * 21;
+      var y = 62 + i * POWER_PITCH;
       var small = p.sprite === 'item_ink';
       spr(ctx, p.sprite, Math.floor(clock * 4) % 2, x0 + 8, y + (small ? 12 : 16));
       txt(ctx, p.name, x0 + 20, y, GOLD);
@@ -1653,23 +1812,79 @@
   // 4g. Results (tally and rank)
   // ---------------------------------------------------------------------------------------------
 
+  // The result is recorded on entering each results screen, before NEXT STAGE or TITLE is chosen (LEVEL2
+  // 12.6, decision 19): what TG.Save.recordRun writes is a highest value or a state, so the second
+  // results screen of a run that went on counts nothing twice. Whether this clear opens the next level
+  // for the first time is known only by asking before the run is recorded (LEVEL2 12.3).
   function setupResults() {
     var st = gameState();
     var res = st && st.result && typeof st.result === 'object' ? st.result : null;
     // TG.Save.recordRun once per result (CONTRACT 4.20 and 9.2).
     if (res && res !== recordedResult) {
       recordedResult = res;
+      var after = num(res.levelId, 0) + 1;
+      var wasOpen = levelOpen(after);
       try {
         if (TG.Save && typeof TG.Save.recordRun === 'function') TG.Save.recordRun(res);
       } catch (e) {
         report('TG.Save.recordRun', e);
       }
+      if (!wasOpen && levelOpen(after)) unlockedResult = res;
       boardCall('stat', 'end', { time: res.time, cleared: res.cleared === true, section: st ? st.section : 0 });
     }
+    var next = nextLevel(res);
+    // Lines under the rows, by page: what the next rank needs under the first page, and under the last
+    // the suggestion and, with the NEXT STAGE strip, what its choice means. That line is for a run with
+    // an entry to make, whose player would have met the initials screen here before Level 2 (LEVEL2
+    // 12.1). Without one, TITLE leads straight to the title, and the line would promise an entry that a
+    // run ending with this score does not get.
+    var under = [[], []];
+    var target = rankTarget(res);
+    if (target) under[0].push({ text: target, color: SILVER });
+    if (res && res.suggestion) under[1].push({ text: String(res.suggestion), color: GOLD });
+    if (next && hasEntry(res)) under[1].push({ text: STRIP_LINE, color: SILVER });
     return {
       result: res, pages: buildPages(res), page: 0, row: 0, rowT: 0, tickT: 0,
-      pageDone: false, stamped: false, waitT: 0, stampT: 0, leaving: false
+      pageDone: false, stamped: false, waitT: 0, stampT: 0, leaving: false,
+      // next: the level NEXT STAGE leads to, or null: the footer is then the one of before. headline: the
+      // line under the title, { text, color }, or null.
+      next: next, headline: headlineFor(res, next), under: under
     };
+  }
+
+  // The line under the title of the results screen (LEVEL2 12.3 and 12.4): the first time a clear opens
+  // the level after it, that the stage is unlocked, with its name; otherwise the line that leads on from
+  // a cleared level, when it has one.
+  function headlineFor(res, next) {
+    if (!res || res.cleared !== true) return null;
+    if (next && res === unlockedResult) {
+      return { text: 'STAGE ' + (num(res.levelId, 0) + 1) + ' UNLOCKED: ' + String(next.name || '').toUpperCase(), color: LIME };
+    }
+    var hook = Object.prototype.hasOwnProperty.call(HOOK, res.levelId) ? HOOK[res.levelId] : null;
+    return hook ? { text: hook, color: AQUA } : null;
+  }
+
+  // What the next rank up needs that the run did not have (LEVEL2 12.7), by the rule TG.Game ranks a run
+  // with (DESIGN 8.6; LEVEL2 12.5): S is 97% accuracy and no life lost, A is 93% and at most 2 lives lost,
+  // both with no continues and a cleared stage, and B is 85%. One line, the first thing missing: accuracy,
+  // then lives, then continues, then the cleared stage. null for rank S and for a result whose own figures
+  // already meet the next rank, which is the case of a run with no letter key pressed: it ranks C with
+  // an accuracy of 100%.
+  function rankTarget(res) {
+    var r = res || {};
+    var t = r.typing && typeof r.typing === 'object' ? r.typing : {};
+    var accuracy = Math.floor(num(t.accuracy, 1) * 100 + 1e-9);
+    var lost = Math.floor(num(r.livesLost, 0));
+    if (r.rank === 'C') return accuracy < 85 ? 'B NEEDS 85% ACCURACY, YOU HAD ' + accuracy + '%' : null;
+    if (r.rank !== 'A' && r.rank !== 'B') return null;
+    var up = r.rank === 'A' ? 'S' : 'A';
+    var need = up === 'S' ? 97 : 93;
+    if (accuracy < need) return up + ' NEEDS ' + need + '% ACCURACY, YOU HAD ' + accuracy + '%';
+    if (up === 'S' && lost > 0) return 'S NEEDS NO LIVES LOST, YOU LOST ' + lost;
+    if (up === 'A' && lost > 2) return 'A NEEDS AT MOST 2 LIVES LOST, YOU LOST ' + lost;
+    if (num(r.continues, 0) > 0) return up + ' NEEDS NO CONTINUES';
+    if (!(num(r.stages, 0) > 0)) return up + ' NEEDS A CLEARED STAGE';
+    return null;
   }
 
   // A row: { label, value (number), format(value) -> string, count, color, note, noteColor, keys }, or
@@ -1685,15 +1900,30 @@
     var score = num(r.score, 0);
     var base = num(r.baseScore, score);
 
+    // A run that came through NEXT STAGE: the score it carried in, so that the split is seen (LEVEL2
+    // 12.4). SCORE and TOTAL under it are the run's.
+    var carried = Math.floor(num(r.stageScore, 0));
+    if (carried > 0) {
+      p1.push({ label: 'STAGE ' + (num(r.levelId, 2) - 1) + ' SCORE', value: carried, format: plain, count: true, color: SILVER, valueColor: SILVER });
+    }
     p1.push({ label: 'SCORE', value: base, format: plain, count: true });
     for (var i = 0; i < bonuses.length; i++) {
       var b = bonuses[i] || {};
       p1.push({ label: String(b.label || 'BONUS'), value: num(b.points, 0), format: plus, count: true, color: GOLD, indent: 8 });
     }
     if (bonuses.length) p1.push({ label: 'TOTAL', value: score, format: plain, count: true, color: GOLD, valueColor: GOLD });
+    // BEST RUN (LEVEL2 12.7), beside the run's final score as the best WPM is beside WPM: the best score
+    // of the difficulty from before the run, or that this run is the new best.
+    var last = p1[p1.length - 1];
+    var bestTotal = Math.floor(num(r.bestScore, 0));
+    if (score > bestTotal) { last.note = 'NEW BEST RUN!'; last.noteColor = last.color === GOLD ? WHITE : GOLD; }
+    else if (bestTotal > 0) { last.note = 'BEST RUN ' + bestTotal; last.noteColor = STONE; }
 
     var wpm = Math.round(num(t.wpm, 0));
     var best = Math.round(num(r.bestWpm, 0));
+    // A run that came through NEXT STAGE has shown the WPM of its earlier stage, and TG.Save has recorded
+    // it (LEVEL2 12.6). The WPM of the whole run can be lower: NEW BEST! is for one above both.
+    if (carried > 0) best = Math.max(best, shownWpm);
     var note = null, noteColor = STONE;
     if (wpm > 0 && best > 0 && wpm > best) { note = 'NEW BEST! +' + (wpm - best); noteColor = GOLD; }
     else if (best > 0) note = 'BEST ' + best;
@@ -1739,13 +1969,43 @@
     if (r.page === 0) stamp(r);
   }
 
-  // The initials screen follows when the score reaches the top five of this computer, or when the run
-  // goes to the world scores.
+  // A run that ends with this result has an entry to make: its score reaches the top five of this
+  // computer, or the run goes to the world scores.
+  function hasEntry(res) {
+    return qualifiesLocal(res) || worldWanted(res);
+  }
+
+  // The initials screen follows when the run has an entry to make, and the title otherwise.
   function leaveResults(r) {
-    var res = r.result || {};
-    var entry = qualifiesLocal(res) || worldWanted(res);
     emit('ui:select');
-    r.leaving = callGame('setScreen', entry ? 'highScoreEntry' : 'title') !== false;
+    r.leaving = callGame('setScreen', hasEntry(r.result || {}) ? 'highScoreEntry' : 'title') !== false;
+  }
+
+  // The NEXT STAGE strip is on screen (LEVEL2 12.1): the stage was cleared and has a level after it, and
+  // the tally of the last page has finished.
+  function stripShown(r) {
+    return !!r.next && r.page === r.pages.length - 1 && r.pageDone;
+  }
+
+  // NEXT STAGE: the same run goes on into the next level, and nothing is entered. The run token of the
+  // world scores is the one asked for at the difficulty screen and stays held: none is asked for here
+  // (LEVEL2 12.5). The entry this result would have made is kept as the pending entry, in case the run
+  // never ends in the game (LEVEL2 12.6); TG.Save keeps it only when its score would reach the table.
+  // The WPM this screen showed is kept for the note beside WPM on the run's later results screens.
+  function goNextStage(r) {
+    var res = r.result;
+    emit('ui:select');
+    if (callGame('nextStage') !== true) return;  // refused: the screen stays, and the next Enter tries again
+    r.leaving = true;
+    var typing = res.typing && typeof res.typing === 'object' ? res.typing : {};
+    shownWpm = Math.max(shownWpm, Math.round(num(typing.wpm, 0)));
+    pendingCall('setPending', res.difficulty, entryFor(res, DEFAULT_INITIALS));
+  }
+
+  // Row pitch of a results page: 16 px (DESIGN 12), or 14 px for a page with a tenth row or with two
+  // lines under its rows, so that its rows end above them.
+  function rowPitch(r, page) {
+    return r.pages[page].length > 9 || r.under[page].length > 1 ? 14 : 16;
   }
 
   function updateResults(dt, acts) {
@@ -1778,7 +2038,13 @@
     if (r.stamped) r.stampT += dt;
     if (screenT < RESULTS_LOCK) return;
     for (var i = 0; i < acts.length; i++) {
-      if (acts[i].act !== 'confirm') continue;
+      var a = acts[i];
+      // Esc is read only where the strip is shown, and leads where Enter leads without it (TITLE).
+      if (a.act === 'back' && stripShown(r)) {
+        leaveResults(r);
+        return;
+      }
+      if (a.act !== 'confirm') continue;
       if (!r.pageDone || (r.page === 0 && !r.stamped)) {
         finishPage(r);
       } else if (r.page < r.pages.length - 1) {
@@ -1788,9 +2054,14 @@
         r.tickT = 0;
         r.pageDone = false;
         emit('ui:move');
-      } else {
+      } else if (!r.next) {
         leaveResults(r);
         return;
+      } else if (a.key !== 'space' && a.key !== 'jump') {
+        // On the strip only Enter goes on, as on the initials screen: Space and the JUMP button finish
+        // the tally and turn the page, and do nothing here.
+        goNextStage(r);
+        if (r.leaving) return;
       }
     }
   }
@@ -1815,13 +2086,18 @@
     var res = r.result || {};
     var cleared = res.cleared === true;
     centerText(ctx, cleared ? 'STAGE ' + num(res.levelId, 1) + ' CLEAR!' : 'RUN ENDED', 8, cleared ? GOLD : SILVER, 2, true);
-    if (res.difficulty) centerText(ctx, diffInfo(res.difficulty).label, 28, STONE);
+    // The difficulty is under the title. A headline takes that line, and the difficulty then stands in
+    // the top right corner, as on How to Play.
+    if (r.headline) centerText(ctx, r.headline.text, 28, r.headline.color);
+    if (res.difficulty && r.headline) txt(ctx, diffInfo(res.difficulty).label, SW - 6, 12, STONE, { align: 'right' });
+    else if (res.difficulty) centerText(ctx, diffInfo(res.difficulty).label, 28, STONE);
     if (!r.pages) return;
     var rows = r.pages[r.page];
+    var pitch = rowPitch(r, r.page);
     for (var i = 0; i < rows.length; i++) {
       if (i > r.row) break;
       var row = rows[i];
-      var y = 48 + i * 16;
+      var y = 48 + i * pitch;
       if (i === r.row && !r.pageDone && r.rowT <= 0) break;
       var lx = 64 + (row.indent || 0);
       txt(ctx, row.label, lx, y, row.color === undefined ? WHITE : row.color);
@@ -1846,13 +2122,18 @@
       if (r.stampT < 0.12) txt(ctx, rank, 353, 54, WHITE, { scale: 4, align: 'center', shadow: true });
       else txt(ctx, rank, 353, 58, color, { scale: 4, align: 'center', shadow: true });
     }
-    if (r.page === 1 && r.pageDone && res.suggestion) {
-      centerText(ctx, String(res.suggestion), 194, GOLD);
+    // The lines under the rows, once the page is tallied and the rank stamped: the last at y 194, one
+    // before it 14 px higher.
+    if (r.pageDone && r.stamped) {
+      var under = r.under[r.page];
+      for (var k = 0; k < under.length; k++) centerText(ctx, under[k].text, 194 - (under.length - 1 - k) * 14, under[k].color);
     }
     var ready = screenT >= RESULTS_LOCK;
     var last = r.page === r.pages.length - 1 && r.pageDone;
     txt(ctx, (r.page + 1) + '/' + r.pages.length, SW - 6, SH - 11, STONE, { align: 'right' });
-    txt(ctx, last ? 'ENTER: CONTINUE' : 'ENTER: NEXT', 6, SH - 11, ready ? SILVER : STONE);
+    // The strip is centred under its line; the footer of before stays in its corner.
+    if (stripShown(r)) centerText(ctx, STRIP_KEYS, SH - 11, WHITE);
+    else txt(ctx, last ? 'ENTER: CONTINUE' : 'ENTER: NEXT', 6, SH - 11, ready ? SILVER : STONE);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1889,8 +2170,10 @@
     return e.saved === DEFAULT_INITIALS && entrySends(e) ? '' : e.saved;
   }
 
-  function entryFor(e, name) {
-    var res = e.result || {};
+  // The entry of a result (CONTRACT 5.12). Its figures are the whole run's. cleared: the run cleared at
+  // least one stage (result.stages), which is not the same as result.cleared, the stage that ended last,
+  // for a run that went on through NEXT STAGE (LEVEL2 12.5, decision 28).
+  function entryFor(res, name) {
     var t = res.typing && typeof res.typing === 'object' ? res.typing : {};
     return {
       name: name,
@@ -1898,7 +2181,7 @@
       wpm: Math.round(num(t.wpm, 0)),
       accuracy: Math.floor(num(t.accuracy, 1) * 100 + 1e-9),
       rank: typeof res.rank === 'string' ? res.rank : 'C',
-      cleared: res.cleared === true,
+      cleared: num(res.stages, 0) > 0,
       date: today()
     };
   }
@@ -1917,7 +2200,7 @@
       }
       var res = e.result || {};
       var difficulty = res.difficulty;
-      var entry = entryFor(e, name);
+      var entry = entryFor(res, name);
       var pos = -1;
       try {
         if (TG.Save && typeof TG.Save.addScore === 'function') pos = TG.Save.addScore(difficulty, entry);
@@ -2134,6 +2417,8 @@
 
   TG.UI = {
     // Subscribes to screen:change (and checkpoint, for the tutorialDone setting). Reads no game state.
+    // TG.Main calls it after TG.Save.load(): a pending entry found now belongs to a run that went on to
+    // the next stage and never ended in the game, and it is entered in its table (LEVEL2 12.6).
     init: function () {
       for (var i = 0; i < subs.length; i++) {
         try { subs[i](); } catch (e) { /* already gone */ }
@@ -2142,6 +2427,7 @@
       started = false;
       current = null;
       S = {};
+      pendingCall('enterPending');
       if (!TG.Events || typeof TG.Events.on !== 'function') return;
       subs.push(TG.Events.on('screen:change', onScreenChange));
       subs.push(TG.Events.on('checkpoint', onCheckpoint));

@@ -430,8 +430,10 @@ check('Save: before init and load, TG.Save.data equals TG.Save.defaults() by val
 check('Save: defaults have the shape and the seeded scores of CONTRACT 5.12', function () {
   const d = stubs.plain(TG.Save.defaults());
   assert.deepStrictEqual(d.settings, { music: true, sfx: true, crt: 'auto', reduceFlash: false, keyGuide: 'auto',
-    adaptive: true, tutorialDone: false, lastDifficulty: 'medium', initials: 'PIP', worldScores: true });
-  assert.deepStrictEqual(Object.keys(d), ['version', 'settings', 'scores', 'best', 'assist']);
+    adaptive: true, tutorialDone: false, lastDifficulty: 'medium', initials: 'PIP', worldScores: true,
+    lastLevel: 1, clearedEasy: 0, clearedMedium: 0, clearedHard: 0 });
+  assert.deepStrictEqual(Object.keys(d), ['version', 'settings', 'scores', 'best', 'assist', 'pending']);
+  assert.strictEqual(d.pending, null);
   assert.strictEqual(d.version, 1);
   assert.deepStrictEqual(d.best, { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } });
   assert.deepStrictEqual(d.assist, { easy: 1, medium: 1, hard: 1 });
@@ -656,6 +658,298 @@ check('Save: resetScores returns the tables to the seeded entries and keeps the 
   const stored = JSON.parse(e2.storage.get('spellrunner.v1'));
   return same(S.scores('hard'), S.defaults().scores.hard) && S.getSetting('music') === false &&
     stored.scores.hard[0].name === 'PIP' && stored.settings.music === false;
+});
+
+// -------------------------------------------------------------------------------------------------
+// TG.Save and Level 2 (docs/LEVEL2.md 12.6): the version stays 1 and nothing is migrated. A record of the
+// game as it was before is loaded as it is and gains the new fields.
+// -------------------------------------------------------------------------------------------------
+
+// The stored strings of test/fixtures/save-before-level2.json: its "what" says how they were made.
+const OLD_RECORDS = JSON.parse(fs.readFileSync(path.join(stubs.ROOT, 'test', 'fixtures', 'save-before-level2.json'), 'utf8')).records;
+const NEW_SETTINGS = ['lastLevel', 'clearedEasy', 'clearedMedium', 'clearedHard'];
+
+// A page load with `text` stored under the game's key.
+function loadStored(text) {
+  const e2 = stubs.load({ files: CORE, storage: 'memory' });
+  e2.storage.set('spellrunner.v1', text);
+  e2.TG.Save.init(e2.window);
+  e2.TG.Save.load();
+  return e2;
+}
+
+// The record `played` with changes: fn is given the parsed record and changes it.
+function changedRecord(fn) {
+  const record = JSON.parse(OLD_RECORDS.played);
+  fn(record);
+  return JSON.stringify(record);
+}
+
+function clearedNumbers(S) {
+  return [S.getSetting('clearedEasy'), S.getSetting('clearedMedium'), S.getSetting('clearedHard')];
+}
+
+check('Save: the records of the fixture are records of the game before Level 2: version 1, the five keys and ten settings of that time, dated entries', function () {
+  const played = JSON.parse(OLD_RECORDS.played), reset = JSON.parse(OLD_RECORDS.reset);
+  for (const r of [played, reset]) {
+    assert.deepStrictEqual(Object.keys(r), ['version', 'settings', 'scores', 'best', 'assist']);
+    assert.deepStrictEqual(Object.keys(r.settings), ['music', 'sfx', 'crt', 'reduceFlash', 'keyGuide', 'adaptive', 'tutorialDone', 'lastDifficulty', 'initials', 'worldScores']);
+    assert.strictEqual(r.version, 1);
+  }
+  const dated = function (r, d) { return r.scores[d].filter(function (e) { return e.date !== ''; }); };
+  assert.deepStrictEqual([dated(played, 'easy').length, dated(played, 'medium').length, dated(played, 'hard').length], [1, 2, 1]);
+  assert.strictEqual(dated(played, 'hard')[0].cleared, false);
+  assert.deepStrictEqual([dated(reset, 'easy').length, dated(reset, 'medium').length, dated(reset, 'hard').length], [0, 0, 0]);
+  // Every setting but sfx and adaptive is away from its default, so a setting that was lost would show.
+  const defaults = TG.Save.defaults().settings;
+  const moved = Object.keys(played.settings).filter(function (k) { return played.settings[k] !== defaults[k]; });
+  assert.deepStrictEqual(moved, ['music', 'crt', 'reduceFlash', 'keyGuide', 'tutorialDone', 'lastDifficulty', 'initials', 'worldScores']);
+  assert.ok(played.best.easy.score > 0 && played.best.medium.wpm > 0 && played.assist.easy < 1 && played.assist.medium < 1);
+});
+
+check('Save: a record stored before Level 2 loads with its scores, bests, assist and settings as they were, and loading writes nothing', function () {
+  const old = JSON.parse(OLD_RECORDS.played);
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  const data = stubs.plain(S.data);
+  assert.strictEqual(e2.storage.get('spellrunner.v1'), OLD_RECORDS.played, 'the stored string was changed by loading');
+  assert.strictEqual(data.version, 1);
+  assert.deepStrictEqual(data.scores, old.scores);
+  assert.deepStrictEqual(data.best, old.best);
+  assert.deepStrictEqual(data.assist, old.assist);
+  Object.keys(old.settings).forEach(function (k) { assert.strictEqual(S.getSetting(k), old.settings[k], 'setting ' + k); });
+  ['easy', 'medium', 'hard'].forEach(function (d) {
+    assert.deepStrictEqual(stubs.plain(S.scores(d)), old.scores[d]);
+    assert.deepStrictEqual(stubs.plain(S.best(d)), old.best[d]);
+    assert.strictEqual(S.assist(d), old.assist[d]);
+  });
+  assert.ok(S.qualifies('hard', 18551) && !S.qualifies('hard', 18550), 'the last place of the hard table is the entry of 18550');
+});
+
+check('Save: that record gains the new fields on loading, keeps everything through a save and a reload, and is still version 1', function () {
+  const old = JSON.parse(OLD_RECORDS.played);
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  assert.deepStrictEqual(Object.keys(stubs.plain(S.data)), ['version', 'settings', 'scores', 'best', 'assist', 'pending']);
+  assert.deepStrictEqual(Object.keys(stubs.plain(S.data.settings)), Object.keys(old.settings).concat(NEW_SETTINGS));
+  assert.strictEqual(S.getSetting('lastLevel'), 1);
+  assert.strictEqual(S.pending(), null);
+  // An option is changed, which saves, as any change does.
+  S.setSetting('sfx', false);
+  const written = JSON.parse(e2.storage.get('spellrunner.v1'));
+  assert.strictEqual(written.version, 1);
+  assert.deepStrictEqual(written.scores, old.scores);
+  assert.deepStrictEqual(written.best, old.best);
+  assert.deepStrictEqual(written.assist, old.assist);
+  assert.strictEqual(written.pending, null);
+  const expected = Object.assign({}, old.settings, { sfx: false, lastLevel: 1, clearedEasy: 1, clearedMedium: 1, clearedHard: 0 });
+  assert.deepStrictEqual(written.settings, expected);
+  // The next page load reads what was written: the same again.
+  const e3 = loadStored(e2.storage.get('spellrunner.v1'));
+  assert.deepStrictEqual(stubs.plain(e3.TG.Save.data), written);
+});
+
+check('Save: a dated cleared entry in a table opens Level 2 for a record stored before it, on that difficulty\'s number; a dated entry that is not cleared does not', function () {
+  const S = loadStored(OLD_RECORDS.played).TG.Save;
+  // Easy and Medium hold cleared entries with a date. Hard's dated entry is of a run that was ended.
+  assert.deepStrictEqual(clearedNumbers(S), [1, 1, 0]);
+  assert.ok(S.levelOpen(1) && S.levelOpen(2), 'level 2 is not open');
+  // One difficulty is enough (decision 5): the unlock is global.
+  const onlyEasy = loadStored(changedRecord(function (r) { r.scores.medium = JSON.parse(OLD_RECORDS.reset).scores.medium; })).TG.Save;
+  assert.deepStrictEqual(clearedNumbers(onlyEasy), [1, 0, 0]);
+  assert.strictEqual(onlyEasy.levelOpen(2), true);
+});
+
+check('Save: seeded tables alone do not open Level 2 (a record after RESET SCORES), and the rest of that record is kept', function () {
+  const old = JSON.parse(OLD_RECORDS.reset);
+  const e2 = loadStored(OLD_RECORDS.reset);
+  const S = e2.TG.Save;
+  assert.deepStrictEqual(clearedNumbers(S), [0, 0, 0]);
+  assert.strictEqual(S.levelOpen(2), false);
+  assert.strictEqual(S.levelOpen(1), true);
+  assert.deepStrictEqual(stubs.plain(S.data.scores), stubs.plain(S.defaults().scores));
+  assert.deepStrictEqual(stubs.plain(S.data.assist), old.assist);
+  Object.keys(old.settings).forEach(function (k) { assert.strictEqual(S.getSetting(k), old.settings[k], 'setting ' + k); });
+});
+
+check('Save: once a record has its cleared numbers they are the record: the tables are not read again, and absent ones are 0', function () {
+  // The numbers written as 0 beside dated cleared entries: an older copy of the game played on a newer record.
+  const zeros = loadStored(changedRecord(function (r) { r.settings.clearedEasy = 0; r.settings.clearedMedium = 0; r.settings.clearedHard = 0; })).TG.Save;
+  assert.deepStrictEqual(clearedNumbers(zeros), [0, 0, 0]);
+  assert.strictEqual(zeros.levelOpen(2), false);
+  const one = loadStored(changedRecord(function (r) { r.settings.clearedHard = 2; })).TG.Save;
+  assert.deepStrictEqual(clearedNumbers(one), [0, 0, 2]);
+  assert.strictEqual(one.levelOpen(2), true);
+});
+
+check('Save: a number out of range in lastLevel or a cleared setting is clamped to a whole number in range, and a value that is not a number takes the default', function () {
+  const load = function (settings) { return loadStored(changedRecord(function (r) { Object.assign(r.settings, settings); })).TG.Save; };
+  const values = function (S) { return [S.getSetting('lastLevel')].concat(clearedNumbers(S)); };
+  assert.deepStrictEqual(values(load({ lastLevel: 7, clearedEasy: -3, clearedMedium: 2.9, clearedHard: 99 })), [2, 0, 2, 2]);
+  assert.deepStrictEqual(values(load({ lastLevel: 0, clearedEasy: 1, clearedMedium: 0, clearedHard: 0 })), [1, 1, 0, 0]);
+  assert.deepStrictEqual(values(load({ lastLevel: 2.5, clearedEasy: 1.5, clearedMedium: 0, clearedHard: 0 })), [2, 1, 0, 0]);
+  assert.deepStrictEqual(values(load({ lastLevel: '2', clearedEasy: true, clearedMedium: null, clearedHard: 'x' })), [1, 0, 0, 0]);
+  // The stage last chosen must be open: Level 2 with nothing cleared is not.
+  assert.deepStrictEqual(values(load({ lastLevel: 2, clearedEasy: 0, clearedMedium: 0, clearedHard: 0 })), [1, 0, 0, 0]);
+  assert.deepStrictEqual(values(load({ lastLevel: 2, clearedEasy: 0, clearedMedium: 0, clearedHard: 1 })), [2, 0, 0, 1]);
+  // In a record stored before Level 2 the tables open it, so a lastLevel of 2 beside them is kept.
+  assert.deepStrictEqual(values(load({ lastLevel: 2 })), [2, 1, 1, 0]);
+  // The other settings of such a record are untouched by any of this.
+  const S = load({ lastLevel: 7, clearedEasy: -3, clearedMedium: 2.9, clearedHard: 99 });
+  const old = JSON.parse(OLD_RECORDS.played);
+  Object.keys(old.settings).forEach(function (k) { assert.strictEqual(S.getSetting(k), old.settings[k], 'setting ' + k); });
+});
+
+check('Save: a record of any other version is still read as defaults, whatever it holds', function () {
+  ['2', '0', '"1"', '3'].forEach(function (version) {
+    const text = OLD_RECORDS.played.replace('{"version":1,', '{"version":' + version + ',');
+    assert.notStrictEqual(text, OLD_RECORDS.played);
+    const S = loadStored(text).TG.Save;
+    assert.ok(same(S.data, S.defaults()), 'version ' + version + ' was not read as defaults');
+  });
+  const none = changedRecord(function (r) { delete r.version; r.settings.clearedEasy = 2; r.pending = { difficulty: 'easy', entry: { score: 99999 } }; });
+  const S = loadStored(none).TG.Save;
+  assert.ok(same(S.data, S.defaults()) && S.levelOpen(2) === false && S.pending() === null);
+});
+
+check('Save: recordRun opens the next level on a cleared run and not on an ended one; the number only rises; RESET SCORES keeps it', function () {
+  const e2 = stubs.load({ files: CORE, storage: 'memory' });
+  const S = e2.TG.Save;
+  S.init(e2.window);
+  S.load();
+  const run = function (over) { return Object.assign({ difficulty: 'medium', levelId: 1, cleared: true, score: 5000, typing: { wpm: 20 }, assist: 1 }, over); };
+  assert.strictEqual(S.levelOpen(2), false);
+  // Ended runs: a game over or a quit, in either level.
+  S.recordRun(run({ cleared: false }));
+  S.recordRun(run({ cleared: false, levelId: 2, difficulty: 'hard' }));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 0, 0]);
+  assert.strictEqual(S.levelOpen(2), false);
+  // A result without the two fields, as some tests and older callers pass it, changes nothing either.
+  S.recordRun({ difficulty: 'easy', score: 100, typing: { wpm: 5 }, assist: 1 });
+  S.recordRun(run({ levelId: 3 }));
+  S.recordRun(run({ levelId: 0 }));
+  S.recordRun(run({ levelId: 1.5 }));
+  S.recordRun(run({ levelId: 'test' }));
+  S.recordRun(run({ cleared: 'yes' }));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 0, 0]);
+  // Level 1 cleared on Medium: its number is 1, the others stay 0, and Level 2 is open for every difficulty.
+  S.recordRun(run({}));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 1, 0]);
+  assert.strictEqual(S.levelOpen(2), true);
+  assert.strictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).settings.clearedMedium, 1);
+  // Level 2 cleared, then Level 1 again and an ended run: the number does not go back.
+  S.recordRun(run({ levelId: 2, score: 9000 }));
+  S.recordRun(run({}));
+  S.recordRun(run({ cleared: false, levelId: 2 }));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 2, 0]);
+  // Recording a run again, as the end of a run does after its first stage, counts nothing twice.
+  const before = e2.storage.get('spellrunner.v1');
+  S.recordRun(run({ levelId: 2, score: 9000 }));
+  assert.strictEqual(e2.storage.get('spellrunner.v1'), before);
+  assert.deepStrictEqual(stubs.plain(S.best('medium')), { wpm: 20, score: 9000 });
+  S.resetScores();
+  assert.deepStrictEqual(clearedNumbers(S), [0, 2, 0]);
+  assert.strictEqual(S.levelOpen(2), true);
+  assert.ok(!S.levelOpen(3) && !S.levelOpen(0) && !S.levelOpen(1.5) && !S.levelOpen('2') && !S.levelOpen(undefined), 'levelOpen of a level that does not exist');
+});
+
+check('Save: the pending entry is kept through a reload, entered once under the initials used last, and gone after that', function () {
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  const entry = { name: 'ZZZ', score: 45000, wpm: 31.6, accuracy: 96, rank: 'A', cleared: true, date: '2026-10-12' };
+  assert.strictEqual(S.setPending('medium', entry), true);
+  const kept = { difficulty: 'medium', entry: { name: 'ZZZ', score: 45000, wpm: 32, accuracy: 96, rank: 'A', cleared: true, date: '2026-10-12' } };
+  assert.deepStrictEqual(stubs.plain(S.pending()), kept);
+  assert.deepStrictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).pending, kept);
+  // pending() hands out a copy, and the tables are as they were.
+  S.pending().entry.score = 1;
+  assert.strictEqual(S.pending().entry.score, 45000);
+  assert.deepStrictEqual(stubs.plain(S.scores('medium')), JSON.parse(OLD_RECORDS.played).scores.medium);
+  // The tab is closed. The next page load finds the entry and adds it, under EVE, the initials used last.
+  const e3 = loadStored(e2.storage.get('spellrunner.v1'));
+  const S3 = e3.TG.Save;
+  assert.deepStrictEqual(stubs.plain(S3.pending()), kept);
+  assert.deepStrictEqual(stubs.plain(S3.enterPending()), { difficulty: 'medium', pos: 1 });
+  assert.deepStrictEqual(stubs.plain(S3.scores('medium')[1]), Object.assign({}, kept.entry, { name: 'EVE' }));
+  assert.strictEqual(S3.pending(), null);
+  assert.strictEqual(JSON.parse(e3.storage.get('spellrunner.v1')).pending, null);
+  // Once: a second call, and the page load after that, add nothing.
+  const table = JSON.stringify(S3.scores('medium'));
+  assert.strictEqual(S3.enterPending(), null);
+  const e4 = loadStored(e3.storage.get('spellrunner.v1'));
+  assert.strictEqual(e4.TG.Save.enterPending(), null);
+  assert.strictEqual(JSON.stringify(e4.TG.Save.scores('medium')), table);
+  assert.strictEqual(e4.TG.Save.scores('medium').filter(function (e) { return e.score === 45000; }).length, 1);
+});
+
+check('Save: a pending entry that is cleared, as at the end of a run, is never entered; one whose score no longer places is dropped', function () {
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  const entry = function (score) { return { name: 'ZZZ', score: score, wpm: 30, accuracy: 95, rank: 'A', cleared: true, date: '2026-10-12' }; };
+  const table = JSON.stringify(S.scores('easy'));
+  assert.strictEqual(S.setPending('easy', entry(20000)), true);
+  S.clearPending();
+  assert.strictEqual(S.pending(), null);
+  assert.strictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).pending, null);
+  assert.strictEqual(S.enterPending(), null);
+  assert.strictEqual(loadStored(e2.storage.get('spellrunner.v1')).TG.Save.enterPending(), null);
+  assert.strictEqual(JSON.stringify(S.scores('easy')), table);
+  // A second one replaces the first.
+  S.setPending('easy', entry(20000));
+  S.setPending('easy', entry(21000));
+  assert.strictEqual(S.pending().entry.score, 21000);
+  // Five higher scores reach the table before the game is started again: the entry is dropped, and stays dropped.
+  for (let i = 0; i < 5; i++) S.addScore('easy', entry(40000 + i));
+  assert.strictEqual(S.enterPending(), null);
+  assert.strictEqual(S.pending(), null);
+  assert.strictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).pending, null);
+  assert.ok(S.scores('easy').every(function (e) { return e.score >= 40000; }));
+});
+
+check('Save: setPending keeps nothing that would not reach the table or is not an entry; a damaged pending entry loads as none; with none, nothing is written', function () {
+  const e2 = stubs.load({ files: CORE, storage: 'memory' });
+  const S = e2.TG.Save;
+  S.init(e2.window);
+  S.load();
+  const entry = { name: 'ZZZ', score: 8000, wpm: 30, accuracy: 95, rank: 'A', cleared: true, date: '2026-10-12' };
+  // 8000 is the last place of the seeded Medium table, and a score must beat it.
+  assert.strictEqual(S.setPending('medium', entry), false);
+  assert.strictEqual(S.setPending('nightmare', Object.assign({}, entry, { score: 99999 })), false);
+  assert.strictEqual(S.setPending('easy', null), false);
+  assert.strictEqual(S.setPending('easy', { name: 'ZZZ', score: 'many' }), false);
+  assert.strictEqual(S.pending(), null);
+  S.clearPending();
+  assert.strictEqual(S.enterPending(), null);
+  assert.strictEqual(e2.storage.size, 0, 'something was written with no pending entry');
+  const damaged = ['"x"', '7', '[]', '{}', '{"difficulty":"nightmare","entry":{"score":5}}', '{"difficulty":"easy"}',
+    '{"difficulty":"easy","entry":{"name":"ZZZ","score":"many"}}', '{"difficulty":"easy","entry":{"score":-1}}'];
+  damaged.forEach(function (text) {
+    const S2 = loadStored(OLD_RECORDS.played.replace(/\}$/, ',"pending":' + text + '}')).TG.Save;
+    assert.strictEqual(S2.pending(), null, 'pending ' + text);
+    assert.strictEqual(S2.enterPending(), null, 'pending ' + text);
+    assert.deepStrictEqual(stubs.plain(S2.data.scores), JSON.parse(OLD_RECORDS.played).scores);
+  });
+  // And a whole one in the stored record is read: it is cleaned as an entry is.
+  const S3 = loadStored(OLD_RECORDS.played.replace(/\}$/, ',"pending":{"difficulty":"hard","entry":{"name":"ab","score":30000.7,"wpm":50,"accuracy":97,"rank":"S","cleared":true,"date":"2026-10-12","extra":1}}}')).TG.Save;
+  assert.deepStrictEqual(stubs.plain(S3.pending()), { difficulty: 'hard', entry: { name: 'ABA', score: 30000, wpm: 50, accuracy: 97, rank: 'S', cleared: true, date: '2026-10-12' } });
+});
+
+['none', 'throw'].forEach(function (mode) {
+  check('Save: the unlock and the pending entry work from memory with storage "' + mode + '"', function () {
+    const e2 = stubs.load({ files: CORE, storage: mode });
+    const S = e2.TG.Save;
+    S.init(e2.window);
+    S.load();
+    S.recordRun({ difficulty: 'easy', levelId: 1, cleared: true, score: 20000, typing: { wpm: 12 }, assist: 0.9 });
+    assert.strictEqual(S.levelOpen(2), true);
+    assert.strictEqual(S.setPending('easy', { name: 'AAA', score: 20000, wpm: 12, accuracy: 93, rank: 'A', cleared: true, date: '2026-10-12' }), true);
+    assert.strictEqual(S.load(), S.data);
+    assert.strictEqual(S.pending().entry.score, 20000);
+    assert.deepStrictEqual(stubs.plain(S.enterPending()), { difficulty: 'easy', pos: 0 });
+    S.clearPending();
+    assert.strictEqual(S.pending(), null);
+    assert.strictEqual(e2.errors.length, 0);
+  });
 });
 
 check('Save: the constants option is honoured (STORAGE_KEY and SCORE_SLOTS are read when the functions run)', function () {

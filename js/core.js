@@ -1254,6 +1254,13 @@
 
   var TRI_STATE = ['auto', 'on', 'off'];
   var RANKS = ['S', 'A', 'B', 'C'];
+  // The settings that are whole numbers, each with its lowest and highest value (LEVEL2 12.6). The game
+  // has levels 1 and 2. A `cleared` number is the highest level cleared on that difficulty, 0 for none.
+  var LAST_LEVEL = 2;
+  var NUMBER_SETTINGS = {
+    lastLevel: [1, LAST_LEVEL], clearedEasy: [0, LAST_LEVEL], clearedMedium: [0, LAST_LEVEL], clearedHard: [0, LAST_LEVEL]
+  };
+  var CLEARED_KEYS = { easy: 'clearedEasy', medium: 'clearedMedium', hard: 'clearedHard' };
 
   var storage = null;        // the localStorage object kept by init, or null
 
@@ -1278,7 +1285,11 @@
       tutorialDone: false,
       lastDifficulty: 'medium',
       initials: 'PIP',
-      worldScores: true       // send scores to, and show, the world boards (js/board.js)
+      worldScores: true,      // send scores to, and show, the world boards (js/board.js)
+      lastLevel: 1,           // the stage last chosen on the STAGE row (LEVEL2 12.3)
+      clearedEasy: 0,         // the highest level cleared on each difficulty (LEVEL2 12.6). They are numbers
+      clearedMedium: 0,       // among the settings so that an older copy of the game, which keeps a setting
+      clearedHard: 0          // it does not know, keeps them
     };
   }
 
@@ -1288,7 +1299,8 @@
       settings: defaultSettings(),
       scores: { easy: seededScores('easy'), medium: seededScores('medium'), hard: seededScores('hard') },
       best: { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } },
-      assist: { easy: 1, medium: 1, hard: 1 }
+      assist: { easy: 1, medium: 1, hard: 1 },
+      pending: null           // { difficulty, entry }: the entry of a run that went on to the next stage, or null
     };
   }
 
@@ -1348,6 +1360,24 @@
     return TG.Util.clamp(v, TG.C.ASSIST_MIN_CONTINUE, TG.C.ASSIST_MAX);
   }
 
+  // A pending entry (LEVEL2 12.6) from anything: { difficulty, entry } with a known difficulty and a valid
+  // entry, or null.
+  function cleanPending(raw) {
+    if (!isPlainObject(raw) || DIFFICULTY_NAMES.indexOf(raw.difficulty) === -1) return null;
+    var e = cleanEntry(raw.entry);
+    return e ? { difficulty: raw.difficulty, entry: e } : null;
+  }
+
+  // The highest level cleared on any difficulty, from settings.
+  function highestCleared(settings) {
+    var top = 0;
+    for (var i = 0; i < DIFFICULTY_NAMES.length; i++) {
+      var v = settings[CLEARED_KEYS[DIFFICULTY_NAMES[i]]];
+      if (isNumber(v) && v > top) top = v;
+    }
+    return top;
+  }
+
   // Builds valid data from anything: fields that are missing or of the wrong kind take their default.
   function cleanData(raw) {
     var d = defaultData();
@@ -1366,6 +1396,9 @@
             if (DIFFICULTY_NAMES.indexOf(v) !== -1) d.settings[k] = v;
           } else if (k === 'initials') {
             d.settings[k] = cleanInitials(v, d.settings[k]);
+          } else if (hasOwn(NUMBER_SETTINGS, k)) {
+            // A whole number in range; anything that is not a number keeps the default.
+            if (isNumber(v)) d.settings[k] = TG.Util.clamp(Math.floor(v), NUMBER_SETTINGS[k][0], NUMBER_SETTINGS[k][1]);
           } else if (typeof v === 'boolean') {
             d.settings[k] = v;
           }
@@ -1374,10 +1407,20 @@
         }
       }
     }
+    // A record written before Level 2 has none of the `cleared` numbers (LEVEL2 12.6). Its tables are then
+    // the only sign that a level was cleared: an entry a player made has a date, and the seeded ones have none.
+    var written = isPlainObject(s) ? s : {};
+    var before = !hasOwn(written, CLEARED_KEYS.easy) && !hasOwn(written, CLEARED_KEYS.medium) && !hasOwn(written, CLEARED_KEYS.hard);
 
     for (var i = 0; i < DIFFICULTY_NAMES.length; i++) {
       var name = DIFFICULTY_NAMES[i];
       if (isPlainObject(raw.scores)) d.scores[name] = cleanScores(raw.scores[name], name);
+      if (before) {
+        for (var j = 0; j < d.scores[name].length; j++) {
+          var entry = d.scores[name][j];
+          if (entry.cleared && entry.date !== '') d.settings[CLEARED_KEYS[name]] = 1;
+        }
+      }
       if (isPlainObject(raw.best) && isPlainObject(raw.best[name])) {
         var b = raw.best[name];
         d.best[name] = {
@@ -1387,6 +1430,9 @@
       }
       if (isPlainObject(raw.assist)) d.assist[name] = clampAssist(raw.assist[name]);
     }
+    // The stage last chosen must be one that is open (levelOpen below).
+    if (d.settings.lastLevel > highestCleared(d.settings) + 1) d.settings.lastLevel = 1;
+    d.pending = cleanPending(raw.pending);
     return d;
   }
 
@@ -1530,6 +1576,9 @@
 
     // Updates best wpm and best score for result.difficulty and stores result.assist; also saves. A run
     // played with adaptive pacing off (result.adaptive === false) keeps the saved assist value as it was.
+    // A cleared stage (result.cleared) raises the `cleared` number of the difficulty to result.levelId,
+    // which is what opens the next level (levelOpen; LEVEL2 12.6). Everything written here is a highest
+    // value or a state, so recording a run again at its end, after its first stage, counts nothing twice.
     recordRun: function (result) {
       if (!isPlainObject(result) || !knownDifficulty(result.difficulty)) return;
       var data = currentData();
@@ -1544,7 +1593,60 @@
         if (!isPlainObject(data.assist)) data.assist = {};
         data.assist[d] = clampAssist(result.assist);
       }
+      var level = result.levelId;
+      if (result.cleared === true && isNumber(level) && level === Math.floor(level) && level >= 1 && level <= LAST_LEVEL) {
+        if (!isPlainObject(data.settings)) data.settings = defaultSettings();
+        var had = data.settings[CLEARED_KEYS[d]];
+        if (!isNumber(had) || had < level) data.settings[CLEARED_KEYS[d]] = level;
+      }
       TG.Save.save();
+    },
+
+    // Level 1 is always open. A later level is open once the level before it has been cleared on any
+    // difficulty (LEVEL2 12.3, decision 5: the unlock is global). The STAGE row is shown when levelOpen(2).
+    levelOpen: function (levelId) {
+      var data = currentData();
+      if (!isNumber(levelId) || levelId !== Math.floor(levelId) || levelId < 1 || levelId > LAST_LEVEL) return false;
+      return levelId === 1 || (isPlainObject(data.settings) && highestCleared(data.settings) >= levelId - 1);
+    },
+
+    // The pending entry (LEVEL2 12.6, decision 32): the table entry a run would have made when it went on
+    // to the next stage instead. It is cleared when the run ends in the game. One that is still there when
+    // the game starts belongs to a run that never ended (a closed tab), and enterPending adds it then.
+    // pending() returns a copy, { difficulty, entry }, or null.
+    pending: function () {
+      return cleanPending(currentData().pending);
+    },
+
+    // Keeps the entry (section 5.12; its name is not used) for the difficulty when its score would reach
+    // the table, and saves; false, with nothing kept and nothing saved, when it would not.
+    setPending: function (difficulty, entry) {
+      var e = cleanEntry(entry);
+      if (!knownDifficulty(difficulty) || !e || !TG.Save.qualifies(difficulty, e.score)) return false;
+      currentData().pending = { difficulty: difficulty, entry: e };
+      TG.Save.save();
+      return true;
+    },
+
+    // Forgets the pending entry and saves; does nothing, and writes nothing, when there is none.
+    clearPending: function () {
+      var data = currentData();
+      if (data.pending === null || data.pending === undefined) return;
+      data.pending = null;
+      TG.Save.save();
+    },
+
+    // For the start of the game: adds a pending entry to its table under the initials used last, forgets
+    // it and saves. Returns { difficulty, pos } with the 0-based position, or null when there was no
+    // pending entry or its score no longer reaches the table. With none it writes nothing.
+    enterPending: function () {
+      var p = TG.Save.pending();
+      if (!p) return null;
+      p.entry.name = cleanInitials(TG.Save.getSetting('initials'), 'PIP');
+      currentData().pending = null;
+      var pos = TG.Save.addScore(p.difficulty, p.entry);
+      if (pos < 0) TG.Save.save();     // addScore saves only when the entry is placed
+      return pos < 0 ? null : { difficulty: p.difficulty, pos: pos };
     },
 
     // Returns the three score tables to the seeded entries and the personal bests to 0; also saves.

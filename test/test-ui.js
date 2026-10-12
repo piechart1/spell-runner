@@ -66,21 +66,26 @@ const TRANSITIONS = {
   levelComplete: ['results'],
   paused: ['playing', 'bossIntro', 'boss', 'results'],
   gameOver: ['playing', 'bossIntro', 'results'],
-  results: ['highScoreEntry', 'title'],
+  results: ['highScoreEntry', 'title', 'playing'],
   highScoreEntry: ['title']
 };
 const SIM = ['playing', 'lifeLost', 'bossIntro', 'boss', 'levelComplete'];
 
+// A result in the shape of CONTRACT 5.11. stages follows cleared unless it is given: a run of one stage has
+// cleared one stage exactly when that stage was cleared.
 function fakeResult(over) {
-  return Object.assign({
+  const r = Object.assign({
     cleared: true, levelId: 1, difficulty: 'medium', score: 48210, baseScore: 41210,
     bonuses: [{ id: 'lives', label: 'LIVES X3', points: 3000 }, { id: 'accuracy', label: 'ACCURACY 95%', points: 3000 },
       { id: 'nocontinue', label: 'NO CONTINUES', points: 2000 }],
     time: 301.4,
     typing: { wpm: 28.4, peakWpm: 35.1, accuracy: 0.954, correct: 412, wrong: 20, wordsCleared: 61, wordsClean: 48,
       wordsMissed: 3, bestCleanRun: 14, bestKeyStreak: 96, avgReaction: 0.82, practiseKeys: ['q', 'z'], slowKeys: ['p', 'b'] },
-    ink: 131, livesLost: 2, lives: 3, continues: 0, rank: 'A', suggestion: null, bestWpm: 26, assist: 1
+    ink: 131, livesLost: 2, lives: 3, continues: 0, rank: 'A', suggestion: null, bestWpm: 26, assist: 1, adaptive: true,
+    stageScore: 0, stageTime: 301.4, bestScore: 0
   }, over || {});
+  if (!over || over.stages === undefined) r.stages = r.cleared ? 1 : 0;
+  return r;
 }
 
 function makeFakeGame(TG, log) {
@@ -142,6 +147,16 @@ function makeFakeGame(TG, log) {
       g.force('results');
       return true;
     },
+    // As TG.Game.nextStage (CONTRACT 9.1): only from the results screen of a cleared stage with a level
+    // after it. The result is gone once the run goes on.
+    nextStage() {
+      log.push(['nextStage']);
+      const r = g.state.result;
+      if (g.state.screen !== 'results' || !r || r.cleared !== true || !(TG.Levels && TG.Levels[r.levelId + 1])) return false;
+      g.state.result = null;
+      g.force('playing');
+      return true;
+    },
     isSimScreen(name) {
       return SIM.indexOf(name) !== -1;
     },
@@ -189,14 +204,21 @@ const FAKE_FILES = ['js/core.js', 'js/words.js', 'js/gfx.js', 'js/font.js', 'js/
 // The same with js/board.js, loaded before js/ui.js as in the page (world scores).
 const BOARD_FILES = FAKE_FILES.slice(0, FAKE_FILES.indexOf('js/ui.js')).concat(['js/board.js', 'js/ui.js', 'js/main.js']);
 
-// Loads the interface with fakes and starts it like the page does. opts: { storage, canvas, init, world, board }.
+// The two level files, which only register their data in TG.Levels.
+const LEVEL_FILES = ['js/levels/level1.js', 'js/levels/level2.js'];
+
+// Loads the interface with fakes and starts it like the page does. opts: { storage, canvas, init, world, board, levels }.
 //   world: a stand-in for the world scores service (shot.createWorld()). js/board.js is loaded, the
 //          service's address is TG.Board.URL and its fetch is window.fetch before TG.Main.init();
 //          TG.Board's clock is t.now (ms), which t.steps moves on with TG.Board.update, as a frame does.
 //   board: true loads js/board.js and leaves TG.Board.URL empty, as the game is delivered.
+//   levels: true also loads the level files, so that there is a Level 2 to unlock and to go on to. Without
+//          them the interface has no level after Level 1 and behaves as it did before Level 2.
 function fakeEnv(opts) {
   const o = opts || {};
-  const env = stubs.load({ files: o.world || o.board ? BOARD_FILES : FAKE_FILES, storage: o.storage || 'memory', canvas: o.canvas || 'stub' });
+  let files = o.world || o.board ? BOARD_FILES : FAKE_FILES;
+  if (o.levels) files = files.slice(0, files.indexOf('js/sprites-world.js') + 1).concat(LEVEL_FILES, files.slice(files.indexOf('js/sprites-world.js') + 1));
+  const env = stubs.load({ files: files, storage: o.storage || 'memory', canvas: o.canvas || 'stub' });
   const TG = env.TG;
   if (o.board) TG.Board.URL = '';
   if (o.world) {
@@ -214,7 +236,7 @@ function fakeEnv(opts) {
   TG.Hud = { init() { log.push(['Hud.init']); }, update() { log.push(['Hud.update']); } };
   // Record what the interface saves.
   const save = TG.Save;
-  ['setSetting', 'addScore', 'recordRun', 'resetScores'].forEach(function (fn) {
+  ['setSetting', 'addScore', 'recordRun', 'resetScores', 'setPending', 'clearPending', 'enterPending'].forEach(function (fn) {
     const orig = save[fn];
     save[fn] = function () {
       log.push([fn].concat(JSON.parse(JSON.stringify(Array.prototype.slice.call(arguments)))));
@@ -1570,7 +1592,7 @@ check('Real modules: a whole run on Easy to results, the tally, the high score e
   s.press('enter');                               // finish the tally
   s.press('enter');                               // page 2
   s.seconds(2);
-  s.press('enter');
+  s.press('esc');                                 // the strip: TITLE ends the run here (Enter is NEXT STAGE)
   assert.strictEqual(s.screen(), 'highScoreEntry', 'the score ' + res.score + ' qualifies');
   s.type('xyz');
   s.press('enter');
@@ -3073,6 +3095,1071 @@ check('tools/shot-ui.js: the world options are checked, and need --world', funct
     console.error = error;
   }
   assert.strictEqual(lines.length, 4);
+  assert.ok(!fs.existsSync(path.join(ROOT, 'x.png')), 'a picture was written');
+});
+
+// ---------------------------------------------------------------------------------------------
+// I. Stages (docs/LEVEL2.md section 12 and 13.5): the NEXT STAGE strip, the STAGE row, the results
+//    lines, How to Play, the story panels and the pending entry
+// ---------------------------------------------------------------------------------------------
+//
+// The fakes of section D with the two level files loaded, so that there is a Level 2 to unlock and to
+// go on to. The fake TG.Game has nextStage, which accepts what the real one accepts.
+
+const STRIP_KEYS = 'ENTER: NEXT STAGE   ESC: TITLE';
+const STRIP_LINE = 'THE SCORE IS ENTERED WHEN THE RUN ENDS';
+const UNLOCKED = 'STAGE 2 UNLOCKED: CLOCKWORK CAVERNS';
+const HOOK = 'A COLD WIND BLOWS DOWN THE SHAFT.';
+const STORY_1 = ['BARON VON BURROW HAS DUG UP THE', 'MEADOW AND CARRIED OFF ITS WORDS.', 'PIP THE SCRIBE SETS OUT TO SPELL', 'THEM BACK.'];
+const STORY_2 = ['THE BARON FLED TO LADY RATCHET,', 'WHO WINDS WORDS INTO CLOCKWORK.', 'PIP CLIMBS DOWN AFTER HIM.'];
+const LIME = 15, AQUA = 11;
+
+function stageEnv(opts) {
+  return fakeEnv(Object.assign({ levels: true }, opts || {}));
+}
+
+// Level 2 is open, as after a cleared Level 1 run on Easy: the unlock is for every difficulty.
+function openLevel2(t) {
+  t.TG.Save.setSetting('clearedEasy', 1);
+}
+
+// The results screen of `result` on its last page with the tally finished, which is where the strip is.
+// Page 1 is left to finish by itself, and Space turns the page, as before.
+function toLastPage(t, result) {
+  t.game.state.result = result;
+  t.game.force('results');
+  t.seconds(6);
+  t.press('space');
+  t.seconds(3);
+  assert.strictEqual(t.screen(), 'results');
+}
+
+// A page load on the same computer: a new copy of the game over the stored record of `t`.
+function reload(t, opts) {
+  const u = fakeEnv(Object.assign({ levels: true, init: false }, opts || {}));
+  t.env.storage.forEach(function (value, key) { u.env.storage.set(key, value); });
+  u.TG.Main.init();
+  return u;
+}
+
+function at(boxes, text) {
+  return boxes.filter(function (b) { return b.text === text; })[0] || null;
+}
+
+// The letters drawn one by one on a line (a plate, or a panel's label), joined from left to right.
+function lettersAt(boxes, y) {
+  return boxes.filter(function (b) { return b.y === y && b.text.length === 1; })
+    .sort(function (p, q) { return p.x - q.x; }).map(function (b) { return b.text; }).join('');
+}
+
+// The names of the sprites TG.Gfx.draw is asked for during one frame.
+function spritesDrawn(t) {
+  const seen = [];
+  const draw = t.TG.Gfx.draw;
+  t.TG.Gfx.draw = function (ctx, name) { seen.push(String(name)); return draw.apply(t.TG.Gfx, arguments); };
+  try { t.TG.UI.draw(t.env.canvas.getContext('2d'), t.game.state); } finally { t.TG.Gfx.draw = draw; }
+  return seen;
+}
+
+// ----- the STAGE row ---------------------------------------------------------------------------
+
+check('Difficulty screen before the unlock: no STAGE row, the screen is the one from before line for line, and Up and Down move the selection as Left and Right do', function () {
+  const t = stageEnv();
+  const old = fakeEnv();                         // without the level files: the game as it was before Level 2
+  [t, old].forEach(function (e) { toMenu(e); e.press('enter'); assert.strictEqual(e.screen(), 'difficultySelect'); });
+  const boxes = drawnBoxes(t);
+  const line = function (b) { return b.text + '@' + b.x + ',' + b.y; };
+  assert.deepStrictEqual(boxes.map(line), drawnBoxes(old).map(line));
+  assert.ok(boxes.every(function (b) { return b.text.indexOf('STAGE') === -1; }), 'a STAGE row before the unlock');
+  [['WORDS: EVERYDAY WORDS, A LITTLE LONGER', 158], ['SPEED: STEADY, WORDS COME MORE OFTEN', 170], ['FOR 20-40 WORDS A MINUTE. 4 LIVES.', 182],
+    ['ARROWS AND ENTER, OR TYPE THE NAME', 206]].forEach(function (want) {
+    assert.ok(at(boxes, want[0]) && at(boxes, want[0]).y === want[1], '"' + want[0] + '" at y ' + want[1]);
+  });
+  t.press('up');
+  assert.ok(at(drawnBoxes(t), 'FOR 10-20 WORDS A MINUTE. 5 LIVES.'), 'Up did not move the selection to Easy');
+  t.press('down');
+  t.press('down');
+  assert.ok(at(drawnBoxes(t), 'FOR 40+ WORDS A MINUTE. 3 LIVES.'), 'Down did not move the selection to Hard');
+  assert.strictEqual(t.calls('setSetting').filter(function (e) { return e[1] === 'lastLevel'; }).length, 0);
+  // A stage remembered from somewhere else does not start Level 2 while it is locked.
+  t.TG.Save.setSetting('lastLevel', 2);
+  t.press('enter');
+  t.type('ready');
+  assert.strictEqual(t.calls('newRun')[0][1].levelId, 1);
+  assert.strictEqual(t.calls('newRun')[0][1].difficulty, 'hard');
+});
+
+check('The STAGE row is there once Level 1 has been cleared on any difficulty: STAGE 1  QUILL MEADOWS between two arrows, changed with Up and Down to STAGE 2  CLOCKWORK CAVERNS with its three sample words, and remembered', function () {
+  const t = stageEnv();
+  const ui = eventLog(t.TG);
+  openLevel2(t);                                 // cleared on Easy; the selection below is Medium and Hard
+  toMenu(t);
+  t.press('enter');
+  let boxes = drawnBoxes(t);
+  const row = at(boxes, 'STAGE 1  QUILL MEADOWS');
+  assert.ok(row && row.y === 153 && row.x === 104 && row.color === GOLD, 'the row: ' + JSON.stringify(row));
+  assert.deepStrictEqual([at(boxes, '^').x, at(boxes, '^').y, at(boxes, '_').x, at(boxes, '_').y], [88, 153, 288, 153], 'the arrows stand either side of the name');
+  assert.strictEqual(lettersAt(boxes, 166), '', 'Level 1 has no sample words of its own: the panels show them');
+  // Under the row, the two lines about the words and the speed; the third line has given way.
+  assert.deepStrictEqual([at(boxes, 'WORDS: EVERYDAY WORDS, A LITTLE LONGER').y, at(boxes, 'SPEED: STEADY, WORDS COME MORE OFTEN').y], [180, 191]);
+  assert.ok(boxes.every(function (b) { return b.text.indexOf('WORDS A MINUTE') === -1; }));
+  assert.ok(at(boxes, '20-40 WPM'), 'the WPM guide is on the panel');
+  assertFits(boxes, 'the STAGE row on STAGE 1');
+  assertApart(boxes, 'the STAGE row on STAGE 1');
+
+  const moves = ui.filter(function (e) { return e.name === 'ui:move'; }).length;
+  t.press('down');
+  boxes = drawnBoxes(t);
+  const two = at(boxes, 'STAGE 2  CLOCKWORK CAVERNS');
+  assert.ok(two && two.y === 153 && two.x === 88, 'the row after Down: ' + JSON.stringify(two));
+  assert.strictEqual(lettersAt(boxes, 166), 'GEARPISTONCLOCKWORK', 'the sample words of LEVEL2 7.5, on plates under the name');
+  assert.strictEqual(ui.filter(function (e) { return e.name === 'ui:move'; }).length, moves + 1);
+  assert.deepStrictEqual(t.calls('setSetting').pop(), ['setSetting', 'lastLevel', 2]);
+  assert.strictEqual(t.TG.Save.getSetting('lastLevel'), 2);
+  assertFits(boxes, 'the STAGE row on STAGE 2');
+  assertApart(boxes, 'the STAGE row on STAGE 2');
+  assert.ok(boxes.filter(function (b) { return b.y >= 149 && b.y < 203; }).every(function (b) { return b.y + b.h <= 203; }), 'the row and its lines end above the bottom strip');
+
+  // Up and Down go round the two stages. Left and Right still choose the difficulty and leave the row alone.
+  t.press('down');
+  assert.ok(at(drawnBoxes(t), 'STAGE 1  QUILL MEADOWS'));
+  t.press('up');
+  assert.ok(at(drawnBoxes(t), 'STAGE 2  CLOCKWORK CAVERNS'));
+  t.press('right');
+  boxes = drawnBoxes(t);
+  assert.ok(at(boxes, 'STAGE 2  CLOCKWORK CAVERNS') && at(boxes, 'WORDS: LONG AND UNUSUAL WORDS'), 'Right chose Hard and kept the stage');
+  // The sample words belong to the stage, not to the difficulty.
+  assert.strictEqual(lettersAt(boxes, 166), 'GEARPISTONCLOCKWORK');
+
+  // Typing a name still confirms, with the same screen data as before, and READY starts at the stage.
+  t.type('easy');
+  assert.deepStrictEqual(t.calls('setScreen').pop(), ['setScreen', 'howToPlay', { origin: 'start', difficulty: 'easy' }]);
+  t.press('esc');                                // back: the row is where it was left
+  assert.ok(at(drawnBoxes(t), 'STAGE 2  CLOCKWORK CAVERNS'));
+  t.press('enter');
+  t.type('ready');
+  const run = t.calls('newRun')[0][1];
+  assert.deepStrictEqual([run.difficulty, run.levelId], ['easy', 2]);
+  assert.deepStrictEqual(t.env.errors, []);
+
+  // The next visit opens on the stage chosen last, also after a page load; STAGE 1 starts Level 1.
+  const u = reload(t);
+  toMenu(u);
+  u.press('enter');
+  assert.ok(at(drawnBoxes(u), 'STAGE 2  CLOCKWORK CAVERNS'), 'the stage was not remembered');
+  u.press('up');
+  u.press('enter');
+  u.type('ready');
+  assert.strictEqual(u.calls('newRun')[0][1].levelId, 1);
+  assert.strictEqual(u.TG.Save.getSetting('lastLevel'), 1);
+});
+
+check('The sample words of the STAGE row are words of Level 2: one of its flavour from each difficulty', function () {
+  const TG = stubs.load({ files: ['js/core.js', 'js/words.js', 'js/levels/level2.js'] }).TG;
+  const flavour = TG.Levels[2].theme.wordFlavour;
+  ['gear', 'piston', 'clockwork'].forEach(function (word, i) {
+    const tiers = TG.Words.POOLS[['easy', 'medium', 'hard'][i]].flavour[flavour];
+    const found = Object.keys(tiers).some(function (tier) { return tiers[tier].indexOf(word) !== -1; });
+    assert.ok(found, word + ' is not a ' + flavour + ' word of ' + ['easy', 'medium', 'hard'][i]);
+  });
+});
+
+check('A record stored before Level 2 with a dated cleared entry opens the STAGE row at once, and its next clear of Level 1 is not announced as an unlock', function () {
+  const record = JSON.parse(read('test/fixtures/save-before-level2.json')).records.played;
+  const t = stageEnv({ init: false });
+  t.env.storage.set('spellrunner.v1', record);
+  t.TG.Main.init();
+  assert.strictEqual(t.env.storage.get('spellrunner.v1'), record, 'starting the game wrote to the stored record');
+  toMenu(t);
+  t.press('enter');
+  assert.ok(at(drawnBoxes(t), 'STAGE 1  QUILL MEADOWS'), 'no STAGE row for a player who cleared Level 1 before this release');
+  t.game.state.result = fakeResult({ difficulty: 'hard' });
+  t.game.force('results');
+  t.seconds(6);
+  const texts = drawnTexts(t);
+  assert.ok(texts.indexOf('STAGE 1 CLEAR!') !== -1 && texts.indexOf(UNLOCKED) === -1, texts.join(' | '));
+  assert.strictEqual(t.TG.Save.getSetting('initials'), 'EVE');
+});
+
+// ----- the NEXT STAGE strip --------------------------------------------------------------------
+
+check('Results after a cleared Level 1 run: once the last page is tallied, THE SCORE IS ENTERED WHEN THE RUN ENDS over ENTER: NEXT STAGE   ESC: TITLE; until then, and after any other run, the footer of before', function () {
+  const t = stageEnv();
+  openLevel2(t);
+  t.game.state.result = fakeResult();
+  t.game.force('results');
+  t.seconds(0.6);
+  const strip = function () { const x = drawnTexts(t); return x.indexOf(STRIP_KEYS) !== -1 || x.indexOf(STRIP_LINE) !== -1; };
+  assert.ok(!strip() && drawnTexts(t).indexOf('ENTER: NEXT') !== -1, 'the first page, tallying');
+  t.press('esc');                                // Esc has no meaning before the strip
+  t.press('enter');                              // finishes the tally and stamps the rank
+  assert.ok(!strip() && drawnTexts(t).indexOf('ENTER: NEXT') !== -1, 'the first page, tallied');
+  t.press('esc');
+  t.press('enter');                              // page 2
+  t.press('esc');
+  assert.ok(!strip() && drawnTexts(t).indexOf('ENTER: NEXT') !== -1, 'the last page, tallying');
+  assert.strictEqual(t.calls('setScreen').length + t.calls('nextStage').length, 0, 'a key acted before the strip was shown');
+  t.seconds(3);
+  const boxes = drawnBoxes(t);
+  const line = at(boxes, STRIP_LINE), keys = at(boxes, STRIP_KEYS);
+  assert.ok(line && line.y === 194 && line.x === (384 - line.w) / 2, 'the line: ' + JSON.stringify(line));
+  assert.ok(keys && keys.y === 205 && keys.x === (384 - keys.w) / 2 && keys.color === WHITE, 'the strip: ' + JSON.stringify(keys));
+  assert.ok(!at(boxes, 'ENTER: CONTINUE') && !at(boxes, 'ENTER: NEXT'), 'the old footer is drawn with the strip');
+  assert.ok(at(boxes, '2/2'), 'the page number');
+  assert.strictEqual(boxes.filter(function (b) { return b.y === 48 + 8 * 16; }).length > 0, true, 'nine rows at 16 px from y 48');
+  assertFits(boxes, 'the strip');
+  assertApart(boxes, 'the strip');
+  assert.strictEqual(t.screen(), 'results');
+  assert.strictEqual(t.calls('recordRun').length, 1);
+
+  // No strip: a run that ended, a cleared Level 2 (there is no Level 3), a game without a Level 2, and a
+  // level whose id is not a number, as the harness plays: TG.Game.nextStage has no level after any of them.
+  [['a run that ended', stageEnv(), fakeResult({ cleared: false, bonuses: [], rank: 'B' })],
+    ['a cleared Level 2', stageEnv(), fakeResult({ levelId: 2 })],
+    ['no level files', fakeEnv(), fakeResult()],
+    ['a level called test', stageEnv(), fakeResult({ levelId: 'test' })]].forEach(function (c) {
+    const u = c[1];
+    toLastPage(u, c[2]);
+    const texts = drawnTexts(u);
+    assert.ok(texts.indexOf('ENTER: CONTINUE') !== -1 && texts.indexOf(STRIP_KEYS) === -1 && texts.indexOf(STRIP_LINE) === -1, c[0] + ': ' + texts.slice(-4).join(' | '));
+    u.press('esc');                              // Esc is read only where the strip is shown
+    assert.strictEqual(u.screen(), 'results', c[0] + ': Esc left the results screen');
+    u.press('space');                            // and without it Space still leaves, as before
+    assert.strictEqual(u.screen(), 'highScoreEntry', c[0]);
+    assert.strictEqual(u.calls('nextStage').length, 0, c[0]);
+  });
+});
+
+check('The strip: Space and the JUMP button do nothing there, Enter alone calls TG.Game.nextStage, once, and nothing is entered; a refused call leaves the screen working', function () {
+  const t = stageEnv();
+  const ui = eventLog(t.TG);
+  toLastPage(t, fakeResult());                   // Space turned the page on the way
+  t.press('space');
+  t.press('jump');
+  t.seconds(0.5);
+  t.press('space');
+  assert.strictEqual(t.calls('nextStage').length, 0, 'Space or JUMP took NEXT STAGE');
+  assert.strictEqual(t.screen(), 'results');
+  assert.ok(drawnTexts(t).indexOf(STRIP_KEYS) !== -1);
+  let refuse = true;
+  const next = t.game.nextStage;
+  t.game.nextStage = function () { if (refuse) { refuse = false; t.log.push(['nextStage']); return false; } return next(); };
+  t.press('enter');                              // refused
+  assert.strictEqual(t.screen(), 'results');
+  assert.strictEqual(t.calls('setPending').length, 0, 'an entry was kept for a run that did not go on');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'playing');
+  assert.strictEqual(t.calls('nextStage').length, 2);
+  assert.strictEqual(t.calls('addScore').length, 0, 'NEXT STAGE entered a score');
+  assert.strictEqual(t.calls('setScreen').length, 0, 'NEXT STAGE went through setScreen');
+  assert.strictEqual(t.calls('newRun').length, 0);
+  assert.ok(ui.some(function (e) { return e.name === 'ui:select'; }));
+  assert.deepStrictEqual(t.env.errors, []);
+  // Keys that arrive in the same step as the Enter are dropped: one press does not act on two screens.
+  const u = stageEnv();
+  toLastPage(u, fakeResult());
+  u.input.press('enter');
+  u.input.press('esc');
+  u.input.press('enter');
+  u.steps(1);
+  assert.strictEqual(u.screen(), 'playing');
+  assert.deepStrictEqual([u.calls('nextStage').length, u.calls('setScreen').length], [1, 0]);
+});
+
+check('The strip: Esc is TITLE and leads where Enter led before, to the initials screen when the run has an entry to make and to the title otherwise', function () {
+  const t = stageEnv();
+  toLastPage(t, fakeResult());                   // 48,210 on Medium reaches the table
+  t.press('esc');
+  assert.strictEqual(t.screen(), 'highScoreEntry');
+  assert.strictEqual(t.calls('nextStage').length, 0);
+  t.type('abc');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.calls('addScore').length, 1);
+  assert.strictEqual(t.calls('addScore')[0][2].score, 48210);
+  const u = stageEnv();
+  toLastPage(u, fakeResult({ score: 900, baseScore: 900, bonuses: [] }));   // cleared, under every seeded score
+  assert.ok(drawnTexts(u).indexOf(STRIP_KEYS) !== -1);
+  u.press('esc');
+  assert.strictEqual(u.screen(), 'title');
+  assert.strictEqual(u.calls('addScore').length + u.calls('nextStage').length, 0);
+});
+
+check('The line over the strip is for a run with an entry to make: a total under the table of this computer, with no world scores to take it, has the strip alone', function () {
+  const lowest = { score: 900, baseScore: 900, bonuses: [], suggestion: 'READY FOR HARD?' };   // under every seeded score
+  // No entry to make: the strip without the line, the suggestion where it was before, the rows at 16 px.
+  const t = stageEnv();
+  toLastPage(t, fakeResult(lowest));
+  let boxes = drawnBoxes(t);
+  const keys = at(boxes, STRIP_KEYS);
+  assert.ok(keys && keys.y === 205 && keys.x === (384 - keys.w) / 2, 'the strip: ' + JSON.stringify(keys));
+  assert.ok(!at(boxes, STRIP_LINE), 'the line promises an entry that this run does not get');
+  assert.deepStrictEqual([at(boxes, 'READY FOR HARD?').y, at(boxes, 'CONTINUES USED').y], [194, 48 + 8 * 16]);
+  assertApart(boxes, 'the strip alone');
+  // Both keys work as with the line: Enter goes on, and nothing is kept for a total that would not place.
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'playing');
+  assert.strictEqual(t.TG.Save.pending(), null);
+  // The same total where the fifth place is lower: the line is back.
+  const u = stageEnv();
+  toLastPage(u, fakeResult(Object.assign({}, lowest, { difficulty: 'easy', score: 3001, baseScore: 3001 })));   // fifth place on Easy is 3,000
+  boxes = drawnBoxes(u);
+  assert.ok(at(boxes, STRIP_LINE) && at(boxes, STRIP_LINE).y === 194 && at(boxes, STRIP_KEYS), 'no line for a total that reaches the table');
+  // And with the world scores taking the run, the lowest total has it too: Esc leads to the initials screen.
+  const w = worldEnv({ levels: true });
+  toMenu(w);
+  startFakeRun(w, 'medium');
+  toLastPage(w, fakeResult(lowest));
+  boxes = drawnBoxes(w);
+  assert.ok(at(boxes, STRIP_LINE) && at(boxes, STRIP_KEYS), 'no line for a run that goes to the world scores');
+  assertApart(boxes, 'the line with the world scores');
+  w.press('esc');
+  assert.strictEqual(w.screen(), 'highScoreEntry');
+});
+
+check('A second Esc straight after the Esc of the strip does not decline on the initials screen: Esc is not read there for 0.5 s wherever it has a meaning', function () {
+  // NEW HIGH SCORE! with world scores on: Esc there switches the sending off.
+  const t = worldEnv({ levels: true });
+  toMenu(t);
+  startFakeRun(t, 'medium');
+  toLastPage(t, fakeResult({ score: 99999 }));
+  t.press('esc');
+  t.press('esc');                                // the next step: a second press, or a key that bounced
+  assert.strictEqual(t.screen(), 'highScoreEntry');
+  let texts = drawnTexts(t);
+  assert.ok(texts.indexOf('INITIALS AND SCORE ALSO GO TO WORLD SCORES') !== -1 && texts.indexOf('THIS SCORE STAYS ON THIS COMPUTER') === -1,
+    'the second Esc declined: ' + texts.slice(-3).join(' | '));
+  t.seconds(0.3);
+  t.press('esc');                                // still inside the 0.5 s
+  assert.ok(drawnTexts(t).indexOf('THIS SCORE STAYS ON THIS COMPUTER') === -1);
+  t.seconds(0.3);
+  t.press('esc');                                // now it is read
+  texts = drawnTexts(t);
+  assert.ok(texts.indexOf('THIS SCORE STAYS ON THIS COMPUTER') !== -1, texts.slice(-3).join(' | '));
+  assert.strictEqual(sends(t).length, 0);
+
+  // WORLD SCORES: Esc there goes to the title with nothing saved or sent.
+  const u = worldEnv({ levels: true });
+  toMenu(u);
+  startFakeRun(u, 'medium');
+  toLastPage(u, fakeResult({ score: 900, baseScore: 900, bonuses: [] }));
+  u.press('esc');
+  u.press('esc');
+  assert.strictEqual(u.screen(), 'highScoreEntry', 'the second Esc left the initials screen');
+  assert.ok(drawnTexts(u).indexOf('WORLD SCORES') !== -1);
+  u.seconds(0.6);
+  u.press('esc');
+  assert.strictEqual(u.screen(), 'title');
+  assert.strictEqual(sends(u).length + u.calls('addScore').length, 0);
+
+  // With world scores off Esc has no meaning on the initials screen, so there is nothing to lock.
+  const v = stageEnv();
+  toLastPage(v, fakeResult());
+  v.press('esc');
+  v.press('esc');
+  v.seconds(0.6);
+  v.press('esc');
+  assert.strictEqual(v.screen(), 'highScoreEntry');
+  v.type('abc');
+  v.press('enter');
+  assert.strictEqual(v.calls('addScore').length, 1);
+});
+
+// ----- one entry and one submission per run -----------------------------------------------------
+
+check('NEXT STAGE asks for no run token and keeps the one held; the run is entered once, at its end, as cleared when it cleared a stage, with its run total and its whole time', function () {
+  const t = worldEnv({ levels: true });
+  toMenu(t);
+  t.TG.Save.setSetting('initials', 'KEY');
+  startFakeRun(t, 'medium');
+  assert.strictEqual(tokens(t).length, 1);
+  toLastPage(t, fakeResult({ score: 99999 }));
+  t.press('enter');                              // NEXT STAGE
+  assert.strictEqual(t.screen(), 'playing');
+  assert.strictEqual(tokens(t).length, 1, 'a second run token was asked for');
+  assert.strictEqual(t.TG.Board.hasToken('medium'), true, 'the run token was dropped');
+  assert.strictEqual(sends(t).length + t.calls('addScore').length, 0, 'the run was entered at STAGE 1 CLEAR');
+  // The run ends in Level 2, from the pause menu: its stage was not cleared, the run cleared one.
+  const end = fakeResult({ levelId: 2, cleared: false, stages: 1, bonuses: [], score: 120470, baseScore: 120470, stageScore: 99999,
+    time: 512.7, stageTime: 211.3, rank: 'A' });
+  assert.strictEqual(endFakeRun(t, end), 'highScoreEntry');
+  assert.ok(drawnTexts(t).indexOf('MEDIUM   120470') !== -1, 'the initials screen shows the run total');
+  t.press('enter');                              // the initials used last
+  assert.strictEqual(t.screen(), 'title');
+  const sent = sends(t);
+  assert.strictEqual(sent.length, 1, 'one submission per run');
+  assert.deepStrictEqual(sent[0].body, { token: 'run-1.medium', name: 'KEY', score: 120470, wpm: 28, accuracy: 95, rank: 'A', cleared: true, time: 512 });
+  const add = t.calls('addScore');
+  assert.strictEqual(add.length, 1, 'one table entry per run');
+  assert.deepStrictEqual([add[0][1], add[0][2].name, add[0][2].score, add[0][2].cleared, add[0][2].rank], ['medium', 'KEY', 120470, true, 'A']);
+  assert.strictEqual(t.calls('recordRun').length, 2, 'each results screen records its result');
+  assert.strictEqual(t.calls('setScreen').filter(function (e) { return e[1] === 'highScoreEntry'; }).length, 1, 'the initials screen comes once');
+  assert.strictEqual(t.TG.Save.scores('medium').filter(function (e) { return e.name === 'KEY'; }).length, 1);
+  assert.deepStrictEqual(t.env.errors, []);
+
+  // The mark on an entry follows the run, not the stage that ended last.
+  const u = stageEnv();
+  u.game.state.result = fakeResult({ cleared: false, stages: 0, bonuses: [], score: 99999, rank: 'B' });
+  u.game.force('highScoreEntry');
+  u.type('abc');
+  u.press('enter');
+  assert.strictEqual(u.calls('addScore')[0][2].cleared, false);
+});
+
+// ----- the pending entry ----------------------------------------------------------------------
+
+check('The pending entry: kept at NEXT STAGE when the stage\'s total would reach the table, as the entry STAGE 1 CLEAR would have made; forgotten when the run reaches the title', function () {
+  const t = stageEnv();
+  toLastPage(t, fakeResult());
+  assert.strictEqual(t.TG.Save.pending(), null, 'an entry was kept before NEXT STAGE was pressed');
+  t.press('enter');
+  const p = stubs.plain(t.TG.Save.pending());
+  assert.ok(p && /^\d{4}-\d{2}-\d{2}$/.test(p.entry.date), JSON.stringify(p));
+  delete p.entry.date;
+  delete p.entry.name;                           // not used: the entry is made under the initials used last
+  assert.deepStrictEqual(p, { difficulty: 'medium', entry: { score: 48210, wpm: 28, accuracy: 95, rank: 'A', cleared: true } });
+  assert.ok(JSON.parse(t.env.storage.get('spellrunner.v1')).pending, 'the pending entry is not in the stored record');
+  assert.strictEqual(t.TG.Save.scores('medium').some(function (e) { return e.score === 48210; }), false);
+  // The run ends in the game and is entered: nothing is left pending, and the table has one entry of it.
+  assert.strictEqual(endFakeRun(t, fakeResult({ levelId: 2, cleared: false, stages: 1, bonuses: [], score: 61000, baseScore: 61000, stageScore: 48210, rank: 'B' })), 'highScoreEntry');
+  assert.ok(t.TG.Save.pending(), 'the entry was dropped before the run reached the title');
+  t.type('abc');
+  t.press('enter');
+  assert.strictEqual(t.screen(), 'title');
+  assert.strictEqual(t.TG.Save.pending(), null);
+  assert.strictEqual(JSON.parse(t.env.storage.get('spellrunner.v1')).pending, null);
+  const mine = stubs.plain(t.TG.Save.scores('medium')).filter(function (e) { return e.date !== ''; });
+  assert.deepStrictEqual(mine.map(function (e) { return [e.name, e.score]; }), [['ABC', 61000]]);
+
+  // A total under the table keeps nothing. A run that ends without an entry reaches the title too.
+  const u = stageEnv();
+  toLastPage(u, fakeResult({ score: 900, baseScore: 900, bonuses: [] }));
+  u.press('enter');
+  assert.strictEqual(u.screen(), 'playing');
+  assert.strictEqual(u.TG.Save.pending(), null);
+  const v = stageEnv();
+  toLastPage(v, fakeResult({ score: 9000, baseScore: 9000, bonuses: [] }));   // fifth place on Medium is 8,000
+  v.press('enter');
+  assert.ok(v.TG.Save.pending());
+  v.TG.Save.addScore('medium', { name: 'TOP', score: 50000, wpm: 30, accuracy: 96, rank: 'A', cleared: true, date: '2026-10-12' });
+  assert.strictEqual(endFakeRun(v, fakeResult({ levelId: 2, cleared: false, stages: 1, bonuses: [], score: 9000, baseScore: 9000, stageScore: 9000, rank: 'B' })), 'title');
+  assert.strictEqual(v.TG.Save.pending(), null);
+  assert.strictEqual(v.TG.Save.scores('medium').some(function (e) { return e.score === 9000; }), false);
+  // Starting a run forgets one as well.
+  const w = stageEnv();
+  toMenu(w);
+  w.TG.Save.setPending('easy', { name: 'PIP', score: 20000, wpm: 20, accuracy: 95, rank: 'A', cleared: true, date: '2026-10-12' });
+  assert.ok(w.TG.Save.pending());
+  startFakeRun(w, 'easy');
+  assert.strictEqual(w.TG.Save.pending(), null, 'a run started with an entry still pending');
+});
+
+check('A run that went on and never ended (a closed tab): at the next start its Stage 1 entry is in the table under the initials used last, once', function () {
+  const t = stageEnv();
+  t.TG.Save.setSetting('initials', 'KEY');
+  toLastPage(t, fakeResult({ difficulty: 'hard', score: 81230 }));
+  t.press('enter');                              // NEXT STAGE; the tab is then closed in Level 2
+  assert.strictEqual(t.screen(), 'playing');
+  const u = reload(t);
+  assert.strictEqual(u.screen(), 'boot');
+  assert.strictEqual(u.calls('enterPending').length, 1, 'TG.UI.init did not enter the pending entry');
+  const top = stubs.plain(u.TG.Save.scores('hard'))[0];
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(top.date), 'the entry has no date');
+  delete top.date;
+  assert.deepStrictEqual(top, { name: 'KEY', score: 81230, wpm: 28, accuracy: 95, rank: 'A', cleared: true });
+  assert.strictEqual(u.TG.Save.pending(), null);
+  assert.strictEqual(JSON.parse(u.env.storage.get('spellrunner.v1')).pending, null);
+  toMenu(u);                                     // the title changes nothing more
+  assert.strictEqual(u.TG.UI.panel, 'menu', 'the start-up entry opened a panel');
+  const v = reload(u);                           // and neither does another start
+  assert.strictEqual(v.TG.Save.scores('hard').filter(function (e) { return e.score === 81230; }).length, 1);
+  assert.deepStrictEqual(u.env.errors.concat(v.env.errors), []);
+  // With nothing pending a start writes nothing.
+  const w = stageEnv();
+  assert.strictEqual(w.env.storage.has('spellrunner.v1'), false, 'a first start wrote a record');
+  toMenu(w);
+  assert.strictEqual(w.env.storage.has('spellrunner.v1'), false, 'reaching the title wrote a record');
+});
+
+// ----- the results lines ------------------------------------------------------------------------
+
+check('STAGE 2 UNLOCKED: CLOCKWORK CAVERNS is under the title the first time Level 1 is cleared on this computer, and not again; the difficulty then stands in the corner', function () {
+  const t = stageEnv();
+  // A run that ended opens nothing.
+  t.game.state.result = fakeResult({ cleared: false, bonuses: [], rank: 'B' });
+  t.game.force('results');
+  t.seconds(1);
+  assert.ok(drawnTexts(t).indexOf(UNLOCKED) === -1);
+  assert.strictEqual(t.TG.Save.levelOpen(2), false);
+  // The first clear.
+  t.game.state.result = fakeResult({ difficulty: 'easy' });
+  t.game.force('results');
+  t.seconds(1);
+  let boxes = drawnBoxes(t);
+  const line = at(boxes, UNLOCKED);
+  assert.ok(line && line.y === 28 && line.x === (384 - line.w) / 2 && line.color === LIME, 'the line: ' + JSON.stringify(line));
+  const label = at(boxes, 'EASY');
+  assert.ok(label && label.y === 12 && label.x + label.w === 378, 'the difficulty: ' + JSON.stringify(label));
+  assert.strictEqual(at(boxes, 'STAGE 1 CLEAR!').y, 8);
+  assert.strictEqual(t.TG.Save.levelOpen(2), true);
+  t.seconds(6);
+  t.press('enter');
+  t.seconds(3);
+  boxes = drawnBoxes(t);
+  assert.ok(at(boxes, UNLOCKED) && at(boxes, STRIP_KEYS), 'the line stays on the last page, over the strip');
+  assertFits(boxes, 'the unlock line');
+  assertApart(boxes, 'the unlock line');
+  // The same result set up again keeps its line; the next clear, on any difficulty, has none.
+  t.game.force('results');
+  t.seconds(1);
+  assert.ok(at(drawnBoxes(t), UNLOCKED));
+  t.game.state.result = fakeResult({ difficulty: 'hard' });
+  t.game.force('results');
+  t.seconds(1);
+  boxes = drawnBoxes(t);
+  assert.ok(!at(boxes, UNLOCKED));
+  assert.deepStrictEqual([at(boxes, 'HARD').y, at(boxes, 'HARD').x], [28, 176], 'without a headline the difficulty is under the title, as before');
+});
+
+check('STAGE 2 CLEAR! has A COLD WIND BLOWS DOWN THE SHAFT. under it; a run that ended in Level 2 and a cleared Level 1 do not', function () {
+  const t = stageEnv();
+  openLevel2(t);
+  t.game.state.result = fakeResult({ levelId: 2 });
+  t.game.force('results');
+  t.seconds(6);
+  let boxes = drawnBoxes(t);
+  const hook = at(boxes, HOOK);
+  assert.ok(at(boxes, 'STAGE 2 CLEAR!') && hook && hook.y === 28 && hook.x === (384 - hook.w) / 2 && hook.color === AQUA, JSON.stringify(hook));
+  assert.ok(at(boxes, 'MEDIUM').y === 12 && at(boxes, 'MEDIUM').x + at(boxes, 'MEDIUM').w === 378);
+  assertFits(boxes, 'the hook line');
+  assertApart(boxes, 'the hook line');
+  t.press('enter');
+  t.seconds(3);
+  boxes = drawnBoxes(t);
+  assert.ok(at(boxes, HOOK) && at(boxes, 'ENTER: CONTINUE'));
+  assertApart(boxes, 'the hook line, page 2');
+  [fakeResult({ levelId: 2, cleared: false, bonuses: [], rank: 'B' }), fakeResult()].forEach(function (r) {
+    t.game.state.result = r;
+    t.game.force('results');
+    t.seconds(1);
+    assert.ok(drawnTexts(t).indexOf(HOOK) === -1);
+  });
+});
+
+check('A run that came through NEXT STAGE: STAGE 1 SCORE is the first row, over SCORE and TOTAL of the run; a page with ten rows has a 14 px pitch and ends above the line under it', function () {
+  const t = stageEnv();
+  openLevel2(t);
+  t.game.state.result = fakeResult({ levelId: 2, stages: 2, stageScore: 73160, baseScore: 121230, score: 129230 });
+  t.game.force('results');
+  t.seconds(7);
+  const boxes = drawnBoxes(t);
+  const labels = ['STAGE 1 SCORE', 'SCORE', 'LIVES X3', 'ACCURACY 95%', 'NO CONTINUES', 'TOTAL', 'WPM', 'ACCURACY', 'BEST STREAK', 'KEYS TO PRACTISE'];
+  assert.deepStrictEqual(labels.map(function (l) { return at(boxes, l).y; }), labels.map(function (l, i) { return 48 + i * 14; }));
+  assert.ok(at(boxes, '73160') && at(boxes, '73160').y === 48 && at(boxes, '73160').x + at(boxes, '73160').w === 320, 'the carried score');
+  assert.strictEqual(at(boxes, '121230').y, 62);
+  assert.strictEqual(at(boxes, '129230').y, 118);
+  const target = at(boxes, 'S NEEDS 97% ACCURACY, YOU HAD 95%');
+  assert.ok(target && target.y === 194, 'the line under the rows');
+  assert.ok(48 + 9 * 14 + 12 <= target.y, 'the tenth row and its rule end above the line');
+  assertFits(boxes, 'ten rows');
+  assertApart(boxes, 'ten rows');
+  // After a run that ended in Level 2 the carried score is still shown; a run of one stage has no such row.
+  t.game.state.result = fakeResult({ levelId: 2, cleared: false, stages: 1, bonuses: [], stageScore: 73160, baseScore: 88120, score: 88120, rank: 'B' });
+  t.game.force('results');
+  t.seconds(6);
+  let b2 = drawnBoxes(t);
+  assert.deepStrictEqual([at(b2, 'RUN ENDED').y, at(b2, 'STAGE 1 SCORE').y, at(b2, 'SCORE').y, at(b2, 'WPM').y], [8, 48, 64, 80]);
+  t.game.state.result = fakeResult({ levelId: 2 });            // Level 2 from the STAGE row
+  t.game.force('results');
+  t.seconds(6);
+  b2 = drawnBoxes(t);
+  assert.ok(!at(b2, 'STAGE 1 SCORE') && at(b2, 'SCORE').y === 48 && at(b2, 'KEYS TO PRACTISE').y === 48 + 8 * 16);
+});
+
+check('BEST RUN is beside the run\'s final score: the best score of the difficulty from before the run, or NEW BEST RUN!', function () {
+  const t = stageEnv();
+  const noteOf = function (over, label) {
+    t.game.state.result = fakeResult(over);
+    t.game.force('results');
+    t.seconds(6);
+    const boxes = drawnBoxes(t);
+    assertApart(boxes, JSON.stringify(over));
+    const row = at(boxes, label);
+    const notes = boxes.filter(function (b) { return b.y === row.y && b.x === row.x + row.w + 8; });
+    return notes.length ? notes[0].text : null;
+  };
+  assert.strictEqual(noteOf({ bestScore: 61230 }, 'TOTAL'), 'BEST RUN 61230');
+  assert.strictEqual(noteOf({ bestScore: 48210 }, 'TOTAL'), 'BEST RUN 48210', 'a run equal to the best is not a new best');
+  assert.strictEqual(noteOf({ bestScore: 48200 }, 'TOTAL'), 'NEW BEST RUN!');
+  assert.strictEqual(noteOf({ bestScore: 0 }, 'TOTAL'), 'NEW BEST RUN!');
+  assert.strictEqual(noteOf({ bestScore: 0 }, 'SCORE'), null, 'the note is on the final score only');
+  assert.strictEqual(noteOf({ cleared: false, bonuses: [], score: 12000, baseScore: 12000, bestScore: 48210, rank: 'B' }, 'SCORE'), 'BEST RUN 48210');
+  assert.strictEqual(noteOf({ cleared: false, bonuses: [], score: 0, baseScore: 0, bestScore: 0, rank: 'C' }, 'SCORE'), null);
+  // Seven digits on both sides still leave the note clear of the value.
+  assert.strictEqual(noteOf({ score: 1234560, baseScore: 1226560, bestScore: 1300000 }, 'TOTAL'), 'BEST RUN 1300000');
+  // WPM keeps its own note, on its own row.
+  assert.strictEqual(noteOf({ bestScore: 61230 }, 'WPM'), 'NEW BEST! +2');
+});
+
+check('WPM after NEXT STAGE: NEW BEST! is for a WPM above the best from before the run and above the one the run showed at its earlier results screen', function () {
+  // The note beside WPM on the first page of the results screen that is showing.
+  const wpmNote = function (t) {
+    const boxes = drawnBoxes(t);
+    const row = at(boxes, 'WPM');
+    const notes = boxes.filter(function (b) { return b.y === row.y && b.x === row.x + row.w + 8; });
+    return notes.length ? notes[0].text : null;
+  };
+  const typing = fakeResult().typing;
+  const wpm = function (v) { return Object.assign({}, typing, { wpm: v }); };
+  // A run with a best of 80 from before: 85 at STAGE 1 CLEAR, which TG.Save records, then NEXT STAGE.
+  const twoStages = function (final) {
+    const t = stageEnv();
+    t.game.state.result = fakeResult({ typing: wpm(85.4), bestWpm: 80 });
+    t.game.force('results');
+    t.seconds(6);
+    assert.strictEqual(wpmNote(t), 'NEW BEST! +5');
+    t.press('space');
+    t.seconds(3);
+    t.press('enter');                            // NEXT STAGE
+    assert.strictEqual(t.screen(), 'playing');
+    assert.strictEqual(Math.round(t.TG.Save.best('medium').wpm), 85);
+    t.game.state.result = fakeResult({ levelId: 2, stages: 2, stageScore: 48210, baseScore: 91000, score: 99000, typing: wpm(final), bestWpm: 80 });
+    t.game.force('results');
+    t.seconds(7);
+    return t;
+  };
+  // The whole run's WPM is under the first stage's: the best is the 85 shown before, not a new one of 82.
+  const lower = twoStages(82.3);
+  assert.strictEqual(wpmNote(lower), 'BEST 85');
+  assert.strictEqual(Math.round(lower.TG.Save.best('medium').wpm), 85, 'the saved best is the one the screen names');
+  assert.strictEqual(wpmNote(twoStages(85.2)), 'BEST 85', 'the same WPM is not a new best');
+  assert.strictEqual(wpmNote(twoStages(87.1)), 'NEW BEST! +2');
+  // The next run from the menus starts again. Its bests are 0, as after RESET SCORES: 60 at its first clear,
+  // then 62 over both stages, which is a new best whatever the run before showed.
+  lower.press('enter');                          // page 2
+  lower.seconds(3);
+  lower.press('enter');
+  assert.strictEqual(lower.screen(), 'highScoreEntry');
+  lower.type('abc');
+  lower.press('enter');
+  assert.strictEqual(lower.screen(), 'title');
+  lower.press('esc');                            // the High Scores panel that shows the new entry
+  startFakeRun(lower, 'medium');
+  toLastPage(lower, fakeResult({ typing: wpm(60.2), bestWpm: 0 }));
+  lower.press('enter');                          // NEXT STAGE
+  assert.strictEqual(lower.screen(), 'playing');
+  lower.game.state.result = fakeResult({ levelId: 2, stages: 2, stageScore: 48210, baseScore: 91000, score: 99000, typing: wpm(62.4), bestWpm: 0 });
+  lower.game.force('results');
+  lower.seconds(7);
+  assert.strictEqual(wpmNote(lower), 'NEW BEST! +2');
+  // A result that carries a stage score in a session where NEXT STAGE was not pressed has only its own best.
+  const direct = stageEnv();
+  direct.game.state.result = fakeResult({ levelId: 2, stages: 2, stageScore: 48210, baseScore: 91000, score: 99000, typing: wpm(82.3), bestWpm: 80 });
+  direct.game.force('results');
+  direct.seconds(7);
+  assert.strictEqual(wpmNote(direct), 'NEW BEST! +2');
+});
+
+// The rank of DESIGN 8.6 as TG.Game gives it (LEVEL2 12.5): S and A need a cleared stage.
+function rankOf(accuracy, livesLost, continues, stages) {
+  if (stages > 0 && accuracy >= 0.97 && livesLost === 0 && continues === 0) return 'S';
+  if (stages > 0 && accuracy >= 0.93 && livesLost <= 2 && continues === 0) return 'A';
+  return accuracy >= 0.85 ? 'B' : 'C';
+}
+
+check('The rank target: one line under the first page, after the stamp, that names something the next rank up needs and the run did not have; none for rank S', function () {
+  const t = stageEnv();
+  const typing = fakeResult().typing;
+  const lineOf = function (over, wait) {
+    t.game.state.result = fakeResult(Object.assign({ bonuses: [] }, over));
+    t.game.force('results');
+    t.seconds(wait === undefined ? 6 : wait);
+    const boxes = drawnBoxes(t).filter(function (b) { return b.y === 194; });
+    assert.ok(boxes.length <= 1);
+    boxes.forEach(function (b) { assert.ok(b.x >= 0 && b.x + b.w <= 384 && b.x === (384 - b.w) / 2 && b.color === SILVER, JSON.stringify(b)); });
+    return boxes.length ? boxes[0].text : null;
+  };
+  const acc = function (a) { return Object.assign({}, typing, { accuracy: a }); };
+  // The two lines the plan gives, and the rest of the set.
+  assert.strictEqual(lineOf({ rank: 'A', typing: acc(0.954), livesLost: 2 }), 'S NEEDS 97% ACCURACY, YOU HAD 95%');
+  assert.strictEqual(lineOf({ rank: 'B', typing: acc(0.954), livesLost: 0, continues: 1 }), 'A NEEDS NO CONTINUES');
+  assert.strictEqual(lineOf({ rank: 'A', typing: acc(0.981), livesLost: 1 }), 'S NEEDS NO LIVES LOST, YOU LOST 1');
+  assert.strictEqual(lineOf({ rank: 'B', typing: acc(0.909) }), 'A NEEDS 93% ACCURACY, YOU HAD 90%');
+  assert.strictEqual(lineOf({ rank: 'B', typing: acc(0.954), livesLost: 4, continues: 1 }), 'A NEEDS AT MOST 2 LIVES LOST, YOU LOST 4');
+  assert.strictEqual(lineOf({ rank: 'B', typing: acc(0.99), livesLost: 0, cleared: false, stages: 0 }), 'A NEEDS A CLEARED STAGE');
+  assert.strictEqual(lineOf({ rank: 'C', typing: acc(0.812), cleared: false }), 'B NEEDS 85% ACCURACY, YOU HAD 81%');
+  assert.strictEqual(lineOf({ rank: 'S', typing: acc(0.99), livesLost: 0 }), null);
+  assert.strictEqual(lineOf({ rank: 'C', cleared: false, typing: Object.assign({}, typing, { correct: 0, wrong: 0, accuracy: 1 }) }), null, 'a run with no letter key pressed');
+  // Not before the rank is stamped (the tally of these five rows ends after 1.67 s and the stamp lands
+  // 0.35 s later), and not on the second page.
+  const stamps = eventLog(t.TG);
+  assert.strictEqual(lineOf({ rank: 'A', typing: acc(0.954) }, 1), null);
+  assert.strictEqual(lineOf({ rank: 'A', typing: acc(0.954) }, 1.85), null, 'the line is there before the rank');
+  assert.strictEqual(stamps.filter(function (e) { return e.name === 'ui:stamp'; }).length, 0);
+  assert.strictEqual(lineOf({ rank: 'A', typing: acc(0.954) }, 2.2), 'S NEEDS 97% ACCURACY, YOU HAD 95%');
+  assert.strictEqual(stamps.filter(function (e) { return e.name === 'ui:stamp'; }).length, 1);
+  assert.strictEqual(lineOf({ rank: 'A', typing: acc(0.954) }), 'S NEEDS 97% ACCURACY, YOU HAD 95%');
+  t.press('enter');
+  t.seconds(3);
+  assert.ok(drawnTexts(t).every(function (x) { return x.indexOf('NEEDS') === -1; }));
+
+  // Against the rule itself, over every combination: the line is there for every rank but S, names
+  // the next rank up, and what it names is something that rank needs and this run did not have.
+  const up = { A: 'S', B: 'A', C: 'B' };
+  const need = { S: { accuracy: 97, lives: 0 }, A: { accuracy: 93, lives: 2 }, B: { accuracy: 85, lives: Infinity } };
+  [0.80, 0.849, 0.85, 0.90, 0.929, 0.93, 0.95, 0.969, 0.97, 1].forEach(function (a) {
+    [0, 1, 2, 3, 5].forEach(function (lost) {
+      [0, 1].forEach(function (continues) {
+        [0, 1, 2].forEach(function (stages) {
+          const rank = rankOf(a, lost, continues, stages);
+          const what = [a, lost, continues, stages, rank].join(' / ');
+          const line = lineOf({ rank: rank, typing: acc(a), livesLost: lost, continues: continues, stages: stages, cleared: stages > 0 });
+          if (rank === 'S') { assert.strictEqual(line, null, what); return; }
+          assert.ok(line && line.indexOf(up[rank] + ' NEEDS ') === 0, what + ': ' + line);
+          const n = need[up[rank]];
+          const pct = Math.floor(a * 100 + 1e-9);
+          if (/ACCURACY/.test(line)) assert.ok(pct < n.accuracy && line === up[rank] + ' NEEDS ' + n.accuracy + '% ACCURACY, YOU HAD ' + pct + '%', what + ': ' + line);
+          else if (/LIVES LOST/.test(line)) assert.ok(lost > n.lives && line.slice(-String(lost).length - 10) === ' YOU LOST ' + lost, what + ': ' + line);
+          else if (/CONTINUES/.test(line)) assert.ok(continues > 0, what + ': ' + line);
+          else assert.ok(/CLEARED STAGE/.test(line) && stages === 0, what + ': ' + line);
+        });
+      });
+    });
+  });
+});
+
+check('The last page with the strip and a suggestion: the suggestion, the line and the strip one under the other, the rows at a 14 px pitch, and nothing overlaps', function () {
+  const t = stageEnv();
+  toLastPage(t, fakeResult({ suggestion: 'READY FOR HARD?' }));
+  const boxes = drawnBoxes(t);
+  assert.deepStrictEqual([at(boxes, 'READY FOR HARD?').y, at(boxes, STRIP_LINE).y, at(boxes, STRIP_KEYS).y], [180, 194, 205]);
+  assert.strictEqual(at(boxes, 'READY FOR HARD?').color, GOLD);
+  const labels = ['PEAK WPM', 'WORDS', 'BEST KEY STREAK', 'AVERAGE REACTION', 'SLOWEST KEYS', 'INK DROPS', 'TIME', 'LIVES LOST', 'CONTINUES USED'];
+  assert.deepStrictEqual(labels.map(function (l) { return at(boxes, l).y; }), labels.map(function (l, i) { return 48 + i * 14; }));
+  assertFits(boxes, 'three lines under the rows');
+  assertApart(boxes, 'three lines under the rows');
+  // Without the strip the suggestion is where it was, under rows at the pitch of before.
+  const u = stageEnv();
+  toLastPage(u, fakeResult({ levelId: 2, suggestion: 'READY FOR HARD?' }));
+  const b2 = drawnBoxes(u);
+  assert.deepStrictEqual([at(b2, 'READY FOR HARD?').y, at(b2, 'CONTINUES USED').y, at(b2, 'ENTER: CONTINUE').y, at(b2, 'ENTER: CONTINUE').x], [194, 48 + 8 * 16, 205, 6]);
+});
+
+// ----- How to Play ------------------------------------------------------------------------------
+
+check('How to Play: seven power-up rows, the Pocket Watch after the Red Cap, 18 px apart and all above the bottom strip at y 192; HOLD FOR ARCHES and, under it, AND TUNNELS', function () {
+  const t = fakeEnv();
+  t.game.force('howToPlay', { origin: 'start', difficulty: 'medium' });
+  t.steps(1);
+  const boxes = drawnBoxes(t);
+  const names = ['SHIELD', 'HOURGLASS', 'GOLDEN QUILL', 'INK BLAST', 'RED CAP', 'POCKET WATCH', 'INK DROPS'];
+  const texts = ['BLOCKS A HIT', 'SLOWS TIME', '2X POINTS', 'CLEARS WORDS', 'EXTRA LIFE', 'STOPS TIME', '100 = 1 LIFE'];
+  names.forEach(function (name, i) {
+    const n = at(boxes, name), x = at(boxes, texts[i]);
+    assert.ok(n && x, name);
+    assert.deepStrictEqual([n.x, n.y, n.color, x.x, x.y], [282, 62 + i * 18, GOLD, 282, 71 + i * 18], name);
+    assert.ok(x.y + x.h <= 192 && n.x + n.w <= 384 && x.x + x.w <= 384, name + ' does not fit');
+  });
+  // Every line of the three columns ends above the rule at y 192.
+  boxes.filter(function (b) { return b.y < 192; }).forEach(function (b) { assert.ok(b.y + b.h <= 192, '"' + b.text + '" at y ' + b.y); });
+  const drawn = spritesDrawn(t);
+  ['pw_shield', 'pw_hourglass', 'pw_quill', 'pw_blast', 'pw_cap', 'pw_watch', 'item_ink'].forEach(function (name) {
+    assert.ok(drawn.indexOf(name) !== -1 && t.TG.Gfx.has(name), name + ' is not drawn');
+  });
+  const hold = at(boxes, 'HOLD FOR ARCHES'), and = at(boxes, 'AND TUNNELS');
+  assert.ok(hold && and && and.x === hold.x && and.y === hold.y + 9, 'AND TUNNELS under HOLD FOR ARCHES');
+  assert.ok(and.x + and.w <= 257, 'the line reaches into the third column');
+  // The four keys of the middle column in order, each clear of the lines round it.
+  const column = boxes.filter(function (b) { return b.x >= 127 && b.x < 257 && b.y >= 28 && b.y < 192; }).sort(function (p, q) { return p.y - q.y; });
+  assert.deepStrictEqual(column.map(function (b) { return b.text; }), ['JUMP AND DUCK', 'SPACE', 'JUMP', 'OVER GAPS AND', 'BRAMBLES', 'ENTER', 'DUCK',
+    'UNDER BRANCHES.', 'HOLD FOR ARCHES', 'AND TUNNELS', 'BACKSPACE', 'LETS GO OF A', 'WORD. MISTAKES', 'NEED NO FIXING.', 'ESC', 'PAUSE', 'OR USE ARROWS']);
+  assertFits(boxes, 'How to Play');
+  assertApart(boxes, 'How to Play');
+  assert.ok(at(boxes, 'TO START') && at(boxes, 'TO START').y > 192, 'the bottom line is the READY prompt, as before');
+  assert.deepStrictEqual(t.env.errors, []);
+});
+
+check('How to Play, drawn: no keycap of the middle column touches the text above or below it, and the seven icons stand in their rows', function () {
+  const s = shot.createSession({ canvas: 'soft' });
+  shot.reach(s, 'howToPlay', { difficulty: 'medium' });
+  assert.strictEqual(s.screen(), 'howToPlay');
+  const rgba = s.env.canvas.toRGBA();
+  const ink = s.TG.PAL[0].toLowerCase();
+  const px = function (x, y) {
+    const o = (y * 384 + x) * 4;
+    return '#' + [rgba[o], rgba[o + 1], rgba[o + 2]].map(function (v) { return (v < 16 ? '0' : '') + v.toString(16); }).join('');
+  };
+  const blank = function (y, x0, x1) { for (let x = x0; x < x1; x++) if (px(x, y) !== ink) return false; return true; };
+  // A row of plain INK above and below each of the four keycaps (y 39, 76, 121 and 166; 15 px high).
+  [39, 76, 121, 166].forEach(function (y) {
+    assert.ok(blank(y - 1, 128, 256) && blank(y - 2, 128, 256), 'the keycap at y ' + y + ' touches the line above it');
+    assert.ok(blank(y + 15, 128, 256), 'the keycap at y ' + y + ' touches the line below it');
+  });
+  // Something is drawn in each icon's place (x 262 to 278), and each row has plain INK between it and the next.
+  for (let i = 0; i < 7; i++) {
+    let lit = 0;
+    for (let y = 62 + i * 18; y < 62 + i * 18 + 16; y++) for (let x = 262; x < 279; x++) if (px(x, y) !== ink) lit++;
+    assert.ok(lit > 8, 'no icon in row ' + (i + 1));
+    assert.ok(blank(62 + i * 18 + 16, 280, 384) && blank(62 + i * 18 + 17, 280, 384), 'row ' + (i + 1) + ' touches the next');
+  }
+  assert.ok(blank(190, 258, 384) && blank(191, 258, 384), 'the last row reaches the rule at y 192');
+  assert.deepStrictEqual(s.env.errors, []);
+  assert.deepStrictEqual(s.env.warnings, []);
+});
+
+// ----- the story panels and the idle rotation -----------------------------------------------------
+
+// The lines of the story panel on screen, top to bottom: the text inside the panel (y 26 to 176).
+function storyLines(t) {
+  return drawnBoxes(t).filter(function (b) { return b.y > 26 && b.y < 176; }).sort(function (p, q) { return p.y - q.y; });
+}
+
+check('The idle rotation shows Level 1\'s story panel and the high scores in turn; once Level 2 is open, Level 2\'s panel takes every second turn. Neither panel has text below y 108', function () {
+  const t = stageEnv();
+  toMenu(t);
+  t.seconds(12.5);
+  assert.strictEqual(t.TG.UI.panel, 'story');
+  let lines = storyLines(t);
+  assert.deepStrictEqual(lines.map(function (b) { return b.text; }), STORY_1);
+  assert.deepStrictEqual(lines.map(function (b) { return b.y; }), [40, 52, 64, 76]);
+  let drawn = spritesDrawn(t);
+  assert.ok(drawn.indexOf('boss_head') !== -1 && drawn.indexOf('boss2_head') === -1 && drawn.indexOf('hero_idle') !== -1);
+  // Level 2 locked: the same panel every time.
+  t.seconds(8);
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  t.seconds(8);
+  assert.strictEqual(t.TG.UI.panel, 'story');
+  assert.deepStrictEqual(storyLines(t).map(function (b) { return b.text; }), STORY_1);
+
+  const u = stageEnv({ canvas: 'soft' });
+  openLevel2(u);
+  toMenu(u);
+  const seen = [];
+  for (let turn = 0; turn < 5; turn++) {
+    u.seconds(turn === 0 ? 12.5 : 8);
+    assert.strictEqual(u.TG.UI.panel, 'story', 'turn ' + turn);
+    lines = storyLines(u);
+    seen.push(lines[0].text);
+    lines.forEach(function (b) { assert.ok(b.y + b.h <= 108, '"' + b.text + '" ends at y ' + (b.y + b.h)); });
+    assertFits(drawnBoxes(u), 'story, turn ' + turn);
+    assertApart(drawnBoxes(u), 'story, turn ' + turn);
+    lines.forEach(function (b) { assert.ok(b.x >= 24 + 8 && b.x + b.w <= 360 - 8, '"' + b.text + '" is too wide for the panel'); });
+    if (turn === 1) {
+      assert.deepStrictEqual(lines.map(function (b) { return b.text; }), STORY_2);
+      assert.deepStrictEqual(lines.map(function (b) { return b.y; }), [40, 52, 64]);
+      drawn = spritesDrawn(u);
+      ['boss2_body', 'boss2_arm', 'boss2_key', 'boss2_head', 'boss2_engine', 'hero_idle'].forEach(function (name) {
+        assert.ok(drawn.indexOf(name) !== -1 && u.TG.Gfx.has(name), name + ' is not drawn on Level 2\'s panel');
+      });
+      assert.ok(drawn.indexOf('boss_head') === -1 && drawn.indexOf('boss_mound') === -1, 'the Baron stands on Level 2\'s panel');
+    }
+    u.seconds(8);
+    assert.strictEqual(u.TG.UI.panel, 'scores', 'the high scores follow each story panel');
+  }
+  assert.deepStrictEqual(seen, [STORY_1[0], STORY_2[0], STORY_1[0], STORY_2[0], STORY_1[0]]);
+  u.press('down');                               // any key: back to the menu, and the next rotation starts with Level 1 again
+  assert.strictEqual(u.TG.UI.panel, 'menu');
+  u.seconds(12.5);
+  assert.deepStrictEqual(storyLines(u).map(function (b) { return b.text; }), STORY_1);
+  assert.deepStrictEqual(u.env.errors, []);
+});
+
+check('Real modules: the idle rotation shows Level 2\'s story panel and the high scores after it over the cavern, and the menu is always over the meadow', function () {
+  const s = shot.createSession({ canvas: 'stub' });      // the picture itself is in the --stage checks below
+  const TG = s.TG;
+  shot.unlock(s, 'hard');
+  const calls = [];
+  const drawBackdrop = TG.Render.drawBackdrop;
+  TG.Render.drawBackdrop = function (ctx, id, palette) { calls.push(id + '/' + palette); return drawBackdrop.apply(TG.Render, arguments); };
+  const tiles = [];
+  const draw = TG.Gfx.draw;
+  TG.Gfx.draw = function (ctx, name) { if (/^tile_/.test(name)) tiles.push(name); return draw.apply(TG.Gfx, arguments); };
+  const scene = function () {
+    calls.length = 0;
+    tiles.length = 0;
+    s.frame();
+    assert.strictEqual(calls.length, 1);
+    return TG.UI.panel + ' ' + calls[0] + ' ' + tiles.filter(function (n, i) { return tiles.indexOf(n) === i; }).sort().join('+');
+  };
+  s.frames(2);
+  s.press('enter');
+  s.seconds(1.3);
+  const meadow = 'meadow/day tile_grass+tile_soil', cavern = 'cavern/lantern tile_cave_fill+tile_cave_top';
+  assert.strictEqual(scene(), 'menu ' + meadow);
+  s.seconds(12.5);
+  assert.strictEqual(scene(), 'story ' + meadow);
+  s.seconds(8);
+  assert.strictEqual(scene(), 'scores ' + meadow);
+  s.seconds(8);
+  assert.strictEqual(scene(), 'story ' + cavern);
+  s.seconds(8);
+  assert.strictEqual(scene(), 'scores ' + cavern);
+  s.seconds(8);
+  assert.strictEqual(scene(), 'story ' + meadow);
+  s.seconds(16);
+  assert.strictEqual(scene(), 'story ' + cavern);
+  s.press('enter');                              // any key ends the rotation
+  assert.strictEqual(scene(), 'menu ' + meadow);
+  s.press('enter');
+  assert.strictEqual(s.screen(), 'difficultySelect');
+  assert.deepStrictEqual(s.env.errors, []);
+  assert.deepStrictEqual(s.env.warnings, []);
+});
+
+// ----- the High Scores panel --------------------------------------------------------------------
+
+check('The High Scores panel still has four pages with Level 2 open: WORLD EASY, WORLD MEDIUM, WORLD HARD and THIS COMPUTER, and three tables of five without world scores', function () {
+  const t = worldEnv({ levels: true });
+  openLevel2(t);
+  t.TG.Save.setSetting('lastLevel', 2);
+  toMenu(t);
+  t.press('down'); t.press('down'); t.press('enter');
+  assert.strictEqual(t.TG.UI.panel, 'scores');
+  const pages = [], headers = [];
+  for (let i = 0; i < 5; i++) {
+    pages.push(t.TG.UI.page);
+    const texts = drawnTexts(t);
+    headers.push(texts.filter(function (x) { return /^\d\/\d$/.test(x); })[0] + ' ' + texts.filter(function (x) { return /^WORLD (EASY|MEDIUM|HARD)$|^THIS COMPUTER$/.test(x); })[0]);
+    assert.ok(texts.every(function (x) { return x.indexOf('STAGE') === -1 && x.indexOf('CAVERNS') === -1; }), 'a stage on the panel: ' + texts.join(' | '));
+    t.press('right');
+  }
+  assert.deepStrictEqual(pages, ['medium', 'hard', 'local', 'easy', 'medium']);
+  assert.deepStrictEqual(headers, ['2/4 WORLD MEDIUM', '3/4 WORLD HARD', '4/4 THIS COMPUTER', '1/4 WORLD EASY', '2/4 WORLD MEDIUM']);
+  // Without world scores: the three tables of this computer, as before.
+  const u = stageEnv();
+  openLevel2(u);
+  toMenu(u);
+  u.press('down'); u.press('down'); u.press('enter');
+  assert.strictEqual(u.TG.UI.page, null);
+  const boxes = drawnBoxes(u);
+  assert.strictEqual(boxes.length, 1 + 3 + 3 * 5 * 2 + 1, 'the title, three labels, fifteen entries of two lines and the footer');
+  TODAY_SCORES.forEach(function (want) {
+    assert.ok(boxes.some(function (b) { return b.text === want[0] && b.y === want[1]; }), '"' + want[0] + '" at y ' + want[1]);
+  });
+});
+
+// ----- the real modules ---------------------------------------------------------------------------
+
+check('Real modules: a cleared Level 1 run, NEXT STAGE on Enter and not on Space; Level 2 starts with the score carried and nothing entered; ended from the pause menu, the run is entered once, as cleared, with its total', function () {
+  const s = shot.createSession({ canvas: 'stub' });
+  const TG = s.TG;
+  const ctx = s.env.canvas.getContext('2d');
+  const texts = function () { return textsDrawn(TG, function () { TG.UI.draw(ctx, TG.Game.state); }); };
+  shot.startRun(s, 'easy');
+  assert.strictEqual(TG.Game.state.levelId, 1, 'a first run starts at Level 1');
+  const bot = shot.createBot({ wpm: 70 });
+  assert.ok(shot.playUntil(s, 'results', bot, 1500), 'reached results, the screen is ' + s.screen());
+  s.frames(2);
+  const r1 = TG.Game.state.result;
+  assert.ok(r1.cleared === true && r1.stages === 1, 'the level was cleared');
+  assert.strictEqual(TG.Save.levelOpen(2), true, 'the clear opened Level 2');
+  assert.ok(texts().indexOf(UNLOCKED) !== -1, 'the first clear is announced');
+  s.seconds(0.6);
+  s.press('space');                               // finish the tally
+  s.press('space');                               // page 2
+  s.seconds(2);
+  let x = texts();
+  assert.ok(x.indexOf(STRIP_KEYS) !== -1 && x.indexOf(STRIP_LINE) !== -1, x.slice(-4).join(' | '));
+  s.press('space');
+  s.seconds(0.2);
+  assert.strictEqual(s.screen(), 'results', 'Space took NEXT STAGE');
+  s.press('enter');
+  assert.strictEqual(s.screen(), 'playing');
+  const st = TG.Game.state;
+  assert.deepStrictEqual([st.levelId, st.score, st.result, st.run.stages, st.level.name], [2, r1.score, null, 1, 'CLOCKWORK CAVERNS']);
+  assert.strictEqual(TG.Save.scores('easy').filter(function (e) { return e.date !== ''; }).length, 0, 'the run was entered at STAGE 1 CLEAR');
+  assert.strictEqual(TG.Save.pending().entry.score, r1.score, 'the Stage 1 entry is kept in case the run never ends');
+  bot.pressed = {};
+  s.steps(60 * 20, bot);                          // twenty seconds of Level 2
+  s.frame();
+  assert.ok(TG.Game.state.score > r1.score, 'no points in Level 2');
+  s.press('esc');
+  s.press('up');                                  // from RESUME round to QUIT
+  s.press('enter');
+  s.press('enter');
+  assert.strictEqual(s.screen(), 'results');
+  const r2 = TG.Game.state.result;
+  assert.deepStrictEqual([r2.cleared, r2.stages, r2.levelId, r2.stageScore], [false, 1, 2, r1.score]);
+  assert.ok(r2.score > r1.score && r2.time > r1.time);
+  s.seconds(4.5);
+  x = texts();
+  assert.ok(x.indexOf('RUN ENDED') !== -1 && x.indexOf('STAGE 1 SCORE') !== -1 && x.indexOf(String(r1.score)) !== -1, x.slice(0, 8).join(' | '));
+  s.press('enter');                               // page 2
+  s.seconds(2);
+  x = texts();
+  assert.ok(x.indexOf('ENTER: CONTINUE') !== -1 && x.indexOf(STRIP_KEYS) === -1 && x.indexOf(HOOK) === -1);
+  s.press('enter');
+  assert.strictEqual(s.screen(), 'highScoreEntry', 'the initials screen comes at the end of the run');
+  s.type('xyz');
+  s.press('enter');
+  assert.strictEqual(s.screen(), 'title');
+  const mine = stubs.plain(TG.Save.scores('easy')).filter(function (e) { return e.date !== ''; });
+  assert.strictEqual(mine.length, 1, 'one entry per run');
+  assert.deepStrictEqual([mine[0].name, mine[0].score, mine[0].cleared, mine[0].rank], ['XYZ', r2.score, true, r2.rank]);
+  assert.strictEqual(TG.Save.pending(), null);
+  assert.strictEqual(TG.Save.best('easy').score, r2.score);
+  // The STAGE row is there now, and a run from it starts at Level 2.
+  s.press('esc');
+  s.press('enter');
+  assert.strictEqual(s.screen(), 'difficultySelect');
+  assert.ok(texts().indexOf('STAGE 1  QUILL MEADOWS') !== -1);
+  s.press('down');
+  s.type('hard');
+  s.type('ready');
+  assert.deepStrictEqual([s.screen(), TG.Game.state.levelId, TG.Game.state.difficulty, TG.Game.state.score, TG.Game.state.run.stages], ['playing', 2, 'hard', 0, 0]);
+  assert.strictEqual(TG.Game.state.player.lives, 3);
+  assert.deepStrictEqual(s.env.errors, []);
+  assert.deepStrictEqual(s.env.warnings, []);
+});
+
+// ----- the pictures -----------------------------------------------------------------------------
+
+[
+  ['the difficulty screen with the STAGE row on STAGE 1', 'difficultySelect', { stage: '1' }, ['STAGE 1  QUILL MEADOWS']],
+  ['the difficulty screen with the STAGE row on STAGE 2', 'difficultySelect', { stage: '2', difficulty: 'hard' }, ['STAGE 2  CLOCKWORK CAVERNS']],
+  ['Level 2\'s story panel', 'title', { panel: 'story', stage: '2' }, STORY_2],
+  ['the results of a first cleared Level 1 run, page 1', 'results', {}, ['STAGE 1 CLEAR!', UNLOCKED, 'ENTER: NEXT']],
+  ['the results of a cleared Level 1 run with the strip', 'results', { page: 2, stage: '1' }, ['STAGE 1 CLEAR!', STRIP_LINE, STRIP_KEYS]],
+  ['the results of a Level 2 run from the STAGE row', 'results', { stage: '2', difficulty: 'easy' }, ['STAGE 2 CLEAR!', HOOK]],
+  ['the results at the end of a two-stage run', 'results', { stage: '1+2', difficulty: 'hard' }, ['STAGE 2 CLEAR!', HOOK, 'STAGE 1 SCORE', 'TOTAL']],
+  ['the initials screen at the end of a two-stage run', 'highScoreEntry', { stage: '1+2', world: 'ready' }, ['NEW HIGH SCORE!', 'INITIALS AND SCORE ALSO GO TO WORLD SCORES']]
+].forEach(function (c) {
+  check('Software canvas, real modules: ' + c[0] + ' draws without errors, with every line on the screen and none on another (tools/shot-ui.js --stage)', function () {
+    const s = shot.createSession({ canvas: 'soft', world: shot.worldFor(c[2]) });
+    shot.reach(s, c[1], c[2]);
+    assert.strictEqual(s.screen(), c[1]);
+    const ctx = s.env.canvas.getContext('2d');
+    const boxes = textBoxes(s.TG, function () { s.TG.UI.draw(ctx, s.TG.Game.state); });
+    const texts = boxes.map(function (b) { return b.text; });
+    c[3].forEach(function (want) { assert.ok(texts.indexOf(want) !== -1, '"' + want + '" is not drawn: ' + texts.join(' | ')); });
+    assertFits(boxes, c[0]);
+    assertApart(boxes, c[0]);
+    if (c[2].stage === '1+2') {
+      // One run through both stages: its entry and its submission are still to come, and come once.
+      const res = s.TG.Game.state.result;
+      assert.deepStrictEqual([res.levelId, res.stages, res.cleared], [2, 2, true]);
+      assert.ok(res.stageScore > 0 && res.score > 2 * res.stageScore * 0.6, 'the run total: ' + res.stageScore + ' then ' + res.score);
+      assert.strictEqual(s.TG.Save.scores(res.difficulty).filter(function (e) { return e.date !== ''; }).length, 0);
+      if (s.world) assert.strictEqual(s.world.calls.filter(function (q) { return q.path === '/v1/runs'; }).length, 1, 'one run token for the whole run');
+    }
+    s.frame();
+    assert.deepStrictEqual(s.env.errors, []);
+    assert.deepStrictEqual(s.env.warnings, []);
+  });
+});
+
+check('tools/shot-ui.js: --stage is checked, and 1+2 is for the screens at the end of a run', function () {
+  const error = console.error;
+  const lines = [];
+  console.error = function () { lines.push(Array.prototype.join.call(arguments, ' ')); };
+  try {
+    assert.strictEqual(shot.main(['--screen', 'difficultySelect', '--out', 'x.png', '--stage', '3']), 2);
+    assert.strictEqual(shot.main(['--screen', 'title', '--out', 'x.png', '--stage', '1+2']), 2);
+  } finally {
+    console.error = error;
+  }
+  assert.strictEqual(lines.length, 2);
+  assert.ok(/--stage must be one of 1, 2, 1\+2/.test(lines[0]) && /--stage 1\+2 is for results and highScoreEntry/.test(lines[1]), lines.join(' | '));
   assert.ok(!fs.existsSync(path.join(ROOT, 'x.png')), 'a picture was written');
 });
 
