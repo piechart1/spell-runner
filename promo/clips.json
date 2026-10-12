@@ -1,0 +1,51 @@
+{
+  "runs": {
+    "boss60": {
+      "difficulty": "hard",
+      "seed": 5,
+      "wpm": 60,
+      "accuracy": 0.99,
+      "react": 0.3,
+      "adaptive": true,
+      "clips": [
+        {"name":"boss_fight","from":{"event":"boss:enter","offset":-1},"seconds":92.4,"keep":[[10,123],[170,493],[626,686],[790,894],[936,1040],[1136,1196],[1285,1345],[1423,1483],[1551,1775],[1780,1840],[1881,1941],[1973,2033],[2058,2118],[2135,2195],[2204,2264],[2267,2796]]}
+      ]
+    },
+    "fast120": {
+      "difficulty": "hard",
+      "seed": 1,
+      "wpm": 137,
+      "accuracy": 0.95,
+      "react": 0.25,
+      "adaptive": false,
+      "clips": [
+        {"name":"fast_run","from":4,"seconds":255,"keep":[[4220,4280],[4350,4535],[5330,5449],[5470,5617],[7354,7477]]},
+        {"name":"fast_results","results":true,"seconds":9,"keep":[[51,299]]}
+      ]
+    },
+    "slow40": {
+      "difficulty": "hard",
+      "seed": 1,
+      "wpm": 40.6,
+      "accuracy": 0.99,
+      "react": 0.35,
+      "adaptive": false,
+      "clips": [
+        {"name":"slow_run","from":4,"seconds":291,"keep":[[1050,1210],[1260,1396],[4302,4538],[4908,5085],[5330,5449],[5556,5687],[8418,8541]]},
+        {"name":"slow_results","results":true,"seconds":9,"keep":[[23,299]]}
+      ]
+    },
+    "untyped": {
+      "difficulty": "hard",
+      "seed": 1,
+      "wpm": 40,
+      "accuracy": 0.99,
+      "react": 0.35,
+      "adaptive": true,
+      "noType": true,
+      "clips": [
+        {"name":"untyped","from":2,"seconds":14,"keep":[[0,169]]}
+      ]
+    }
+  }
+}
