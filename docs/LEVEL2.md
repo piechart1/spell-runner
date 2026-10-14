@@ -1542,7 +1542,9 @@ Measured after the change, against the code before it: those 4,401 frames are th
 - The Worker. The owner deployed it from `server/` with `npx wrangler deploy` (Wrangler 4.151.0), from the `level2` checkout, whose `server/src/worker.js` was the committed file. Wrangler reported the upload of `spell-runner-scores` (22.16 KiB) and its address, and `GET /v1/scores` then answered 200 with the three boards. No database command was run: the tables do not change.
 - The game. The branch was merged into `main` and pushed after the Worker was deployed, so that GitHub Pages serves it (LEADERBOARD 9).
 - Written at the release: the README says both copies have the two levels; CONTRACT and DESIGN are version 1.2; CONTRACT 14.1 says what the owner checked in a browser and when the Worker was deployed; CONTRACT 14.3 marks items 2, 4, 6, 10, 11 and 12 settled and leaves 5, 7, 8 and 9 open; DESIGN 3.4 and the comment in `js/effects.js` give the white flash of a correct key as one drawn frame, as built. DESIGN 1's line on the game's own title is left as it was: the name check covered the level's names, not the game's.
-- To follow: the itch.io zip, built from the released commit and uploaded by the owner; one run through NEXT STAGE with the world scores on, on each copy; and shorts of Level 2.
+- The itch.io copy. The zip was built from the release commit as the copy of 2026-10-05 was: the same files, with the Cloudflare Web Analytics lines taken out of `index.html`. The owner uploaded it on 2026-10-14. The page itch.io serves then loaded `js/levels/level2.js`, and its `js/hud.js` was the released file.
+- Runs with the world scores on. The owner played one run on each copy on 2026-10-14, one on Hard and one on Medium. Both were accepted and are on the world boards: 108,820 on Hard (rank B, 53 WPM), the top of that board, and 60,710 on Medium (rank A, 76 WPM). The counters of section 10 of LEADERBOARD were not read from this session.
+- To follow: shorts of Level 2.
 
 ---
 
