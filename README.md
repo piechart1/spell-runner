@@ -9,7 +9,7 @@ The game has two levels, each with three sections and a boss with three phases, 
 
 When Level 1 is cleared, NEXT STAGE on the results screen takes the same run on into Level 2, with its score. Once Level 1 has been cleared on a computer, a run can also start at Level 2. High scores and settings are kept between visits, and world scores are shared by all players (when a scores service is set up; see below).
 
-**Play it online: https://piechart1.github.io/spell-runner/** (needs a computer with a keyboard). It is also on itch.io: https://piechart1.itch.io/spell-runner. Both copies share the same world scores. Both are the released game, which has Level 1 only: Level 2 is in this code and has not been released yet, and the scores service the two copies use has not been updated for it. Until it is, a copy of this code served from a local web server should be played with WORLD SCORES set to OFF (under OPTIONS), because the service takes scores from a local web server too.
+**Play it online: https://piechart1.github.io/spell-runner/** (needs a computer with a keyboard). It is also on itch.io: https://piechart1.itch.io/spell-runner. Both copies share the same world scores, and both have the two levels. A copy of this code served from a local web server for development should be played with WORLD SCORES set to OFF (under OPTIONS), because the service takes scores from a local web server too.
 
 ## Starting the game
 

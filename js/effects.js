@@ -55,7 +55,7 @@
   var WHITE_TIME = 3 * FRAME;       // DESIGN 4.6 step 2
   var BLAST_STAGGER = 4 * FRAME;    // DESIGN 7: ink blast clears staggered 4 frames apart
   var CAST_TIME = 0.1;              // DESIGN 14.3: cast held 0.1 s after each correct key
-  var HIT_WHITE = 2 * FRAME;        // DESIGN 3.4: target flashes white for 2 frames
+  var HIT_WHITE = 2 * FRAME;        // DESIGN 3.4: target flashes white for 1 drawn frame (a step is taken off before the first draw)
   var FLINCH_TIME = 5 * FRAME;
   var MISS_SHAKE = 0.15;            // DESIGN 3.4: plate shakes 2 px for 0.15 s with a RED border
   var MISS_BLINK = 1.0;             // the expected letter blinks for this long, or until the next correct key

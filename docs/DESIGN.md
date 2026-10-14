@@ -1,6 +1,6 @@
 # SPELL RUNNER: Game Design Document
 
-Version 1.1. Scope: two levels, QUILL MEADOWS and CLOCKWORK CAVERNS, built so that further levels are new data files.
+Version 1.2. Scope: two levels, QUILL MEADOWS and CLOCKWORK CAVERNS, built so that further levels are new data files.
 
 This document describes what the game is and how it should play. The companion file `docs/CONTRACT.md` describes how the code is divided and how the parts fit together. Names used here (threat kinds, events, sprites, sounds, settings) match the names in the contract. `docs/LEVEL2.md` is the plan Level 2 was built from, with the record of its build and of the owner's decisions; section 11A describes that level as it was built.
 
@@ -139,7 +139,7 @@ Everything in a row happens on the same frame as the key.
 | Event | Simulation | Screen | Sound |
 |---|---|---|---|
 | Lock acquired | Lock set, progress 1 | GOLD plate border, animated corner brackets around the sprite, other plates dim to SILVER, word appears in the type bar | `lock_on` |
-| Correct letter | Progress +1, +10 points. A moving threat's clock pauses for 0.20 / 0.12 / 0.06 nominal s. Letters typed again after the word was released earn neither, so releasing and retyping cannot hold a threat back | Letter turns GOLD and sits 1 px higher; ink spark at the quill; target flashes white for 2 frames | `key_ok`, one pentatonic step higher per letter |
+| Correct letter | Progress +1, +10 points. A moving threat's clock pauses for 0.20 / 0.12 / 0.06 nominal s. Letters typed again after the word was released earn neither, so releasing and retyping cannot hold a threat back | Letter turns GOLD and sits 1 px higher; ink spark at the quill; target flashes white for 1 frame | `key_ok`, one pentatonic step higher per letter |
 | Wrong letter | No progress lost, no input lockout | Plate shakes 2 px for 0.15 s with a RED border; the expected letter blinks | `key_bad`, quieter than `key_ok` |
 | Word complete | Threat removed, score added | Ink bolt, white flash, clear animation, letters fly to the score, score popup, 1 px shake for 0.1 s | `word_clear` plus the threat's sound family |
 | Lock released | Progress reset to 0 | Brackets disappear | `lock_release` |
