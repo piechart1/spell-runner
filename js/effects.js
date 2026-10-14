@@ -1,7 +1,7 @@
 // js/effects.js
 // TG.Effects: particles, clear animations, ink bolts, score popups, letter particles, screen shake,
 // flashes, label effects and the hero's cast overlay (WP-F). CONTRACT 4.17, DESIGN 3.4, 4.2, 4.6, 7,
-// 8.7, 11.6 and 14.6.
+// 8.7, 11.6 and 14.6; for Level 2's creatures and its boss, LEVEL2 2, 4 and 10.
 //
 // File layout:
 //   1. constants and module state
@@ -16,7 +16,11 @@
 // Everything is presentation. Nothing here writes to the game state, emits a simulation event or uses
 // state.rng; randomness comes from a private TG.RNG generator. The state is read (camera, player,
 // boss, power) through TG.Game.state when it exists, so that effects start where the player sees
-// them; without TG.Game the last camera given to draw() is used.
+// them; without TG.Game the last camera given to draw() is used. The level's theme and the entity that
+// an event names are read there too, for the look of a skinned creature (LEVEL2 4.5): an event payload
+// carries no skin. The clear of a dangle or a flit begins where TG.Render drew the creature, which is a
+// little away from the payload's place (the dangle sways, the flit flutters); TG.Render says how far. One
+// that the clamp of CONTRACT 4.17 moves in from an edge of the view begins at the clamped place instead.
 //
 // Timing: TG.Effects.update(dt) is called once per simulation step (dt = 1/60 s), so lengths given in
 // "frames" below are 1/60 s each.
@@ -24,8 +28,8 @@
 // Extra fields beyond CONTRACT 4.17 (see the hand-over notes):
 //   label(id) also returns `white` (draw the typable's sprite with the white remap: 2 frames after a
 //   correct key) and `flinch` (px to push the sprite away from Pip: the creature flinches).
-//   TG.Effects._list() returns a copy of every live effect as { type, layer, x, y } with x, y in screen
-//   px, for tests.
+//   TG.Effects._list() returns a copy of every live effect as { type, kind, layer, x, y, delay } with x, y
+//   in screen px and delay the s still to pass before it starts, for tests.
 //   The letters of a cleared threat or crate word are screen-layer effects, but while they are in the
 //   playfield they are drawn in the world pass, before the other world effects: under the word plates
 //   (TG.Render draws those after the world effects) and under the score and CLEAN / SUPER popups.
@@ -37,7 +41,7 @@
   // 1. Constants and module state
   // ---------------------------------------------------------------------------------------------
 
-  var INK = 0, SHADOW = 1, STONE = 2, SILVER = 3, WHITE = 4, AQUA = 11, GRASS = 14, LIME = 15,
+  var INK = 0, SHADOW = 1, STONE = 2, SILVER = 3, WHITE = 4, AQUA = 11, GRASS = 14, LIME = 15, BRONZE = 16,
     GOLD = 18, CREAM = 19, SOIL = 21, CLAY = 22, SAND = 23, RED = 25, CORAL = 26, PINK = 27, LILAC = 30;
 
   var MAX_FX = 256;                 // CONTRACT 4.17: at most 256 particles
@@ -51,7 +55,7 @@
   var WHITE_TIME = 3 * FRAME;       // DESIGN 4.6 step 2
   var BLAST_STAGGER = 4 * FRAME;    // DESIGN 7: ink blast clears staggered 4 frames apart
   var CAST_TIME = 0.1;              // DESIGN 14.3: cast held 0.1 s after each correct key
-  var HIT_WHITE = 2 * FRAME;        // DESIGN 3.4: target flashes white for 2 frames
+  var HIT_WHITE = 2 * FRAME;        // DESIGN 3.4: target flashes white for 1 drawn frame (a step is taken off before the first draw)
   var FLINCH_TIME = 5 * FRAME;
   var MISS_SHAKE = 0.15;            // DESIGN 3.4: plate shakes 2 px for 0.15 s with a RED border
   var MISS_BLINK = 1.0;             // the expected letter blinks for this long, or until the next correct key
@@ -167,7 +171,7 @@
   // Sprite box of a kind when the payload does not give one.
   var FALLBACK_BOX = {
     boulder: [24, 32], dawdle: [16, 16], hoppet: [16, 16], buzzle: [16, 16], swoop: [24, 16], truffle: [24, 16],
-    digby: [16, 16], rock: [12, 12], crate: [16, 32], shock: [16, 8], pick: [16, 16]
+    digby: [16, 16], dangle: [16, 16], flit: [24, 16], rock: [12, 12], crate: [16, 32], shock: [16, 8], pick: [16, 16]
   };
 
   function boxOf(kind) {
@@ -179,6 +183,106 @@
   function quillActive() {
     var s = gameState();
     return !!(s && s.power && s.power.quillT > 0);
+  }
+
+  // The particle colours of a hazard's burst (LEVEL2 3.4): the level's theme.hazardFx[key], a list of
+  // palette indices. key: the hazard's kind for a hazard:hit, and `bridge` for a hazard:bridge. Without it
+  // they are Level 1's: leaves with thorns for the bramble and with soil for the other kinds, and the wood
+  // of the plank bridge.
+  function hazardColors(key) {
+    var s = gameState();
+    var fx = s && s.level && s.level.theme ? s.level.theme.hazardFx : null;
+    var colors = fx ? fx[key] : null;
+    if (Array.isArray(colors) && colors.length > 0) return colors;
+    if (key === 'bridge') return [SAND, CLAY, SOIL];
+    return key === 'bramble' ? [GRASS, CORAL, LIME] : [GRASS, LIME, SOIL];
+  }
+
+  // The effects of each boss by boss.kind (LEVEL2 10.6), with the Baron as the default.
+  //   hit, hitAt  the sprite a weak-point hit knocks off the head, and where it starts, in px from the
+  //               payload's x, y: his monocle; the goggles on her brow
+  //   lens        the remap of that sprite while boss.lampRed: her lenses are RED from phase 2 on, on her
+  //               head and off it (CONTRACT 6.4). His lamp is on his helmet, so his monocle has none
+  //   count       the popup after a hit that leaves her health: she loses count and starts again (LEVEL2 2)
+  //   defeat      the sprite that flies off on boss:defeat: his helmet; the key in her back
+  //   thrown      the particle colours of boss:throw, and
+  //   dust        of the dust that falls on boss:phase: soil in his dig, brass in her hall
+  //   fall        the rest of the defeat, after the freeze and the flash (baronDefeat, ratchetDefeat)
+  //   enter, round, weak, crank   what her engine and her key add, each called with the boss (bossHook)
+  var BOSS_FX = {
+    baron: { hit: 'boss_monocle', hitAt: [-10, -8], defeat: 'boss_helmet', thrown: [SAND, CLAY, WHITE],
+      dust: [SAND, CLAY, STONE], fall: baronDefeat },
+    ratchet: { hit: 'boss2_goggles', hitAt: [-5, -21], lens: 'lampred', count: '1...', defeat: 'boss2_key',
+      thrown: [GOLD, BRONZE, WHITE], dust: [BRONZE, GOLD, STONE], fall: ratchetDefeat, enter: ratchetEnter,
+      round: ratchetRound, weak: ratchetToot, crank: ratchetCrank }
+  };
+
+  function bossFx() {
+    var s = gameState();
+    var kind = s && s.boss ? s.boss.kind : null;
+    return hasOwn(BOSS_FX, kind) ? BOSS_FX[kind] : BOSS_FX.baron;
+  }
+
+  // Runs the part `name` of the boss's effects with the boss, if this boss has it. What it makes moves
+  // with the view, as she does.
+  function bossHook(name) {
+    var s = gameState();
+    var hook = bossFx()[name];
+    if (hook && s && s.boss) following(function () { hook(s.boss); });
+  }
+
+  // --- skins (LEVEL2 4.5) ----------------------------------------------------------------------
+
+  // The entity with this id, or null. The payloads of word:clear, threat:hit and threat:bounce carry no
+  // skin, and the entity they name is still in state.entities while they are handled: TG.Entities drops
+  // the dead at the end of its update.
+  function entityById(id) {
+    var s = gameState();
+    var list = s ? s.entities : null;
+    if (!list || id === null || id === undefined) return null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && list[i].id === id) return list[i];
+    }
+    return null;
+  }
+
+  // The level's skin for a kind: theme.skins[kind] = { sprite, remap, fx }, each part optional; null when
+  // the level has none.
+  function themeSkin(kind) {
+    var s = gameState();
+    var skins = s && s.level && s.level.theme ? s.level.theme.skins : null;
+    return skins && hasOwn(skins, kind) && skins[kind] ? skins[kind] : null;
+  }
+
+  // Gives the effect f the look TG.Render gave the creature: the entity's own skin if it has one, else the
+  // sprite of the level's skin for its kind, else `name`; and the remap of the level's skin, which is
+  // written for the look of the kind and so is not put on an entity's own skin. e: the entity, or null.
+  function dress(f, kind, e, name) {
+    var skin = themeSkin(kind);
+    var own = e && typeof e.skin === 'string' && e.skin ? e.skin : null;
+    f.sprite = own || (skin && typeof skin.sprite === 'string' && skin.sprite ? skin.sprite : name);
+    f.remap = !own && skin && typeof skin.remap === 'string' && skin.remap ? skin.remap : null;
+  }
+
+  // The sprite that the clear of a kind leaves behind: `name`, or the one the level's skin puts in its
+  // place (skin.fx, as Level 2's glow-moth has a star for the bee's flower). The buzzle's fx_flower is the
+  // only one asked for (clearEnd), and the `skins` check of test/sim.js refuses any other key of skin.fx,
+  // so that a level cannot carry a swap that nothing draws.
+  function fxFor(kind, name) {
+    var skin = themeSkin(kind);
+    var fx = skin ? skin.fx : null;
+    return fx && typeof fx[name] === 'string' && fx[name] ? fx[name] : name;
+  }
+
+  // How far from its place in the simulation TG.Render draws the entity e (LEVEL2 4.3): a dangle sways on
+  // its thread, px to the right, and a flit flutters in its crossing, px up. 0 for any other kind, for no
+  // entity and without TG.Render.
+  function swayOf(e) {
+    return e && TG.Render && TG.Render.sway ? TG.Render.sway(e) : 0;
+  }
+
+  function flutterOf(e) {
+    return e && TG.Render && TG.Render.flutter ? TG.Render.flutter(e) : 0;
   }
 
   // --- drawing ---------------------------------------------------------------------------------
@@ -229,6 +333,19 @@
     ctx.fillRect(Math.floor(x), Math.floor(y), Math.floor(w), Math.floor(h));
   }
 
+  // The dangle's thread (LEVEL2 4.3), as TG.Render draws it for the spider while it hangs: 1 px of SILVER
+  // from the top of the playfield at x0, its anchor, down to the top of the sprite at x1 and row `bottom`,
+  // as one upright run for each x it passes through. Nothing is drawn while the sprite is above the top.
+  function thread(ctx, x0, x1, bottom) {
+    var top = TG.C.PLAY_TOP;
+    if (bottom <= top) return;
+    var runs = Math.abs(x1 - x0) + 1, step = x1 < x0 ? -1 : 1;
+    for (var k = 0; k < runs; k++) {
+      var y = top + Math.floor((bottom - top) * k / runs);
+      rect(ctx, x0 + k * step, y, 1, top + Math.floor((bottom - top) * (k + 1) / runs) - y, SILVER);
+    }
+  }
+
   function glyph(ctx, ch, x, y, c) {
     if (TG.Font && TG.Font.drawGlyph) TG.Font.drawGlyph(ctx, ch, Math.floor(x), Math.floor(y), c, 1);
   }
@@ -252,7 +369,7 @@
       color: WHITE, size: 1, text: '', ch: '',
       ground: 0, bounces: 0, sway: 0, swayHz: 0, blinkOut: 0,
       kind: '', w: 16, h: 16, pre: 0, stage: 0, a: 0, b: 0, under: false, power: null, follow: false,
-      low: false
+      low: false, still: false
     };
   }
 
@@ -330,12 +447,13 @@
     return f;
   }
 
-  // A burst of square particles around (x, y).
-  function burst(layer, x, y, n, speed, colors, g, life) {
+  // A burst of square particles around (x, y), at once or after `delay` s.
+  function burst(layer, x, y, n, speed, colors, g, life, delay) {
     for (var i = 0; i < n; i++) {
       var a = (i / n) * Math.PI * 2 + rnd(-0.3, 0.3);
       var v = speed * rnd(0.6, 1.1);
-      particle(layer, x, y, Math.cos(a) * v, Math.sin(a) * v, g, life * rnd(0.8, 1.1), pick(colors), random() < 0.5 ? 1 : 2);
+      var f = particle(layer, x, y, Math.cos(a) * v, Math.sin(a) * v, g, life * rnd(0.8, 1.1), pick(colors), random() < 0.5 ? 1 : 2);
+      f.delay = delay || 0;
     }
   }
 
@@ -390,30 +508,36 @@
     return f;
   }
 
-  // The sprite and frame that stand for a kind at the moment it is cleared.
+  // The sprite and frame that stand for a kind at the moment it is cleared. The sprite is the kind's own:
+  // a skin replaces it and keeps the frame (dress).
   var GHOST = {
     boulder: ['en_boulder', 'crack3'], dawdle: ['en_dawdle', 'crawl0'], hoppet: ['en_hoppet', 'sit'],
     buzzle: ['en_buzzle', 'fly0'], swoop: ['en_swoop', 'flap0'], truffle: ['en_truffle', 'run0'],
-    digby: ['en_digby', 'up'], rock: ['pr_rock', 'k0'], crate: ['crate_balloon', 'c0']
+    digby: ['en_digby', 'up'], dangle: ['en_dangle', 'hang0'], flit: ['en_flit', 'flap0'],
+    rock: ['pr_rock', 'k0'], crate: ['crate_balloon', 'c0']
   };
+
+  // The one skin whose clear is its own (LEVEL2 4.4): a digby drawn as the Baron at minion size, in a spare
+  // helmet and his monocle. Lady Ratchet's minion has it as its own skin (level.boss.minionSkin). TG.Render
+  // draws any minion that has a skin of its own in front of its mound; only this one's clear is written
+  // here, so a minion in another skin would be cleared as a mole is, from behind the mound.
+  var BARONET = 'en_baronet';
 
   // Screen-space clamp of an effect position (CONTRACT 4.17): the centre of the sprite box is kept
   // inside x 8..376 and y PLAY_TOP + 8 .. GROUND_Y - 8, so a clear off screen plays where the edge tag was.
-  // Returns the world anchor { x, y } in `out` and whether the box was outside the view.
+  // Returns the world anchor { x, y } in `out` and whether the clamp moved it: it does for every box
+  // outside the view, and for one that is partly in view at an edge.
   function placeClear(x, y, w, h, out) {
     var C = TG.C;
     var cx = camX();
-    var sx = x - cx;
-    var cy = y - h / 2;
-    var outside = !(sx + w / 2 > 0 && sx - w / 2 < C.W && y > C.PLAY_TOP && y - h < C.GROUND_Y);
-    sx = clamp(sx, 8, C.W - 8);
-    cy = clamp(cy, C.PLAY_TOP + 8, C.GROUND_Y - 8);
+    var sx = clamp(x - cx, 8, C.W - 8);
+    var cy = clamp(y - h / 2, C.PLAY_TOP + 8, C.GROUND_Y - 8);
     out.x = sx + cx;
     out.y = cy + h / 2;
-    out.outside = outside;
+    out.moved = sx !== x - cx || cy !== y - h / 2;
     return out;
   }
-  var placeTmp = { x: 0, y: 0, outside: false };
+  var placeTmp = { x: 0, y: 0, moved: false };
 
   // The universal clear sequence of a threat or crate (DESIGN 4.6) from a word:clear payload.
   function startClear(p) {
@@ -422,10 +546,23 @@
     var box = boxOf(kind);
     var w = num(p.w, box[0]), h = num(p.h, box[1]);
     var x = num(p.x, camX() + C.W / 2), y = num(p.y, C.GROUND_Y);
-    var underground = kind === 'digby' && y >= C.GROUND_Y + 6;
+    var e = entityById(p.id);
+    // A mole is cleared underground while its feet are 6 px or more under the floor: it pops out of its
+    // mound first. The Baronet is while any row of him is under it: TG.Render draws him in front of his
+    // mound from the moment he starts up, and his clear goes on from the picture he had (drawClear).
+    var underground = kind === 'digby' && y >= C.GROUND_Y + (e && e.skin === BARONET ? 1 : 6);
     placeClear(x, y, w, h, placeTmp);
     var ax = placeTmp.x, ay = underground ? C.GROUND_Y : placeTmp.y;
     var blast = p.cause === 'blast';
+    // The creature is where TG.Render drew it: a dangle swayed on its thread, a flit up or down in its
+    // flutter (LEVEL2 4.3). The letters and the popups below keep to the place of the plate, which held
+    // still. A clear that the clamp has moved in from an edge of the view is played there as it is, the
+    // dangle upright on its thread: the creature was not seen in that place.
+    var fx = placeTmp.moved ? ax : ax + swayOf(e), fy = placeTmp.moved ? ay : ay - flutterOf(e);
+    // A flit flies beside Pip, so its clear keeps its place in the view as he runs on, and the ink bolt
+    // flies to it there. Behind him it is 24 px from the left edge, and a clear left standing in the world
+    // would be out of sight before it ended.
+    var beside = kind === 'flit';
 
     var pre = BOLT_TIME;
     if (blast) {
@@ -436,20 +573,27 @@
       pre = blastCount * BLAST_STAGGER;
       blastCount++;
     } else {
-      bolt(ax, ay - h / 2);
+      var b = bolt(fx, fy - h / 2);
+      if (beside) b.follow = true;
     }
 
     var f = alloc('clear', WORLD);
     f.kind = kind;
-    f.x = ax; f.y = ay; f.x0 = ax; f.y0 = ay;
+    f.x = fx; f.y = fy; f.x0 = fx; f.y0 = fy;
+    if (kind === 'dangle') f.x1 = ax;          // its thread comes down from its anchor
     f.w = w; f.h = h;
     f.pre = pre;
     f.under = underground;
+    // How far under the ground its feet were, px: the Baronet is seen from the moment he starts up (drawClear).
+    if (underground) f.a = Math.min(16, Math.floor(y) - C.GROUND_Y);
     f.power = p.power || null;
-    f.flip = kind === 'truffle';
+    // It faces the way it was drawn: the truffle, and a flit after its turn, face right.
+    f.flip = kind === 'truffle' || (kind === 'flit' && !!(e && e.turned));
+    if (beside) f.follow = true;
     var g = GHOST[kind] || GHOST.hoppet;
-    f.sprite = g[0];
-    f.frame = g[1];
+    dress(f, kind, e, g[0]);
+    // A flit caught in its dive has its wings folded already, and keeps them so.
+    f.frame = kind === 'flit' && e && e.phase === 'dive' ? 'dive' : g[1];
     f.life = pre + WHITE_TIME + clearLength(kind, underground);
     f.z = 1;
 
@@ -491,6 +635,8 @@
       case 'swoop': return 1.2;
       case 'truffle': return 1.4;
       case 'digby': return underground ? 0.52 : 0.42;
+      case 'dangle': return 0.3;
+      case 'flit': return 0.55;
       case 'rock': return 0.3;
       case 'crate': return 0.16;
       default: return 0.1;
@@ -538,6 +684,17 @@
       case 'digby':
         if (!f.under) digbyHelmet(f);
         break;
+      case 'dangle':
+        // The thread snaps back with the spider on it (clearStep), and two twinkles are left where it
+        // hung (LEVEL2 4.2).
+        twinkle(x - 5, cy - 3, 0);
+        twinkle(x + 5, cy + 3, 4 * FRAME);
+        break;
+      case 'flit':
+        // It folds its wings; the first of the three twinkles it leaves (LEVEL2 4.2).
+        twinkle(x, cy, 0);
+        f.a = 1;
+        break;
       case 'rock':
         f.x0 = x; f.y0 = y;
         var s = gameState();
@@ -556,11 +713,22 @@
     }
   }
 
+  // The helmet pops off a mole. The Baronet's is the spare one a size too big, and his monocle flies off
+  // with it, as the Baron's does on a hit (LEVEL2 4.4): it sits over his left eye in the `up` frame.
   function digbyHelmet(f) {
-    var h = spriteParticle('fx_helmet', f.x, f.y - 14, rnd(30, 60), -rnd(200, 240), 720, 1.0);
+    var baronet = f.sprite === BARONET;
+    var h = spriteParticle(baronet ? 'boss_helmet' : 'fx_helmet', f.x, f.y - 14, rnd(30, 60), -rnd(200, 240), 720, 1.0);
     h.ground = TG.C.GROUND_Y - 4;
     h.bounces = 2;
     h.blinkOut = 0.3;
+    if (baronet) popOff('boss_monocle', f.x - 3, f.y - 9, 0, null);
+  }
+
+  // An fx_star that twinkles in place and blinks out, as it is, with no remap (LEVEL2 4.2).
+  function twinkle(x, y, delay) {
+    var st = spriteParticle('fx_star', x, y, 0, 0, 0, 0.45, 8, 2);
+    st.delay = delay;
+    st.blinkOut = 0.15;
   }
 
   // Per-step work of the kind animation. tc: s since the white flash ended.
@@ -600,6 +768,21 @@
           digbyHelmet(f);
         }
         break;
+      case 'dangle':
+        // Zips back up, slowly at first, and is out through the top of the playfield at the end.
+        var zip = clamp(tc / 0.3, 0, 1);
+        f.y = f.y0 + (C.PLAY_TOP - f.y0) * zip * zip;
+        break;
+      case 'flit':
+        // Tumbles up into the dark, swaying, and leaves a twinkle a third and two thirds of the way.
+        var up = clamp(tc / 0.55, 0, 1);
+        f.x = f.x0 + Math.sin(tc * 14) * 5;
+        f.y = f.y0 + (C.PLAY_TOP - f.y0) * up * up;
+        if (f.a < 3 && tc >= f.a * 0.18) {
+          f.a++;
+          twinkle(f.x, f.y - f.h / 2, 0);
+        }
+        break;
       case 'rock':
         var r = clamp(tc / 0.3, 0, 1);
         var s = gameState();
@@ -631,6 +814,7 @@
           p.blinkOut = 0.2;
         }
         var pad = spriteParticle('fx_lilypad', f.x, cy, 0, 26, 0, 2.2);
+        pad.remap = f.remap;     // the frog's own colours: a tin frog leaves a tin disc (LEVEL2 4.1)
         pad.sway = 5;
         pad.swayHz = 1.2;
         pad.ground = C.GROUND_Y - 4;
@@ -638,8 +822,13 @@
         pad.blinkOut = 0.4;
         break;
       case 'buzzle':
-        // Turns into a flower that drifts down.
+        // Turns into a flower that drifts down, or into what the level's skin leaves in the flower's place.
         puff('fx_poof', f.x, f.y - 8, 0);
+        var swap = fxFor(f.kind, 'fx_flower');
+        if (swap !== 'fx_flower') {
+          mothStars(f, swap);
+          break;
+        }
         var fl = spriteParticle('fx_flower', f.x, f.y - 8, 0, 34, 0, 2.6, 4, 2);
         fl.sway = 6;
         fl.swayHz = 1.4;
@@ -648,7 +837,11 @@
         fl.blinkOut = 0.4;
         break;
       case 'digby':
-        // A daisy grows where the mole went down.
+        // A daisy grows where the mole went down; a small cog where the Baronet did (LEVEL2 4.4).
+        if (f.sprite === BARONET) {
+          cogGrows(f.x0);
+          break;
+        }
         var d = spriteParticle('fx_daisy', f.x0, C.GROUND_Y, 0, 0, 0, 1.8);
         d.a = 1;                 // grows through its frames
         d.blinkOut = 0.3;
@@ -658,11 +851,37 @@
         var s = spriteParticle('fx_star', f.x, f.y, 0, -20, 0, 0.35, 8, 2);
         s.z = 3;
         burst(WORLD, f.x, f.y, 6, 70, [WHITE, GOLD], 0, 0.25);
-        var rk = spriteParticle('pr_rock', f.x, f.y + 6, -rnd(70, 100), -rnd(180, 230), 650, 1.2, 20, 2);
+        var rk = spriteParticle(f.sprite, f.x, f.y + 6, -rnd(70, 100), -rnd(180, 230), 650, 1.2, 20, 2);
+        rk.remap = f.remap;
         rk.blinkOut = 0.3;
         rk.follow = true;
         s.follow = true;
         break;
+    }
+  }
+
+  // What grows where the Baronet went down, in the daisy's place and for as long: fx_cogbit, the small
+  // collar first and the cog of eight teeth from 0.15 s on, each standing on the floor.
+  function cogGrows(x) {
+    var floor = TG.C.GROUND_Y;
+    var bud = spriteParticle('fx_cogbit', x, floor - 3, 0, 0, 0, 0.15);
+    bud.frame = 1;
+    var cog = spriteParticle('fx_cogbit', x, floor - 4, 0, 0, 0, 1.65);
+    cog.delay = 0.15;
+    cog.blinkOut = 0.3;
+  }
+
+  // What a skinned buzzle leaves in place of the flower (LEVEL2 4.1: the glow-moth's four fx_star twinkles
+  // that drift down). Each is the sprite as it is, at its own frame rate, and is gone before it lands.
+  function mothStars(f, name) {
+    var inf = info(name);
+    for (var i = 0; i < 4; i++) {
+      var st = spriteParticle(name, f.x + (i - 1.5) * 7, f.y - 8 - (i % 2) * 6, 0, rnd(22, 38), 0, rnd(0.9, 1.3),
+        inf ? inf.fps : 8, inf ? inf.frames : 2);
+      st.delay = i * 3 * FRAME;
+      st.sway = 3;
+      st.swayHz = rnd(1.0, 1.6);
+      st.blinkOut = 0.3;
     }
   }
 
@@ -699,18 +918,27 @@
     following(function () {
       burst(WORLD, heroTmp.x, heroTmp.y - 12, 10, 80, [AQUA, GOLD, WHITE], 0, 0.3);
       // The names of How to Play (TG.UI), so that each power has one name.
-      var name = { shield: 'SHIELD', hourglass: 'HOURGLASS', quill: 'GOLDEN QUILL', blast: 'INK BLAST' }[f.power];
+      var name = { shield: 'SHIELD', hourglass: 'HOURGLASS', quill: 'GOLDEN QUILL', blast: 'INK BLAST', watch: 'POCKET WATCH' }[f.power];
       if (name) popup(WORLD, name, heroTmp.x, heroTmp.y - 40, f.power === 'quill' ? GOLD : AQUA, 0);
     });
   }
 
-  // A creature knocked away after it reached Pip (threat:hit, threat:bounce).
-  function knockAway(kind, dir) {
+  // The side a creature that reached Pip is knocked away to, from its threat:hit or threat:bounce payload
+  // and its entity (or null): back the way it came, -1 for the left and 1 for the right. A flit that has
+  // turned came from behind, though its dive ends on Pip's own x (LEVEL2 4.3). Sets heroTmp.
+  function awaySide(p, e) {
+    heroPos(heroTmp);
+    return (e && e.turned) || (isNum(p.x) && p.x < heroTmp.x - 2) ? -1 : 1;
+  }
+
+  // A creature knocked away after it reached Pip (threat:hit, threat:bounce). e: its entity, or null.
+  function knockAway(kind, e, dir) {
     var g = GHOST[kind];
     if (!g) return;
     heroPos(heroTmp);
     var box = boxOf(kind);
     var f = spriteParticle(g[0], heroTmp.x + dir * 6, heroTmp.y - 4, dir * rnd(90, 130), -rnd(150, 200), 600, 0.7);
+    dress(f, kind, e, g[0]);
     f.frame = g[1] === 'crack3' ? 'whole' : g[1];
     f.flip = kind === 'truffle';          // it keeps facing Pip as it is knocked back
     f.spin = 0.1;
@@ -724,6 +952,164 @@
     burst(WORLD, x, y, big ? 12 : 6, big ? 120 : 80, [WHITE, GOLD, RED], 0, 0.3);
     var st = spriteParticle('fx_star', x + 8, y - 8, 30, -60, 200, 0.4, 8, 2);
     st.blinkOut = 0.15;
+  }
+
+  // --- the bosses (DESIGN 11.6; LEVEL2 2, 10.1, 10.4 and 10.7) ----------------------------------
+
+  // What is knocked off a head (the Baron's monocle, her goggles): it flies up and to Pip's side, and
+  // bounces twice on the floor. remap: the remap it is drawn under, or null.
+  function popOff(name, x, y, delay, remap) {
+    var m = spriteParticle(name, x, y, -rnd(50, 80), -rnd(170, 210), 520, 1.2);
+    m.remap = remap;
+    m.delay = delay;
+    m.ground = TG.C.GROUND_Y - 4;
+    m.bounces = 2;
+    m.blinkOut = 0.3;
+    m.z = 3;
+  }
+
+  // The remap of what a hit knocks off this boss (fx.lens), at this moment.
+  function lensRemap(fx) {
+    var s = gameState();
+    return fx.lens && s && s.boss && s.boss.lampRed ? fx.lens : null;
+  }
+
+  // The fountain of letter tiles of a defeat (DESIGN 11.6): 24 letters, of the finisher word and of the
+  // game's name, erupt from (x, y) from `at` s after boss:defeat and fly to the SCORE counter.
+  function fountain(x, y, at) {
+    var tiles = String(lastFinisher || 'WORDS').toUpperCase() + 'SPELLRUNNER';
+    for (var i = 0; i < 24; i++) {
+      var f = alloc('letter', WORLD);
+      f.ch = tiles.charAt(i % tiles.length);
+      f.x = x + rnd(-3, 3);
+      f.y = y;
+      f.vx = rnd(-70, 70);
+      f.vy = -rnd(200, 300);
+      f.g = 420;
+      f.a = 0.25 + (i % 6) * FRAME;
+      f.x1 = SCORE_X + (i % 7) * 4;
+      f.y1 = SCORE_Y;
+      f.life = 0.55 + f.a + LETTER_FLY;
+      f.delay = at + i * 0.04;
+      f.color = i % 3 === 0 ? CREAM : GOLD;
+      f.home = true;               // a world letter that becomes a screen letter when it flies
+      f.z = 3;
+    }
+  }
+
+  // The Baron's defeat (DESIGN 11.6): the helmet flies off, he spins and shrinks (TG.Render), and the
+  // fountain erupts from the hole in his mound.
+  function baronDefeat(x, y) {
+    var C = TG.C;
+    var hm = spriteParticle(BOSS_FX.baron.defeat, x - 2, y - 52, rnd(40, 60), -260, 480, 2.4);
+    hm.delay = 0.55;
+    hm.spin = 0.12;
+    hm.ground = C.GROUND_Y - 4;
+    hm.bounces = 2;
+    hm.blinkOut = 0.4;
+    hm.z = 3;
+    puff('fx_poof', x, y - 30, 0.55);
+    puff('fx_poof', x - 14, y - 18, 0.6);
+    puff('fx_poof', x + 14, y - 22, 0.65);
+    fountain(x - 4, y - 12, 2.2);
+  }
+
+  var SPARKS = [GOLD, CREAM, WHITE];   // of her key and her engine
+
+  // A puff of steam from her engine: fx_poof, rising as it plays.
+  function steam(x, y, delay) {
+    puff('fx_poof', x, y, delay).vy = -24;
+  }
+
+  // Her intro, on the timeline of LEVEL2 10.1, in fractions of the intro's length as TG.Render has them:
+  // the Baronet drops into the hatch in the last tenth of the first quarter, and she rises over the second.
+  // Here are the puff of dust that he goes down in and the hatch shuts under, and the steam of the engine
+  // while she comes up. The short intro after a continue has no cameo and no boss:enter, and so none of this.
+  function ratchetEnter(boss) {
+    var len = num(boss.introTime, TG.C.BOSS_INTRO_TIME);
+    puff('fx_poof', boss.x, boss.y - 14, 0.24 * len);
+    steam(boss.x - 19, boss.y - 17, 0.29 * len);
+    steam(boss.x + 19, boss.y - 17, 0.36 * len);
+    steam(boss.x - 19, boss.y - 17, 0.43 * len);
+  }
+
+  // In phase 3 her engine lets off steam at the start of each round (LEVEL2 10.7).
+  function ratchetRound(boss) {
+    if (boss.phase < 3) return;
+    steam(boss.x - 19, boss.y - 17, 0);
+    steam(boss.x + 19, boss.y - 17, 5 * FRAME);
+  }
+
+  // The whistle of her boiler gauge (LEVEL2 10.4): when a weak-point window opens after a volley that was
+  // cleared whole, the long window, steam blows out beside the dial 0.3 s on, as TG.Audio plays the toot.
+  // It goes to the left, clear of the arm that holds her watch up over the dial. The test is that of
+  // openWeakPoint in js/boss.js.
+  function ratchetToot(boss) {
+    var v = boss.volley;
+    if (!(v && v.toLaunch && v.toLaunch.length > 0 && v.hits >= v.toLaunch.length)) return;
+    var f = puff('fx_poof', boss.x - 30, boss.y - 12, 0.3);
+    f.vx = -20;
+    f.vy = -12;
+  }
+
+  // A letter of her finisher word cranks the key in her back the wrong way (LEVEL2 10.7): TG.Render turns
+  // the key, and three sparks fly from it here, up and away behind her, where they show against the hall.
+  function ratchetCrank(boss) {
+    for (var i = 0; i < 3; i++) {
+      particle(WORLD, boss.x + 18, boss.y - 35, rnd(20, 75), -rnd(30, 110), 280, rnd(0.25, 0.4), pick(SPARKS), 2);
+    }
+  }
+
+  // Her defeat is timed with TG.Render, which draws her, and with her defeat sound (LEVEL2 11.3).
+  var KEY_OUT = 0.55;               // s after boss:defeat: TG.Render stops drawing the key in her back
+  var HATCH_BURST = 1.2;            // TG.Render opens the hatch and launches her, on the sound's SPROING
+  var COG_RAIN = 14, FLAKES = 16;
+
+  // Her defeat (LEVEL2 2, 10.7). At KEY_OUT, where the Baron's helmet goes, the key shoots out of her back
+  // and her goggles fly off. At HATCH_BURST the hatch bursts open and the fountain erupts from it as she is
+  // launched up the shaft. She is out of the playfield 0.4 s later; cogs then rain down round the shaft and
+  // bounce, and from the fanfare, 1.8 s in, snow drifts down it until the results come (decision 25).
+  function ratchetDefeat(x, y) {
+    var C = TG.C;
+    var i, f;
+    // The key turns in the air through its four frames, clatters on the floor behind her in three bounces
+    // and lies still, on the tip of its stem. A puff where it left her back; her goggles go as on a hit.
+    f = spriteParticle(BOSS_FX.ratchet.defeat, x + 14, y - 30, rnd(26, 40), -rnd(240, 270), 520, 3.0, 14, 4);
+    f.delay = KEY_OUT;
+    f.ground = C.GROUND_Y - 1;
+    f.bounces = 3;
+    f.still = true;
+    f.blinkOut = 0.4;
+    f.z = 3;
+    puff('fx_poof', x + 14, y - 30, KEY_OUT);
+    popOff(BOSS_FX.ratchet.hit, x - 5, y - 53, KEY_OUT, lensRemap(BOSS_FX.ratchet));
+
+    // The hatch bursts: a puff over it, steam from both ends of the engine, sparks, and Level 1's fountain
+    // from the middle of the hatch.
+    puff('fx_poof', x, y - 18, HATCH_BURST);
+    steam(x - 19, y - 17, HATCH_BURST + 2 * FRAME);
+    steam(x + 19, y - 17, HATCH_BURST + 4 * FRAME);
+    burst(WORLD, x, y - 14, 10, 110, SPARKS, 320, 0.45, HATCH_BURST);
+    fountain(x, y - 12, HATCH_BURST);
+
+    // The cogs fall from above the playfield, one every 0.07 s, the cog and the collar in turn.
+    for (i = 0; i < COG_RAIN; i++) {
+      f = spriteParticle('fx_cogbit', x + rnd(-100, 64), C.PLAY_TOP - 6, rnd(-18, 18), rnd(60, 130), 420, 2.2);
+      f.frame = i % 2;
+      f.delay = HATCH_BURST + 0.45 + i * 0.07;
+      f.ground = C.GROUND_Y - 4;
+      f.bounces = 2;
+      f.blinkOut = 0.3;
+    }
+    // The flakes come in at the top of the playfield over her engine, one every 0.14 s to the end of the
+    // screen (LEVEL_COMPLETE_TIME), and sway as they sink; none is down at the engine by then.
+    for (i = 0; i < FLAKES; i++) {
+      f = spriteParticle('fx_flake', x + rnd(-11, 11), C.PLAY_TOP - 4, 0, rnd(34, 52), 0, 3.0, 6, 2);
+      f.delay = HATCH_BURST + 0.6 + i * 0.14;
+      f.sway = rnd(2, 5);
+      f.swayHz = rnd(0.7, 1.3);
+      f.blinkOut = 0.3;
+    }
   }
 
   // --- shake and flash -------------------------------------------------------------------------
@@ -784,6 +1170,7 @@
         r.borderT = 0;
         r.shakeT = 0;
       }
+      if (p.kind === 'finisher') bossHook('crank');
       if (p.complete && (p.kind === 'core' || p.kind === 'finisher')) bossWordDone(p);
     },
 
@@ -845,37 +1232,28 @@
 
     'threat:hit': function (p) {
       // CONTRACT 4.17: the hit effect is drawn at Pip's position, not at the threat's.
-      heroPos(heroTmp);
-      var dir = isNum(p.x) && p.x < heroTmp.x - 2 ? -1 : 1;
-      knockAway(p.kind, dir);
+      var e = entityById(p.id);
+      knockAway(p.kind, e, awaySide(p, e));
     },
 
     'threat:bounce': function (p) {
-      heroPos(heroTmp);
-      var dir = isNum(p.x) && p.x < heroTmp.x - 2 ? -1 : 1;
+      var e = entityById(p.id);
+      var dir = awaySide(p, e);
       puff('fx_poof', heroTmp.x + dir * 8, heroTmp.y - 10, 0);
-      knockAway(p.kind, dir);
+      knockAway(p.kind, e, dir);
     },
 
     'threat:escape': function (p) {
       if (p.reason !== 'flee') return;
-      var s = gameState();
-      if (!s || !s.entities) return;
-      for (var i = 0; i < s.entities.length; i++) {
-        var e = s.entities[i];
-        if (e && e.id === p.id && isNum(e.x) && isNum(e.y)) {
-          var h = num(e.h, 16);
-          puff('fx_poof', e.x, Math.min(e.y, TG.C.GROUND_Y) - h / 2, 0);
-          return;
-        }
-      }
+      var e = entityById(p.id);
+      if (!e || !isNum(e.x) || !isNum(e.y)) return;
+      puff('fx_poof', e.x, Math.min(e.y, TG.C.GROUND_Y) - num(e.h, 16) / 2, 0);
     },
 
     'hazard:hit': function (p) {
       heroPos(heroTmp);
       impact(heroTmp.x, heroTmp.y - 12, false);
-      var colors = p.kind === 'bramble' ? [GRASS, CORAL, LIME] : [GRASS, LIME, SOIL];
-      burst(WORLD, heroTmp.x, heroTmp.y - 16, 8, 90, colors, 300, 0.5);
+      burst(WORLD, heroTmp.x, heroTmp.y - 16, 8, 90, hazardColors(p.kind), 300, 0.5);
     },
 
     'shield:break': function (p) {
@@ -942,7 +1320,7 @@
       if (!isNum(p.x)) return;
       var w = num(p.w, 16);
       puff('fx_poof', p.x + w / 2, TG.C.GROUND_Y, 0);
-      burst(WORLD, p.x + w / 2, TG.C.GROUND_Y, 8, 70, [SAND, CLAY, SOIL], 250, 0.4);
+      burst(WORLD, p.x + w / 2, TG.C.GROUND_Y, 8, 70, hazardColors('bridge'), 250, 0.4);
     },
 
     'attack:spawn': function (p) {
@@ -966,26 +1344,37 @@
       }
     },
 
+    'boss:enter': function () {
+      bossHook('enter');
+    },
+
+    'boss:state': function (p) {
+      if (p.state === 'volley') bossHook('round');
+    },
+
     'boss:throw': function (p) {
       following(function () {
-        if (isNum(p.x) && isNum(p.y)) burst(WORLD, p.x, p.y, 5, 50, [SAND, CLAY, WHITE], 200, 0.3);
+        if (isNum(p.x) && isNum(p.y)) burst(WORLD, p.x, p.y, 5, 50, bossFx().thrown, 200, 0.3);
       });
+    },
+
+    'boss:weakopen': function () {
+      bossHook('weak');
     },
 
     'boss:hit': function (p) {
       following(function () {
         var C = TG.C;
+        var fx = bossFx();
         var x = num(p.x, camX() + 296), y = num(p.y, C.GROUND_Y - 32);
-        // The monocle pops off.
-        var m = spriteParticle('boss_monocle', x - 10, y - 8, -rnd(50, 80), -rnd(170, 210), 520, 1.2);
-        m.ground = C.GROUND_Y - 4;
-        m.bounces = 2;
-        m.blinkOut = 0.3;
-        m.z = 3;
+        // The monocle pops off; from her, the goggles (LEVEL2 2).
+        popOff(fx.hit, x + fx.hitAt[0], y + fx.hitAt[1], 0, lensRemap(fx));
         for (var i = 0; i < 3; i++) {
           var st = spriteParticle('fx_star', x + rnd(-10, 10), y - 20, rnd(-60, 60), -rnd(60, 120), 200, 0.5, 8, 2);
           st.blinkOut = 0.15;
         }
+        // She loses count and starts again, beside her snout, unless that was her last weak point.
+        if (fx.count && p.health > 0) popup(WORLD, fx.count, x - 36, y - 2, WHITE, 0.2);
         requestShake(2, 8 * FRAME);
       });
     },
@@ -994,11 +1383,12 @@
       following(function () {
         // He stamps and dust falls (DESIGN 11.6).
         var C = TG.C;
+        var dust = bossFx().dust;
         requestShake(2, 8 * FRAME);
         var cx = camX();
         for (var i = 0; i < 24; i++) {
           var f = particle(WORLD, cx + rnd(0, C.W), C.PLAY_TOP + rnd(-10, 20), rnd(-8, 8), rnd(20, 60), 90,
-            rnd(1.2, 1.8), pick([SAND, CLAY, STONE]), random() < 0.3 ? 2 : 1);
+            rnd(1.2, 1.8), pick(dust), random() < 0.3 ? 2 : 1);
           f.delay = rnd(0, 0.4);
           f.ground = C.GROUND_Y - 1;
           f.bounces = 0;
@@ -1009,40 +1399,12 @@
 
     'boss:defeat': function (p) {
       following(function () {
-        // DESIGN 11.6: 30-frame freeze of the picture (TG.Render), 2-frame flash, the helmet flies off,
-        // he spins and shrinks (TG.Render), and a fountain of letter tiles erupts from the hole.
-        var C = TG.C;
-        var x = num(p.x, camX() + 296), y = num(p.y, C.GROUND_Y);
+        // DESIGN 11.6: 30-frame freeze of the picture (TG.Render), 2-frame flash, then the boss's own
+        // defeat.
+        var x = num(p.x, camX() + 296), y = num(p.y, TG.C.GROUND_Y);
         delayedFlash.t = 0.5;
         delayedFlash.color = WHITE;
-        var hm = spriteParticle('boss_helmet', x - 2, y - 52, rnd(40, 60), -260, 480, 2.4);
-        hm.delay = 0.55;
-        hm.spin = 0.12;
-        hm.ground = C.GROUND_Y - 4;
-        hm.bounces = 2;
-        hm.blinkOut = 0.4;
-        hm.z = 3;
-        puff('fx_poof', x, y - 30, 0.55);
-        puff('fx_poof', x - 14, y - 18, 0.6);
-        puff('fx_poof', x + 14, y - 22, 0.65);
-        var tiles = String(lastFinisher || 'WORDS').toUpperCase() + 'SPELLRUNNER';
-        for (var i = 0; i < 24; i++) {
-          var f = alloc('letter', WORLD);
-          f.ch = tiles.charAt(i % tiles.length);
-          f.x = x - 4 + rnd(-3, 3);
-          f.y = y - 12;
-          f.vx = rnd(-70, 70);
-          f.vy = -rnd(200, 300);
-          f.g = 420;
-          f.a = 0.25 + (i % 6) * FRAME;
-          f.x1 = SCORE_X + (i % 7) * 4;
-          f.y1 = SCORE_Y;
-          f.life = 0.55 + f.a + LETTER_FLY;
-          f.delay = 2.2 + i * 0.04;
-          f.color = i % 3 === 0 ? CREAM : GOLD;
-          f.home = true;               // a world letter that becomes a screen letter when it flies
-          f.z = 3;
-        }
+        bossFx().fall(x, y);
       });
     }
   };
@@ -1152,6 +1514,7 @@
             f.vx = 0;
             f.g = 0;
             f.follow = false;       // at rest on the ground: from now on it stays where it lies
+            if (f.still) f.fps = 0; // and one that turned in the air lies in its first frame
           }
         }
         break;
@@ -1187,8 +1550,12 @@
     }
   }
 
+  // The splash of ink where the bolt lands. It stays with what the bolt hit: after a bolt that kept its
+  // place in the view (startClear, for a flit) the splash keeps it too.
   function boltArrived(f) {
+    followNew = f.follow;
     burst(WORLD, f.x1, f.y1, 6, 70, [AQUA, WHITE], 0, 0.2);
+    followNew = false;
   }
 
   // Letters burst upward in world or screen space, then fly to the SCORE counter in screen space.
@@ -1316,14 +1683,20 @@
     var C = TG.C;
     var sx = Math.floor(f.x - cx), sy = Math.floor(f.y);
     var tc = f.t - f.pre - WHITE_TIME;
+    // The creature's own sprite is f.sprite under f.remap, the look of its skin (dress). The mound of a
+    // Digby and the power icon of a crate are not skinned, as in TG.Render.
     if (tc < 0) {
       var white = f.t >= f.pre && !reduceFlash();
       if (f.kind === 'digby' && f.under) {
         sprite(ctx, 'en_mound', 'm0', sx, C.GROUND_Y, false, white ? 'white' : null);
+        // The Baronet comes up in front of his mound (TG.Render, LEVEL2 4.4): what was out of the ground
+        // when he was cleared stays in sight, in the frame he had, the peek frame until 12 rows are out.
+        if (f.sprite === BARONET) spriteClipped(ctx, f.sprite, f.a > 4 ? 'peek' : 'up', sx, C.GROUND_Y + f.a, false, white ? 'white' : f.remap, C.GROUND_Y);
       } else if (f.kind === 'digby') {
-        spriteClipped(ctx, f.sprite, f.frame, sx, sy, false, white ? 'white' : null, C.GROUND_Y);
+        spriteClipped(ctx, f.sprite, f.frame, sx, sy, false, white ? 'white' : f.remap, C.GROUND_Y);
       } else {
-        sprite(ctx, f.sprite, f.frame, sx, sy, f.flip, white ? 'white' : null);
+        if (f.kind === 'dangle') thread(ctx, Math.floor(f.x1 - cx), sx, sy - f.h);
+        sprite(ctx, f.sprite, f.frame, sx, sy, f.flip, white ? 'white' : f.remap);
         if (f.kind === 'crate' && f.power) sprite(ctx, 'pw_' + f.power, 0, sx, sy, false, white ? 'white' : null);
       }
       return;
@@ -1332,41 +1705,53 @@
     switch (f.kind) {
       case 'dawdle':
         spin = Math.floor(tc * 30) % 2 === 1;
-        sprite(ctx, 'en_dawdle', 'shell', sx, sy, spin, null);
+        sprite(ctx, f.sprite, 'shell', sx, sy, spin, f.remap);
         break;
       case 'hoppet':
         // Inflates: the puffed frame, wobbling.
-        sprite(ctx, 'en_hoppet', 'puff', sx + (Math.floor(tc * 40) % 2), sy, false, null);
+        sprite(ctx, f.sprite, 'puff', sx + (Math.floor(tc * 40) % 2), sy, false, f.remap);
         break;
       case 'buzzle':
         var a = tc * 16;
         var bxx = f.x0 + Math.sin(a) * 9;
         var byy = f.y0 - tc * 90 + Math.cos(a) * 3;
         f.x = bxx; f.y = byy;
-        sprite(ctx, 'en_buzzle', Math.floor(tc * 16) % 2, Math.floor(bxx - cx), Math.floor(byy), Math.cos(a) > 0, null);
+        sprite(ctx, f.sprite, Math.floor(tc * 16) % 2, Math.floor(bxx - cx), Math.floor(byy), Math.cos(a) > 0, f.remap);
         break;
       case 'swoop':
-        sprite(ctx, 'en_swoop', Math.floor(tc * 12) % 2, sx, sy, false, null);
+        sprite(ctx, f.sprite, Math.floor(tc * 12) % 2, sx, sy, false, f.remap);
         break;
       case 'truffle':
         var turned = tc >= 0.34;
         var fr = tc < 0.28 ? 0 : (tc < 0.4 ? 1 : Math.floor(tc * 16) % 4);
-        sprite(ctx, 'en_truffle', fr, sx, sy, !turned, null);
+        sprite(ctx, f.sprite, fr, sx, sy, !turned, f.remap);
         break;
       case 'digby':
         var start = f.under ? 0.1 : 0;
         if (f.under && tc < 0.1) {
-          // Pops out of the mound first.
-          var rise = Math.floor(16 * (1 - tc / 0.1));
-          spriteClipped(ctx, 'en_digby', 'up', sx, C.GROUND_Y + rise, false, null, C.GROUND_Y);
-          sprite(ctx, 'en_mound', 'm0', sx, C.GROUND_Y, false, null);
+          // Pops out of the mound first: a mole from behind it, all 16 px; the Baronet in front of it, from
+          // where he was, as TG.Render draws him coming up.
+          var baronet = f.sprite === BARONET;
+          var rise = Math.floor((baronet ? f.a : 16) * (1 - tc / 0.1));
+          if (baronet) sprite(ctx, 'en_mound', 'm0', sx, C.GROUND_Y, false, null);
+          spriteClipped(ctx, f.sprite, baronet && rise > 4 ? 'peek' : 'up', sx, C.GROUND_Y + rise, false, f.remap, C.GROUND_Y);
+          if (!baronet) sprite(ctx, 'en_mound', 'm0', sx, C.GROUND_Y, false, null);
           break;
         }
         var sink = Math.floor(clamp((tc - start) / 0.3, 0, 1) * 16);
-        spriteClipped(ctx, 'en_digby', 'spin', sx, Math.min(sy, C.GROUND_Y) + sink, Math.floor(tc * 20) % 2 === 1, null, C.GROUND_Y);
+        spriteClipped(ctx, f.sprite, 'spin', sx, Math.min(sy, C.GROUND_Y) + sink, Math.floor(tc * 20) % 2 === 1, f.remap, C.GROUND_Y);
+        break;
+      case 'dangle':
+        // Drawn up on its thread, which shortens with it (LEVEL2 4.2).
+        thread(ctx, Math.floor(f.x1 - cx), sx, sy - f.h);
+        sprite(ctx, f.sprite, 'zip', sx, sy, false, f.remap);
+        break;
+      case 'flit':
+        // Wings folded, turned over and back as it tumbles.
+        sprite(ctx, f.sprite, 'dive', sx, sy, f.flip !== (Math.floor(tc * 15) % 2 === 1), f.remap);
         break;
       case 'rock':
-        sprite(ctx, 'pr_rock', Math.floor(tc * 20) % 2, sx, sy, false, null);
+        sprite(ctx, f.sprite, Math.floor(tc * 20) % 2, sx, sy, false, f.remap);
         break;
       case 'boulder':
       case 'crate':
@@ -1485,7 +1870,7 @@
       return liveCount;
     },
 
-    // Tests: every live effect as { type, layer, x, y } in screen px (world effects use the last camera).
+    // Tests: every live effect as { type, kind, layer, x, y, delay }, in screen px (world effects use the last camera).
     _list: function () {
       var out = [];
       if (!pool) return out;
@@ -1496,7 +1881,7 @@
         var x = f.x, y = f.y;
         if (f.type === 'bolt') { x = f.x1; y = f.y1; }
         out.push({ type: f.type, kind: f.kind || f.sprite || f.text || f.ch, layer: f.layer === SCREEN ? 'screen' : 'world',
-          x: f.layer === SCREEN ? x : x - cx, y: y });
+          x: f.layer === SCREEN ? x : x - cx, y: y, delay: f.delay });
       }
       return out;
     }

@@ -11,6 +11,13 @@
 //   --seed        run seed (default 1)
 //   --panel       title only: menu | options | scores | story | bye (default menu)
 //   --page        results only: 1 or 2 (default 1)
+//   --stage       1 | 2 | 1+2 (docs/LEVEL2.md section 12). Without it the picture is of a computer on
+//                 which Level 2 is still locked, as before Level 2 existed.
+//                 1: Level 2 has been unlocked, and the STAGE row of the difficulty screen is on STAGE 1
+//                 2: the same with the row on STAGE 2: the screens reached by playing are of a run started
+//                    at Level 2 from the row, and --panel story shows Level 2's story panel
+//                 1+2: results and highScoreEntry only: Level 1 is cleared from a fresh start, NEXT STAGE
+//                    is taken and Level 2 is played, so the screen is the one at the end of a two-stage run
 //   --wait        extra seconds to let the screen animate before the picture is taken
 //
 // World scores (docs/LEADERBOARD.md). These options turn them on with a stand-in service that holds
@@ -253,7 +260,10 @@ function createWorld(options) {
 }
 
 // A browser-like session: all files, the software (or stub) canvas, TG.Main.init(), a frame clock.
-// options: { canvas: 'soft' | 'stub', files, storage, width, height, dpr, quiet, world, fetch, boardUrl }
+// options: { canvas: 'soft' | 'stub', files, storage, stored, width, height, dpr, quiet, world, fetch, boardUrl }
+//   stored: what the browser's storage holds when the page starts, as a Map or an object of key and
+//   stored string. It is how a page is loaded again: hand the next session the env.storage of the one
+//   before, or a record that an earlier copy of the game wrote (test/fixtures/save-before-level2.json).
 //   world: a stand-in service from createWorld. Its fetch becomes window.fetch and its address
 //   TG.Board.URL before the page starts, so world scores are on; TG.Board's clock is then the session's
 //   own time (session.clock), so that nothing depends on how long the tool takes to run.
@@ -270,6 +280,10 @@ function createSession(options) {
   });
   env.setSize(o.width || 1920, o.height || 1080);
   if (o.dpr) env.window.devicePixelRatio = o.dpr;
+  if (o.stored && env.storage) {
+    const entries = o.stored instanceof Map ? Array.from(o.stored) : Object.keys(o.stored).map(function (k) { return [k, o.stored[k]]; });
+    for (const [k, v] of entries) env.storage.set(k, v);
+  }
   const TG = env.TG;
   if (o.fetch) env.window.fetch = o.fetch;
   if (o.boardUrl !== undefined && TG.Board) TG.Board.URL = o.boardUrl;
@@ -337,14 +351,15 @@ function createSession(options) {
 //   wpm     typing speed (default 90); type: false turns typing off
 //   react   s after a word appears before its first key
 // It types the word with the lowest eta (or keeps the locked one), jumps and ducks in the middle of
-// each input window, holds duck under an arch, and presses Enter on the game over screen.
+// each input window, holds duck under an arch, and presses Enter on the game over screen. It goes on
+// playing after a continue and after NEXT STAGE; the keys of the results screen are the caller's.
 // ---------------------------------------------------------------------------------------------
 
 function createBot(options) {
   const o = options || {};
   return {
     wpm: o.wpm || 90, react: o.react === undefined ? 0.3 : o.react, type: o.type !== false,
-    nextKeyAt: 0, pressed: {}, release: [], holdUntil: null, continues: -1, uiWait: 0
+    nextKeyAt: 0, pressed: {}, release: [], holdUntil: null, continues: -1, level: null, uiWait: 0
   };
 }
 
@@ -364,8 +379,10 @@ function botStep(TG, bot) {
   }
   bot.uiWait = 0;
   if (!TG.Game.isSimScreen(s.screen) || !s.player) return;
-  if (s.run.continues !== bot.continues) {       // hazards are armed again after a continue
+  // Hazards are armed again after a continue, and the next level's hazards have the ids of this one's.
+  if (s.run.continues !== bot.continues || s.levelId !== bot.level) {
     bot.continues = s.run.continues;
+    bot.level = s.levelId;
     bot.pressed = {};
   }
   if (bot.holdUntil !== null && s.player.x > bot.holdUntil) {
@@ -410,24 +427,42 @@ function playUntil(session, until, bot, maxSeconds) {
   return session.screen() === until;
 }
 
-// From boot to the first step of play, through the menus, as a player does it.
-function startRun(session, difficulty) {
+// Level 2 is open on this computer, as after a cleared Level 1 run on `difficulty` (the unlock is for
+// every difficulty). Call it before the difficulty screen is reached.
+function unlock(session, difficulty) {
+  const key = { easy: 'clearedEasy', medium: 'clearedMedium', hard: 'clearedHard' }[difficulty || 'medium'];
+  session.TG.Save.setSetting(key, 1);
+}
+
+// From boot to the first step of play, through the menus, as a player does it. stage 2: Level 2 is
+// opened first and chosen on the STAGE row of the difficulty screen.
+function startRun(session, difficulty, stage) {
   const want = difficulty || 'medium';
+  if (Number(stage) === 2) unlock(session, want);
   session.frames(2);
   session.press('enter');                        // boot -> title
   session.seconds(1.3);                          // the logo is stamped
   session.press('enter');                        // START -> difficultySelect
+  if (Number(stage) === 2) session.press('down');   // the STAGE row: from STAGE 1 to STAGE 2
   session.type(want);                            // typing the name selects and confirms it
   session.type('ready');                         // howToPlay -> playing
   return session.screen() === 'playing';
 }
 
+// The results screen on show offers NEXT STAGE: its stage was cleared and there is a level after it.
+function nextStageOffered(session) {
+  const TG = session.TG;
+  const res = TG.Game.state.result;
+  return !!(res && res.cleared === true && TG.Levels && TG.Levels[res.levelId + 1]);
+}
+
 // A run that ends on the results screen with the tally finished. short: the bot plays until the
 // score is 2,000 or more (under the lowest seeded score of every difficulty) and the run is ended
-// from the pause menu; otherwise the bot plays the level to its end.
-function finishRun(session, difficulty, short) {
+// from the pause menu; otherwise the bot plays the level to its end. stage: 2 starts the run at Level 2
+// from the STAGE row; '1+2' plays Level 1, takes NEXT STAGE and plays Level 2.
+function finishRun(session, difficulty, short, stage) {
   const s = session;
-  startRun(s, difficulty);
+  startRun(s, difficulty, stage);
   const bot = createBot();
   if (short) {
     for (let i = 0; i < 60 * 120 && s.screen() === 'playing' && s.TG.Game.state.score < 2000; i++) s.steps(1, bot);
@@ -438,26 +473,45 @@ function finishRun(session, difficulty, short) {
     s.press('enter');                            // QUIT asks for a second Enter
   } else {
     playUntil(s, 'results', bot, 1500);
+    if (stage === '1+2') {
+      s.seconds(4.5);
+      nextStage(s);
+      playUntil(s, 'results', bot, 1500);
+    }
   }
   s.seconds(4.5);
   return s.screen() === 'results';
 }
 
-// From the results screen to the initials screen (or the title, when the run earns no entry). On the
-// initials screen it waits until Enter and Esc are read (0.5 s while world scores are on).
-function leaveResults(session) {
+// From the first results page, tallied, into the next stage: Enter turns the page, Enter finishes its
+// tally, and Enter on the strip is NEXT STAGE.
+function nextStage(session) {
   const s = session;
   for (let i = 0; i < 6 && s.screen() === 'results'; i++) { s.press('enter'); s.seconds(0.3); }
+  return s.screen() === 'playing';
+}
+
+// From the results screen to the initials screen (or the title, when the run earns no entry). On the
+// initials screen it waits until Enter and Esc are read (0.5 s while world scores are on). Where NEXT
+// STAGE is offered, Enter turns the page and finishes its tally, and Esc on the strip (TITLE) ends the run.
+function leaveResults(session) {
+  const s = session;
+  const strip = nextStageOffered(s);
+  for (let i = 0; i < 6 && s.screen() === 'results'; i++) { s.press(strip && i >= 2 ? 'esc' : 'enter'); s.seconds(0.3); }
   if (s.screen() === 'highScoreEntry') s.seconds(0.3);
 }
 
-// Brings a session to `screen` and returns it. opts: { difficulty, panel, page, wait, world, board, entry, send }.
+// Brings a session to `screen` and returns it. opts: { difficulty, panel, page, stage, wait, world, board, entry, send }.
 // world, board, entry and send are the options of the same names in the header; they need a session
 // made with a stand-in service (createSession({ world: createWorld() })).
 function reach(session, screen, opts) {
   const o = opts || {};
   const s = session;
   const w = s.world;
+  const stage = o.stage === undefined ? null : String(o.stage);
+  if (stage !== null && STAGES.indexOf(stage) === -1) throw new Error('--stage must be one of ' + STAGES.join(', '));
+  if (stage === '1+2' && screen !== 'results' && screen !== 'highScoreEntry') throw new Error('--stage 1+2 is for results and highScoreEntry');
+  if (stage === '1' || stage === '2') unlock(s, o.difficulty);
   if (screen === 'boot') {
     s.frames(20);
   } else if (screen === 'title' && o.send) {
@@ -489,12 +543,14 @@ function reach(session, screen, opts) {
       for (let i = 0; i < 4 && o.board && s.TG.UI.page !== o.board; i++) s.press('left');
     }
     if (o.panel === 'story') s.seconds(12.5);
+    if (o.panel === 'story' && stage === '2') s.seconds(16);     // the high scores, then Level 2's panel
     if (o.panel === 'bye') { for (let i = 0; i < 4; i++) s.press('down'); s.press('enter'); s.seconds(0.6); }   // EXIT
   } else if (screen === 'difficultySelect') {
     s.frames(2);
     s.press('enter');
     s.seconds(1.3);
     s.press('enter');
+    if (stage === '2') s.press('down');            // the STAGE row: from STAGE 1 to STAGE 2
     s.seconds(0.4);
   } else if (screen === 'howToPlay') {
     s.frames(2);
@@ -505,19 +561,19 @@ function reach(session, screen, opts) {
     s.type('re');
     s.seconds(0.6);
   } else if (screen === 'paused') {
-    startRun(s, o.difficulty);
+    startRun(s, o.difficulty, stage);
     s.steps(60 * 22, createBot());
     s.frame();
     s.press('esc');
     s.frames(6);
   } else if (screen === 'gameOver') {
-    startRun(s, o.difficulty || 'hard');
+    startRun(s, o.difficulty || 'hard', stage);
     playUntil(s, 'gameOver', createBot({ type: false }), 400);
     s.seconds(2);
   } else if (screen === 'results' || screen === 'highScoreEntry') {
     const worldEntry = o.entry === 'world' || o.entry === 'offered' || o.entry === 'first';
     if (o.entry === 'offered') s.TG.Save.setSetting('initials', 'DAV');
-    finishRun(s, o.difficulty, screen === 'highScoreEntry' && worldEntry);
+    finishRun(s, o.difficulty, screen === 'highScoreEntry' && worldEntry, stage);
     if (screen === 'results' && Number(o.page) === 2) {
       s.press('enter');
       s.seconds(2);
@@ -552,6 +608,7 @@ function reach(session, screen, opts) {
 // Initials on the block list, typed for the picture of the refusal (a mild entry of the list).
 const REFUSED_SAMPLE = 'bum';
 
+const STAGES = ['1', '2', '1+2'];
 const WORLD_STATES = ['off', 'ready', 'loading', 'failed', 'empty'];
 const BOARD_PAGES = ['easy', 'medium', 'hard', 'local'];
 const ENTRY_KINDS = ['local', 'world', 'refused', 'declined', 'offered', 'first'];
@@ -622,8 +679,8 @@ function main(argv) {
     const file = o.screen === 'all' ? path.join(o.out, name + '.png') : o.out;
     if (o.screen === 'all') fs.mkdirSync(o.out, { recursive: true });
     try {
-      const r = shoot(name, file, { scale: scale, difficulty: o.difficulty, panel: o.panel, page: o.page, wait: o.wait,
-        world: o.world, board: o.board, entry: o.entry, send: o.send });
+      const r = shoot(name, file, { scale: scale, difficulty: o.difficulty, panel: o.panel, page: o.page, stage: o.stage,
+        wait: o.wait, world: o.world, board: o.board, entry: o.entry, send: o.send });
       const state = r.screen === name ? '' : ' (the game is on ' + r.screen + ')';
       console.log('wrote ' + file + state + (r.errors.length ? '; console errors: ' + r.errors.length : ''));
       r.errors.slice(0, 5).forEach(function (m) { console.log('  error: ' + m); });
@@ -638,5 +695,5 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { SCREENS, keyEvent, createSession, createBot, botStep, playUntil, startRun, finishRun, leaveResults, reach, shoot, main,
-  createWorld, sampleLists, fullLists, worldFor, WORLD_URL, KEPT_ROWS };
+module.exports = { SCREENS, keyEvent, createSession, createBot, botStep, playUntil, unlock, startRun, finishRun, nextStage, nextStageOffered,
+  leaveResults, reach, shoot, main, createWorld, sampleLists, fullLists, worldFor, WORLD_URL, KEPT_ROWS };

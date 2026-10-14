@@ -6,7 +6,7 @@
 //   const env = stubs.load({ files: ['js/core.js', 'js/words.js'] });
 //   const TG = env.TG;
 //
-// stubs.FILES            the 20 file paths of CONTRACT section 1, in load order, relative to the project root
+// stubs.FILES            the 21 file paths of CONTRACT section 1, in load order, relative to the project root
 // stubs.ROOT             absolute path of the project root
 // stubs.plain(value)     a JSON copy of `value` made in the test's own realm
 // stubs.load(options)    loads files into a fresh vm context and returns `env`
@@ -66,6 +66,7 @@ const FILES = [
   'js/level.js',
   'js/boss.js',
   'js/levels/level1.js',
+  'js/levels/level2.js',
   'js/game.js',
   'js/effects.js',
   'js/hud.js',

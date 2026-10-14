@@ -7,16 +7,29 @@
 // File layout:
 //   1. helpers, the transition table and the empty state
 //   2. screens: canGo, setScreen, pause, resume
-//   3. newRun and continueRun
+//   3. newRun, continueRun and nextStage
 //   4. step (the fixed order of CONTRACT 4.16) and its parts: input, typing results, screen timers,
 //      power-up timers, adaptive pacing, camera
 //   5. scoring, lives and power-ups: addScore, addLife, applyPower
 //   6. the run result, endRun and snapshot
 //
-// Fields added to the state beyond CONTRACT 5.1:
+// State fields: the two of state.tutorial are beyond CONTRACT 5.1; the others are in 5.1, with more said here:
 //   state.tutorial.enabled   the tutorial slow-down applies on this run (newRun option `tutorial`)
 //   state.tutorial.done      ids of the tutorial threats that have had their slow-down
 //   state.run.bestWpm        the saved personal best WPM for the difficulty, read once by newRun
+//   state.run.bestScore      the saved best score for the difficulty, read once by newRun (LEVEL2 12.2). Both
+//                            bests are kept through nextStage: by then the save holds this run's own first stage
+//   state.run.stages         the stages this run has cleared: 0, 1 or 2 (LEVEL2 12.5). buildResult raises it
+//   state.run.stageScore     the score the run held when the stage being played began: 0 in a run's first
+//                            stage, the carried total after nextStage
+//   state.run.stageStart     state.time when the stage being played began: 0 in a run's first stage
+//   state.power.watchT       real seconds left of a Pocket Watch, 0 when none runs (LEVEL2 6.3). While it is
+//                            above 0 the world is stopped: timeScale is 0 and so is the world step. `last`
+//                            can also be 'watch'
+//   state.sceneTime          the scene clock, s: it runs with state.time and stands still while a Pocket Watch
+//                            holds the world (LEVEL2 6.3). TG.Render animates the world's picture from it, so
+//                            that the pool, the flags, the ink drops and the backdrop hold their frame with
+//                            Pip and the creatures. In a run with no watch it is state.time, bit for bit
 //
 // The boss round state machine lives in js/boss.js. This file hands over to it at the end of the
 // boss intro (screenTimers) and passes it completed boss words (completeWord).
@@ -44,7 +57,7 @@
     levelComplete: ['results'],
     paused: ['playing', 'bossIntro', 'boss', 'results'],
     gameOver: ['playing', 'bossIntro', 'results'],
-    results: ['highScoreEntry', 'title'],
+    results: ['highScoreEntry', 'title', 'playing'],
     highScoreEntry: ['title']
   };
 
@@ -76,13 +89,13 @@
   function emptyState() {
     return {
       screen: 'boot', screenT: 0, screenData: null, resumeTo: null, pausePending: false,
-      frame: 0, time: 0, worldTime: 0,
+      frame: 0, time: 0, sceneTime: 0, worldTime: 0,
       pace: 1, assist: 1, assistTarget: 1, adaptive: true,
       slowScale: 1, tutorScale: 1, finisherScale: 1, timeScale: 1,
       seed: 1, rng: null, difficulty: 'medium', config: null, levelId: 1, level: null, picker: null, typing: null,
       section: 0, camera: { x: 0 }, player: null, entities: [], items: [], boss: null, nextId: 1,
       score: 0, nextLifeAt: 10000, ink: 0, inkTotal: 0,
-      power: { shield: 0, slowT: 0, quillT: 0, last: null },
+      power: { shield: 0, slowT: 0, quillT: 0, watchT: 0, last: null },
       checkpoint: { index: 0, x: 96, score: 0, ink: 0, inkTotal: 0, nextLifeAt: 10000, bossPhase: 1, continuesHere: 0 },
       lifeLost: { cause: 'hit', t: 0, duration: 0.10, gapId: null, last: false },
       tutorial: { active: false, targetId: null, enabled: false, done: [] },
@@ -91,14 +104,18 @@
         continues: 0, livesLost: 0, sectionLivesLost: 0, hits: 0, falls: 0,
         damageTypable: 0, damageOther: 0,
         threatsCleared: 0, threatsMissed: 0, cratesCleared: 0, cratesMissed: 0,
-        cleared: false, ended: false, bonuses: [], bestWpm: 0
+        cleared: false, ended: false, bonuses: [], bestWpm: 0, bestScore: 0,
+        stages: 0, stageScore: 0, stageStart: 0
       },
       result: null
     };
   }
 
+  // The five factors of CONTRACT 11.3 and a sixth, the Pocket Watch's freeze (LEVEL2 6.3): WATCH_SCALE,
+  // which is 0, while a watch runs. The world step is dt x timeScale, so the world stands still.
   function timeScaleOf(s) {
-    return s.pace * s.assist * s.slowScale * s.tutorScale * s.finisherScale;
+    var freeze = s.power.watchT > 0 ? TG.C.WATCH_SCALE : 1;
+    return s.pace * s.assist * s.slowScale * s.tutorScale * s.finisherScale * freeze;
   }
 
   function sectionPayload(level, index) {
@@ -134,6 +151,9 @@
       return false;
     }
     if (RELEASE_ON_ENTER[name] && s.typing && s.typing.target) TG.Typing.release(s.typing, 'screen');
+    // A Pocket Watch still running when Pip reaches the arena ends here, without an event, as a continue
+    // ends it (LEVEL2 6.3).
+    if (name === 'bossIntro') stopWatch(s.power);
     s.screen = name;
     s.screenT = 0;
     s.screenData = data || null;
@@ -163,7 +183,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // 3. newRun and continueRun
+  // 3. newRun, continueRun and nextStage
   // ---------------------------------------------------------------------------------------------
 
   function newRun(opts) {
@@ -205,7 +225,9 @@
       nextLifeAt: config.extraLifeFirst, bossPhase: 1, continuesHere: 0
     };
     s.tutorial.enabled = tutorial && s.level.tutorial;
-    s.run.bestWpm = save.best(difficulty).wpm;
+    var best = save.best(difficulty);
+    s.run.bestWpm = best.wpm;
+    s.run.bestScore = best.score;
     s.timeScale = timeScaleOf(s);
     s.screen = 'playing';
     TG.Game.state = s;
@@ -251,9 +273,10 @@
     s.ink = cp.ink;
     s.inkTotal = cp.inkTotal;
     s.nextLifeAt = cp.nextLifeAt;
-    // 5. Timed power-ups end without events; shield charges are kept.
+    // 5. Timed power-ups end without events, a Pocket Watch among them; shield charges are kept.
     s.power.slowT = 0;
     s.power.quillT = 0;
+    s.power.watchT = 0;
     s.power.last = null;
     s.slowScale = 1;
     s.tutorScale = 1;
@@ -269,7 +292,7 @@
     s.section = TG.Level.sectionAt(s.level, cp.x);
     s.boss = null;
     s.resumeTo = null;
-    // 7. The boss checkpoint restarts the Baron at the phase that had been reached.
+    // 7. The boss checkpoint restarts the boss at the phase that had been reached.
     var atBoss = cp.index === s.level.checkpoints.length - 1;
     if (atBoss && TG.Boss && TG.Boss.create) TG.Boss.create(s);
     s.timeScale = timeScaleOf(s);
@@ -278,6 +301,83 @@
     emit('game:continue', { checkpoint: cp.index, continues: s.run.continues, assist: s.assist });
     emit('level:start', levelStartPayload(s, true));
     emit('section:enter', sectionPayload(s.level, s.section));
+    return true;
+  }
+
+  // NEXT STAGE (LEVEL2 12.2): from the results screen of a cleared stage, the same run goes on into the
+  // next level. False when there is no such stage to go on from, or no next level. Like continueRun it
+  // works on the state of the run and does not start from emptyState. The run keeps its score and its ink,
+  // its clocks (time, sceneTime, frame, worldTime), the typing engine with every statistic, the multiplier
+  // and the streaks, the run counters, the bests read by newRun, the pacing (assist, assistTarget,
+  // adaptive, adapt), the seed and its generator, nextId and the difficulty. The stage starts as a run from
+  // the menus starts it: the difficulty's own lives and no shield charges (decision 21), no timed power, a
+  // new picker, and its own checkpoint 0. Like newRun it sets the screen itself and emits its own events.
+  function nextStage() {
+    var C = TG.C;
+    var s = TG.Game.state;
+    if (s.screen !== 'results' || !s.result || s.result.cleared !== true) return false;
+    var levelId = s.levelId + 1;
+    var data = hasOwn(TG.Levels, levelId) ? TG.Levels[levelId] : null;
+    if (!data) return false;
+    var config = TG.Difficulty.resolve(s.difficulty, data.tune);
+
+    // 1. The level, with a picker of its own flavour on the run's generator, and nothing live in it.
+    s.levelId = levelId;
+    s.config = config;
+    s.pace = config.pace;
+    s.level = TG.Level.build(data, config);
+    s.picker = TG.Words.createPicker(s.difficulty, s.rng, { flavour: data.theme && data.theme.wordFlavour });
+    s.entities = [];
+    s.items = TG.Level.makeItems(s.level, 0);
+    s.boss = null;
+    s.section = 0;
+    // 2. A new player at the level's start, with the stage's own lives; no shield charges.
+    s.player = TG.Entities.createPlayer(config, s.level.checkpoints[0].x);
+    s.camera.x = Math.max(0, s.player.x - C.HERO_SCREEN_X);
+    s.power.shield = 0;
+    // 3. Timed power-ups end without events, as on a continue.
+    s.power.slowT = 0;
+    s.power.quillT = 0;
+    s.power.watchT = 0;
+    s.power.last = null;
+    s.slowScale = 1;
+    s.tutorScale = 1;
+    s.finisherScale = 1;
+    s.resumeTo = null;
+    s.pausePending = false;
+    s.lifeLost = { cause: 'hit', t: 0, duration: C.HIT_FREEZE, gapId: null, last: false };
+    s.tutorial = { active: false, targetId: null, enabled: false, done: [] };
+    // 4. The next extra life is due at the first threshold above the carried score. buildResult adds the
+    // end-of-stage bonuses without the test for extra lives, so the score can stand past nextLifeAt here.
+    // A threshold the bonuses passed is not kept for later, as one passed at MAX_LIVES is not (DESIGN
+    // 8.5): its life would be paid on the first points of the stage, on top of the stage's own lives, and
+    // again on the first points after every continue from this checkpoint.
+    while (config.extraLifeEvery > 0 && s.score >= s.nextLifeAt) s.nextLifeAt += config.extraLifeEvery;
+    // 5. The checkpoint banks what the run carries. continueRun restores all four values, and a nextLifeAt
+    // put back at the first threshold would pay a life for every threshold up to the carried score.
+    s.checkpoint = {
+      index: 0, x: s.level.checkpoints[0].x, score: s.score, ink: s.ink, inkTotal: s.inkTotal,
+      nextLifeAt: s.nextLifeAt, bossPhase: 1, continuesHere: 0
+    };
+    // 6. The section counters start again: the level's first checkpoint reads them for its bonuses, and
+    // they still hold the arena of the stage before.
+    TG.Typing.sectionReset(s.typing);
+    s.run.sectionLivesLost = 0;
+    // 7. The stage's own record. run.stages and the bests stay as they are.
+    s.run.bonuses = [];
+    s.run.cleared = false;
+    s.run.ended = false;
+    s.run.stageScore = s.score;
+    s.run.stageStart = s.time;
+    s.result = null;
+    s.timeScale = timeScaleOf(s);
+    s.screen = 'playing';
+    s.screenT = 0;
+    s.screenData = null;
+    // 8. Events, as newRun emits them. Presentation resets on level:start.
+    emit('screen:change', { from: 'results', to: 'playing', data: null });
+    emit('level:start', levelStartPayload(s, false));
+    emit('section:enter', sectionPayload(s.level, 0));
     return true;
   }
 
@@ -290,11 +390,13 @@
     // 1.
     if (!s || !isSimScreen(s.screen)) return;
     if (!(dt > 0)) return;
-    // 2.
+    // 2. The scene clock takes the same step as the real one, but none while a Pocket Watch runs: the
+    // steps on which the freeze of step 3 makes the world step 0. A lifeLost screen does not hold it.
     s.frame++;
     s.time += dt;
+    if (!(s.power.watchT > 0)) s.sceneTime += dt;
     s.screenT += dt;
-    // 3.
+    // 3. The world step is 0 on lifeLost, and while a Pocket Watch runs (timeScale is then 0).
     s.timeScale = timeScaleOf(s);
     var wdt = s.screen === 'lifeLost' ? 0 : dt * s.timeScale;
     // 4.
@@ -394,7 +496,11 @@
     var quill = s.power.quillT > 0;
     var points = TG.Util.round10(C.PTS_WORD_PER_LETTER * t.word.length * mult *
       (clean ? C.CLEAN_FACTOR : 1) * (quick ? C.QUICK_FACTOR : 1) * (quill ? 2 : 1) * s.assist);
-    var close = t.type === 'threat' && t.eta < C.CLOSE_CALL_TIME;
+    // No close call on a step a Pocket Watch holds the world, when the time scale is 0 (LEVEL2 6.3):
+    // nothing is about to reach Pip. The eta cannot say so in two cases. On the first held step it is still
+    // the one of the step before. And for a threat a fraction of a step from contact, the 0.01 floor of
+    // the time scale in the eta leaves it under the limit.
+    var close = t.type === 'threat' && t.eta < C.CLOSE_CALL_TIME && s.timeScale > 0;
 
     TG.Entities.remove(s, t, 'cleared');
     if (t.type === 'crate') s.run.cratesCleared++;
@@ -496,15 +602,31 @@
     return false;
   }
 
-  // Hourglass and Golden quill run on the real clock.
+  // The timed power the HUD slot goes back to when the one it showed has ended: one that is still
+  // running, the watch before the Hourglass before the quill; null when none is.
+  function runningPower(pw) {
+    if (pw.watchT > 0) return 'watch';
+    if (pw.slowT > 0) return 'hourglass';
+    return pw.quillT > 0 ? 'quill' : null;
+  }
+
+  // Stops the Pocket Watch: its time has run out, or Pip has reached the arena (LEVEL2 6.3).
+  function stopWatch(pw) {
+    pw.watchT = 0;
+    if (pw.last === 'watch') pw.last = runningPower(pw);
+  }
+
+  // Hourglass, Golden quill and Pocket Watch run on the real clock. The Hourglass's timer stands still
+  // while a watch runs, so that a watch does not use up the Hourglass's time (LEVEL2 6.3, decision 14);
+  // the quill's keeps counting, since points are still being scored.
   function updatePowers(s, dt) {
     var pw = s.power;
-    if (pw.slowT > 0) {
+    if (pw.slowT > 0 && !(pw.watchT > 0)) {
       pw.slowT -= dt;
       if (pw.slowT <= EPS) {
         pw.slowT = 0;
         s.slowScale = 1;
-        if (pw.last === 'hourglass') pw.last = pw.quillT > 0 ? 'quill' : null;
+        if (pw.last === 'hourglass') pw.last = runningPower(pw);
         emit('power:end', { power: 'hourglass' });
       }
     }
@@ -512,8 +634,15 @@
       pw.quillT -= dt;
       if (pw.quillT <= EPS) {
         pw.quillT = 0;
-        if (pw.last === 'quill') pw.last = pw.slowT > 0 ? 'hourglass' : null;
+        if (pw.last === 'quill') pw.last = runningPower(pw);
         emit('power:end', { power: 'quill' });
+      }
+    }
+    if (pw.watchT > 0) {
+      pw.watchT -= dt;
+      if (pw.watchT <= EPS) {
+        stopWatch(pw);
+        emit('power:end', { power: 'watch' });
       }
     }
   }
@@ -673,6 +802,11 @@
       pw.quillT = C.QUILL_TIME;
       pw.last = 'quill';
       emit('power:start', { power: 'quill', duration: C.QUILL_TIME });
+    } else if (power === 'watch') {
+      // The world stops from the next step (timeScaleOf). A second watch starts the time again.
+      pw.watchT = C.WATCH_TIME;
+      pw.last = 'watch';
+      emit('power:start', { power: 'watch', duration: C.WATCH_TIME });
     } else if (power === 'blast') {
       inkBlast(s);
     } else if (power === 'cap') {
@@ -685,8 +819,10 @@
   // ---------------------------------------------------------------------------------------------
 
   // DESIGN 8.6. Two cases the table does not cover are decided here: a run in which no letter key was
-  // pressed ranks C (its accuracy of 1 means nothing), and S and A need the level to be cleared, so a
-  // run quit early from the pause menu cannot rank above B.
+  // pressed ranks C (its accuracy of 1 means nothing), and S and A need a cleared stage, so a run quit
+  // early from the pause menu cannot rank above B. cleared: the run has cleared at least one stage
+  // (LEVEL2 12.5, decision 28). The other values are the whole run's, so a run that goes on through
+  // NEXT STAGE keeps its letter at the step and can gain or lose it in the stage that follows.
   function rankOf(summary, livesLost, continues, cleared) {
     if (summary.correct + summary.wrong === 0) return 'C';
     var accuracy = summary.accuracy;
@@ -696,9 +832,11 @@
     return 'C';
   }
 
-  // CONTRACT 5.11. End-of-level bonuses are added only for a cleared run.
+  // CONTRACT 5.11. cleared: the stage that has just ended was cleared. End-of-level bonuses are added
+  // only then, and run.stages counts it.
   function buildResult(s, cleared) {
     var C = TG.C;
+    if (cleared) s.run.stages++;
     var summary = TG.Typing.summary(s.typing);
     var baseScore = s.score;
     var lives = s.player ? s.player.lives : 0;
@@ -737,11 +875,17 @@
       livesLost: s.run.livesLost,
       lives: lives,
       continues: s.run.continues,
-      rank: rankOf(summary, s.run.livesLost, s.run.continues, cleared),
+      rank: rankOf(summary, s.run.livesLost, s.run.continues, s.run.stages > 0),
       suggestion: suggestion,
       bestWpm: s.run.bestWpm,
       assist: s.assist,
-      adaptive: s.adaptive
+      adaptive: s.adaptive,
+      // LEVEL2 12.2 and 12.5: the stages the run has cleared, the score it held when this stage began,
+      // this stage's own time, and the best score of the difficulty before the run.
+      stages: s.run.stages,
+      stageScore: s.run.stageScore,
+      stageTime: s.time - s.run.stageStart,
+      bestScore: s.run.bestScore
     };
   }
 
@@ -799,6 +943,7 @@
     pause: pause,
     resume: resume,
     continueRun: continueRun,
+    nextStage: nextStage,
     endRun: endRun,
     addScore: addScore,
     addLife: addLife,

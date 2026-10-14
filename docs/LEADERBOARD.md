@@ -6,7 +6,9 @@ The game must keep working without the service. If the Worker cannot be reached,
 
 ## 1. What is stored
 
-One row per submitted run: three initials, difficulty, score, WPM, accuracy, rank, whether the level was cleared, the run's length in seconds, and the time it was submitted. No account, no email, no free text.
+One row per submitted run: three initials, difficulty, score, WPM, accuracy, rank, whether the run cleared a stage, the run's length in seconds, and the time it was submitted. No account, no email, no free text.
+
+A run can cover two stages: Level 1, and then Level 2 through NEXT STAGE on the results screen. It can also start at Level 2, from the stage row of the difficulty screen. In every case it is one row on the board of its difficulty, entered once, when the run ends, with the run's total score and the length of the whole run. There is one board per difficulty, and nothing in a row says which stages the run played.
 
 The player's network address is never stored. A salted hash of it is kept in a separate table, only to limit how often one source can submit. For an IPv6 address the hash is of the first 64 bits, which is the part one connection is given, and not of the whole address (section 4). A hash counts for one hour. It is deleted by the next score submitted after that, or by a clean-up that the service runs once an hour, whichever comes first, so no hash is kept for more than about two hours.
 
@@ -28,7 +30,9 @@ The game runs in the player's browser, so a determined person can send a score t
 What these do not do:
 
 - Tokens cost nothing and do not depend on each other. Somebody who asks for 60 tokens at the same moment waits once, not 60 times. The waiting time slows down one made-up score; it does not slow down a batch of them.
-- No check can tell a made-up score that stays inside the limits from a real one. Such a score is accepted and can take first place. The caps of section 5 are less than 30% above the best score the game was seen to give, so a made-up score cannot be far above a real one, and a rank that does not fit the accuracy is refused.
+- No check can tell a made-up score that stays inside the limits from a real one. Such a score is accepted and can take first place. The caps of section 5 are less than 30% above the best score the game was seen to give, so a made-up score cannot be far above the best real one, and a rank that does not fit the accuracy is refused.
+- The best real run is one through both stages, and the caps are set for it. A run that ends in Level 1 scores less than half as much, so a made-up score can be about 2.9 times the best Level 1 score in the first table of section 5. Below the cap, what limits a claim is the rate of check 10 and the wait of check 11: each second waited allows 400 / 700 / 1,100 more points, and a score at the cap needs a claimed time of 445 / 455 / 453 seconds and a wait 5 seconds shorter, about seven and a half minutes. That is less than the shortest real run through both stages (700 / 575 / 493 seconds).
+- The service cannot tell which stages a run played: the request has no field for the stage (3.2), and a program could fill one in as it liked. So a made-up score can be the size of a run through both stages with Level 2 not played, or with nothing played. The highest run totals found (141,290 / 248,200 / 392,490, section 5) can be claimed after a wait of 344 / 347 / 350 seconds, where the runs themselves took 700 / 575 / 493 seconds. A score claimed as early as that has all the points its time allows, and no run that was measured has more than three quarters of them; the last command of section 8 lists rows by that share. A program that waits longer and claims a longer time does not stand out in that way.
 - The hourly limit counts sources. Somebody with many addresses (an IPv6 range larger than a /64, a VPN, several machines) has that many times the limit.
 - Asking for tokens and reading the boards are not limited. Neither writes to the database, and the boards are read from the database about once in 15 seconds by each running copy of the Worker, not for every request (3.3). But every request counts towards the daily allowance of Cloudflare's free plan, and one person can use that up. The result is no world scores until 00:00 UTC and no charge; the game uses its local scores meanwhile.
 - The block list looks at one set of initials at a time (section 7).
@@ -71,6 +75,8 @@ Request:
 ```
 
 `wpm` and `accuracy` are whole numbers as the game's high score entry has them (`accuracy` is a whole percent). `time` is the run's length in seconds (the game's `result.time`, rounded down). The difficulty comes from the token, not from the request.
+
+A run that covers two stages is submitted once, when it ends, with the token it started with. `score` is the run total, `time` the length of the whole run, and `wpm`, `accuracy` and `rank` are the whole run's. `cleared` is true when the run cleared at least one stage (the game's `result.stages` is above 0); for a run of one stage that is what it has always meant. The request has no field for the stage, and these eight fields are all it carries.
 
 Response `200`:
 
@@ -130,15 +136,15 @@ CREATE TABLE IF NOT EXISTS used (
 );
 CREATE INDEX IF NOT EXISTS used_at ON used (at);   -- for deleting the rows older than a token's life
 
--- Counters (docs/LEADERBOARD.md, section 10): totals only, nothing about a player.
+-- Counters (docs/LEADERBOARD.md, section 10): totals only, nothing about a player. Each stage of a run is counted on its own.
 CREATE TABLE IF NOT EXISTS stats (
   day        TEXT    NOT NULL,           -- UTC date, YYYY-MM-DD
-  difficulty TEXT    NOT NULL,
-  starts     INTEGER NOT NULL DEFAULT 0, -- runs started
-  finishes   INTEGER NOT NULL DEFAULT 0, -- runs that reached the results screen
-  cleared    INTEGER NOT NULL DEFAULT 0, -- of those, runs that beat the level
-  time_s     INTEGER NOT NULL DEFAULT 0, -- seconds played in the finished runs
-  reach0     INTEGER NOT NULL DEFAULT 0, -- finished runs that ended in section 1
+  difficulty TEXT    NOT NULL,           -- the label: easy, medium or hard for Level 1, and easy-s2, medium-s2 or hard-s2 for Level 2
+  starts     INTEGER NOT NULL DEFAULT 0, -- stages started
+  finishes   INTEGER NOT NULL DEFAULT 0, -- stages that reached their results screen
+  cleared    INTEGER NOT NULL DEFAULT 0, -- of those, stages that were beaten
+  time_s     INTEGER NOT NULL DEFAULT 0, -- seconds played in the finished stages
+  reach0     INTEGER NOT NULL DEFAULT 0, -- finished stages that ended in section 1
   reach1     INTEGER NOT NULL DEFAULT 0, -- ... in section 2
   reach2     INTEGER NOT NULL DEFAULT 0, -- ... in section 3
   reach3     INTEGER NOT NULL DEFAULT 0, -- ... at the boss
@@ -191,17 +197,47 @@ Checks 1 to 11 use no database. A submission is counted for check 12 once it has
 
 Check 9 follows the game's rank rule (`rankOf` in `js/game.js`): the game gives S and A only for a cleared run with an accuracy of at least 97% and 93%, and B only from 85%. The rule has further conditions that the service cannot see (lives lost, continues), so a rank lower than the accuracy would allow is accepted.
 
+In checks 8 and 9 a cleared run is one that cleared at least one stage, which is what the game sends as `cleared` (3.2). A run that cleared Level 1, went on through NEXT STAGE and ended in Level 2 is a cleared run, and is at least as long as the shortest Level 1 clear.
+
 A token is used up by the submission that is accepted with it (check 13). That holds when the run is not among the best 200 and is not kept, and when the owner later deletes the row: the same token is refused as `used` until it is three hours old, and as `expired` after that.
 
-Limits per difficulty. They come from the game. In 360 runs of the headless bot per difficulty (60 seeds each at 60, 90, 150, 220, 400 and 1,000 WPM, with perfect accuracy) the highest scores were 62,480 / 108,160 / 173,530, with the end-of-level bonuses (at most 14,000) included, and the shortest cleared runs took 339 / 277 / 241 seconds. Typing faster does not raise the score and shortens the run by only a few seconds. (The two fastest speeds are above the 220 WPM that check 6 accepts. They are there for the length of their runs.) Each cap is 27% to 29% above the highest score seen, and each shortest cleared run is about 11% below the shortest seen.
+Limits per difficulty. They come from the game. A run reaches a board in one of three ways: Level 1 alone, Level 2 alone (a run started from the stage row), or both stages (Level 1, NEXT STAGE, Level 2). The headless bot played each way 360 times per difficulty with perfect accuracy: 60 seeds each at 60, 90, 150, 220, 400 and 1,000 WPM, with reaction times of 0.1, 0.1, 0.05, 0.05, 0 and 0 seconds. (The two fastest speeds are above the 220 WPM that check 6 accepts. They are there for the length of their runs.) The figures are Easy / Medium / Hard.
+
+| Way | Highest score | Shortest cleared run (s) | Most used of what the rate allows |
+|---|---|---|---|
+| Level 1 alone | 62,480 / 108,160 / 173,530 | 339 / 277 / 241 | 45% / 55% / 65% |
+| Level 2 alone | 71,820 / 123,110 / 197,080 | 361 / 297 / 252 | 49% / 59% / 71% |
+| Both stages | 137,270 / 236,060 / 378,950 | 700 / 575 / 493 | 49% / 58% / 70% |
+
+Every one of these runs cleared each stage it played without losing a life, so the scores include the end-of-level bonuses (at most 14,000 for each stage). From 150 WPM up, typing faster does not raise the score and shortens a stage by only a few seconds. The last column is the score as a share of `2000 + time x rate`, at the moment from 10 seconds on at which that share was highest. In every run that moment was the end of the run, so a run that ends early needs less.
+
+A player who knows the level can do a little more than the bot does. The bot types whatever is nearest, so it opens the Golden quill's crate as soon as nothing else is on screen. Leaving that crate, and the words just before it, until its last moment puts more words under the quill's double points. Leaving the Hourglass and Pocket Watch crates alone makes a run a few seconds shorter, and so does RESTART FROM CHECKPOINT at the start of a boss intro, at the price of rank B. The same 60 seeds were played again in these ways at 1,000 WPM:
+
+| Found by playing the power-ups well | Easy | Medium | Hard |
+|---|---|---|---|
+| Highest score (both stages) | 141,290 | 248,200 | 392,490 |
+| Shortest cleared run in seconds (Level 1 alone) | 334 | 272 | 235 |
+| Most used of what the rate allows (Level 2 alone) | 50% | 62% | 75% |
+
+The limits follow from these figures:
+
+- Each cap is 27% to 29% above the highest score found, which is a run through both stages with the quill used late. It is 31% to 36% above the best of the 360 bot runs.
+- Each shortest cleared run is 11.5% / 11.6% / 10.8% below the shortest of the 360 Level 1 runs, so a bot run 10% shorter would still pass. It is 10.2% / 9.9% / 8.5% below the shortest run found: that run is accepted with 34 / 27 / 20 seconds to spare, but one 10% shorter would be refused on Medium and Hard. A run that starts at Level 2 or covers both stages is longer.
+- The rates are the ones set for Level 1. A run that starts at Level 2 uses the most of them, and no run found uses more than three quarters of what they allow.
 
 | | Easy | Medium | Hard |
 |---|---|---|---|
-| Score cap | 80000 | 140000 | 220000 |
+| Score cap | 180000 | 320000 | 500000 |
 | Shortest cleared run (s) | 300 | 245 | 215 |
 | Rate (points per second) | 400 | 700 | 1100 |
 
-`test/test-server.js` checks these against the real game: results from the headless bot (`test/sim.js`) on every difficulty must pass with room to spare (a run may use at most 80% of a cap, and a cleared run must still pass if it were 10% shorter). The runs include the ones that gave the figures above, runs that the game ranks S, A, B and C, a run with continues, and a run that ends in a game over. A change to the game's scoring or rank rule that outgrows a limit is caught there.
+Before Level 2 the caps were 80,000 / 140,000 / 220,000, which was 27% to 29% above the best of the 360 Level 1 bot runs; the play of the second table had not been tried then. Today's caps are that far above the best run found, and so a little wider against the bot's runs than the old ones were. The other two rows have not changed. Every limit is therefore at least as wide as it was, and a Level 1 score that was accepted then is accepted now.
+
+The figures are the best of the play that was tried on those 60 seeds, not a proven most. Other seeds give a little more: on 300 further seeds the highest run total found was at most about 1% higher, and still under 80% of its cap.
+
+One kind of play was left out on purpose: letting the time on a boss's weak-point word run out, which costs no life and no rank and brings another volley of words to type. Each such round adds points more slowly than the rate allows, so only the cap limits it, and a higher cap would not end it, because every further round adds points. Below the cap a run played this way is accepted, and stands above the same run played straight. About 20 such rounds, in the last phase of the two fights, take the best bot run through both stages over its cap; that score is refused, and the run is then kept on the player's computer only. A bot typing 110 words a minute with 98% accuracy on Hard was above the highest run total found with 60 such rounds, and above the cap with 80, in a run of half an hour. The game had the same before Level 2: 8 or 9 such rounds took the best Level 1 bot run over the caps of that time. What a repeated round pays is set in the game (`js/boss.js`), not here.
+
+`test/test-server.js` checks the limits against the real game: results from the headless bot (`test/sim.js`) on every difficulty and each of the three ways must pass with room to spare (a run may use at most 80% of a cap and of what the rate allows, and a cleared run must still pass if it were 10% shorter). The runs include the ones that gave the highest scores and the shortest bot runs above, the highest run totals found and the runs found to use most of the rate, runs that the game ranks S, A, B and C, a run with continues, a run that ends in a game over, and runs that go on through NEXT STAGE and end in Level 2. The shortest runs found are closer to their limit than 10%, so for them the test checks only that they are accepted. The test also compares every figure in the two tables above, and the figures of the list under them, with what those runs give today. A change to the game's scoring or rank rule that outgrows a limit, or that makes these figures out of date, is caught there.
 
 ## 6. Error codes
 
@@ -227,6 +263,14 @@ The third command removes everything that was submitted in a stretch of time (th
 
 A deleted row is gone from the database at once and from every answer of the service within 15 seconds (3.3). The token it was sent with stays used, so the same request cannot simply be sent again; a new score needs a new token and its waiting time.
 
+To look for made-up scores among the rows that are kept:
+
+```bash
+npx wrangler d1 execute spell-runner-scores --remote --command "SELECT id, difficulty, name, score, time_s, ROUND(100.0 * score / (2000 + time_s * CASE difficulty WHEN 'easy' THEN 400 WHEN 'medium' THEN 700 ELSE 1100 END)) AS percent_of_rate, datetime(created_at/1000,'unixepoch') FROM scores ORDER BY percent_of_rate DESC, created_at DESC LIMIT 20"
+```
+
+`percent_of_rate` is the score as a share of what check 10 allows for the row's time, the last column of the first table of section 5, and the command lists the 20 rows where it is highest. The runs measured for section 5 use at most 50% / 62% / 75% of it on Easy / Medium / Hard. A row near 100 claims about as many points as its time allows, which no measured run comes near; a made-up score sent as early as it could be looks like this (section 2). It is a reason to look at the row, not proof, and a made-up score that claims a longer time is not found this way.
+
 ## 9. The game side (`js/board.js`, `TG.Board`)
 
 This section gives the outline. The full interface of `TG.Board` as built, including `update(dt)`, `available()`, `hasToken(difficulty)`, `state.sendError`, `state.kept` and the constants `MIN_TIME`, `SEND_MAX_WPM` and `KEPT_ROWS`, is in CONTRACT 4.22. `test/test-board.js` checks that those three constants equal the service's `RULES`, and that the block lists are equal.
@@ -239,12 +283,16 @@ After an accepted send the game shows the list from the service's reply for 20 s
 - `TG.Main` gives the module its network function: `TG.Board.init({ fetch: window.fetch bound to window, now: function returning ms })`. Nothing else in the game makes a network request, and the module makes requests only to `TG.Board.URL`.
 - Every request has a timeout of 6 seconds. No function of `TG.Board` throws or returns a promise to its caller; results arrive in `TG.Board.state`, which the interface reads each frame.
 - The setting `worldScores` (default `true`) turns the feature off for a player. With it off, no request is made.
+- A run has one token, whether it covers one stage or two. The game asks for it when the difficulty is confirmed and for none at NEXT STAGE, holds it through the results screen of the first stage, and sends the run once, when it ends. A token asked for at NEXT STAGE could not be used: it would be as old as Level 2 alone, and check 11 compares its age with the length of the whole run. For the same reason a token request that failed at the difficulty screen cannot be made good later in the run, and that run stays on this computer.
+- From the token request to the end of the run the game makes only the counter requests of section 10: one when a stage starts and one when it reaches its results screen.
 
 ```js
 TG.Board.enabled() -> boolean            // URL set, fetch available, setting on
 TG.Board.startRun(difficulty) -> void    // asks for a run token; called when the player confirms a difficulty (on entering How to Play), so the
-                                         // token has normally arrived before the run starts. Not called on a continue or a restart from a checkpoint
+                                         // token has normally arrived before the run starts. Not called on a continue, a restart from a
+                                         // checkpoint or NEXT STAGE
 TG.Board.submit(entry, result) -> void   // entry: the high score entry (CONTRACT 5.12); result: state.result. Needs the run's token
+TG.Board.stat(event, info) -> void       // counts a stage started or ended (section 10). info.level is the stage; `level` is sent only when it is 2
 TG.Board.refresh(force) -> void          // loads the boards; at most once every 30 s unless force
 TG.Board.blocked(name) -> boolean        // the initials are on the block list
 TG.Board.state = {
@@ -255,6 +303,16 @@ TG.Board.state = {
   sentEntry: null                                 // the entry that was sent, for highlighting it in a list
 };
 ```
+
+### Which half is released first
+
+The release that adds Level 2 changes both halves, and the service goes first: the owner reads the Worker's changes and deploys it from `server/` with `npx wrangler deploy` (no database command is needed, because the tables do not change); then the game is pushed, so that GitHub Pages serves it; then the itch.io zip is built from the same commit and uploaded.
+
+The Worker of Level 2 only widens what the one before it accepted from the game: the caps are higher, and `POST /v1/stats` reads one more field, `level`, that older copies of the game do not send. The released game, a cached copy of it and the itch.io copy send Level 1 runs and counter requests without `level`, and all of those are answered as before. One kind of request is answered differently, and no copy of the game sends it: a counter request with a `level` that is not 1 or 2 is refused (section 10), where the Worker before took no notice of the field and counted the request.
+
+In the other order the older Worker would refuse every run total above the old caps (80,000 / 140,000 / 220,000). That is every one of the bot's runs through both stages in section 5, and on Easy also a run through both stages at the speed the difficulty is designed for. The game has no second try, because a token works once. It would also count Level 2 stages in the Level 1 rows of section 10.
+
+Between the Worker's deploy and the game's release no released copy of the game reaches Level 2. A row above the old caps that arrives in that time is therefore not a run through both stages: it is made up, or it comes from a development copy, or it is a Level 1 run made longer with the weak-point rounds described in section 5.
 
 ## 10. Counters
 
@@ -267,14 +325,18 @@ The same rules as the other `POST` paths apply (origin, content type, size). The
 ```json
 { "token": "<run token>", "event": "start" }
 { "token": "<run token>", "event": "end", "time": 317, "cleared": true, "section": 3 }
+{ "token": "<run token>", "event": "start", "level": 2 }
+{ "token": "<run token>", "event": "end", "time": 303, "cleared": true, "section": 3, "level": 2 }
 ```
 
-`start` is sent when a run starts from the menus. `end` is sent once, when the run reaches the results screen: `time` is the run's length in whole seconds (0 to 10,800), `cleared` whether the level was beaten, and `section` the part the run ended in (0, 1 or 2 for the three sections, 3 for the boss). The difficulty comes from the token. The response is `{ "ok": true }`.
+Each stage of a run is counted on its own. `start` is sent when a stage starts: when a run starts from the menus, and again at NEXT STAGE. `end` is sent when the stage reaches its results screen: `time` is the stage's own length in whole seconds (0 to 10,800), `cleared` whether that stage was beaten, and `section` the part of the stage the run ended in (0, 1 or 2 for the three sections, 3 for the boss). The difficulty comes from the token. The response is `{ "ok": true }`.
+
+`level` is the stage the request is about, 1 or 2. Without the field the request is about Level 1. The game sends it only for Level 2, so its requests about Level 1 are the first two lines above, exactly as a copy of the game from before Level 2 sends them. Any other value gives `400` `bad_request`. A run through both stages sends the four lines above in that order with the same token, and its second `end` carries Level 2's own time, not the run's. A run started at Level 2 from the stage row sends the last two lines only.
 
 ### What is kept
 
-- `stats`: one row per UTC day and difficulty with the number of runs started, runs finished, runs cleared, the seconds played in finished runs, and how many finished runs ended in each part.
-- `days`: one row per UTC day with the number of sources that started at least one run.
+- `stats`: one row per UTC day and label with the number of stages started, finished and cleared, the seconds played in finished stages, and how many finished stages ended in each part. The label is in the `difficulty` column. For Level 1 it is the difficulty (`easy`, `medium`, `hard`), so those rows mean what they did before Level 2: runs started at Level 1, how many reached a results screen there, how many beat the level, the seconds played in it and where they ended. For Level 2 it is the difficulty with `-s2` added (`easy-s2`, `medium-s2`, `hard-s2`): second stages started (NEXT STAGE and starts from the stage row together), finished and cleared, the seconds played in them, and where they ended. These labels exist in this table only. No board and no token has them, and the table itself has not changed.
+- `days`: one row per UTC day with the number of sources that started at least one run. A start at NEXT STAGE finds its source already counted for the day.
 - `seen`: used only to count each source once a day. It holds a hash of the secret, the day and the source (the source as in section 4). Because the day is part of the hash, a source's hash differs from day to day. Rows of earlier days are deleted on the next `start` and by the hourly clean-up.
 
 ### Limits of the numbers
@@ -282,12 +344,17 @@ The same rules as the other `POST` paths apply (origin, content type, size). The
 - The game sends nothing when world scores are switched off in Options, when the service cannot be reached, or from a copy opened from a file, so those runs are not counted.
 - "Players" counts network addresses, not people: a household or a school behind one address counts once a day, and one person on two networks counts twice.
 - The counters are not protected against someone sending made-up requests, beyond the origin rule and the token. They are for the owner's interest, not for anything that depends on them being exact.
+- The Level 2 rows cannot tell a NEXT STAGE press from a start at the stage row.
+- A Worker from before Level 2 takes no notice of `level` and would add Level 2 stages to the Level 1 rows. That is one reason the Worker is deployed before the game (section 9).
 
 ### Reading the numbers
 
 Run from the `server/` folder:
 
 ```bash
-npx wrangler d1 execute spell-runner-scores --remote --command "SELECT s.day, d.players, SUM(s.starts) AS started, SUM(s.finishes) AS finished, SUM(s.cleared) AS cleared, ROUND(SUM(s.time_s) / 60.0) AS minutes FROM stats s LEFT JOIN days d ON d.day = s.day GROUP BY s.day ORDER BY s.day DESC LIMIT 30"
-npx wrangler d1 execute spell-runner-scores --remote --command "SELECT day, difficulty, starts, finishes, cleared, time_s, reach0, reach1, reach2, reach3 FROM stats ORDER BY day DESC, difficulty LIMIT 90"
+npx wrangler d1 execute spell-runner-scores --remote --command "SELECT s.day, d.players, SUM(CASE WHEN s.difficulty LIKE '%-s2' THEN 0 ELSE s.starts END) AS started, SUM(CASE WHEN s.difficulty LIKE '%-s2' THEN 0 ELSE s.finishes END) AS finished, SUM(CASE WHEN s.difficulty LIKE '%-s2' THEN 0 ELSE s.cleared END) AS cleared, ROUND(SUM(s.time_s) / 60.0) AS minutes FROM stats s LEFT JOIN days d ON d.day = s.day GROUP BY s.day ORDER BY s.day DESC LIMIT 30"
+npx wrangler d1 execute spell-runner-scores --remote --command "SELECT day, difficulty, starts, finishes, cleared, time_s, reach0, reach1, reach2, reach3 FROM stats WHERE difficulty LIKE '%-s2' ORDER BY day DESC, difficulty LIMIT 90"
+npx wrangler d1 execute spell-runner-scores --remote --command "SELECT day, difficulty, starts, finishes, cleared, time_s, reach0, reach1, reach2, reach3 FROM stats ORDER BY day DESC, difficulty LIMIT 180"
 ```
+
+The first command gives one line per day. Its `started`, `finished` and `cleared` are taken from the rows `easy`, `medium` and `hard` only, so they are Level 1's and mean what they did before Level 2; its `minutes` are the time played in every stage. The second lists the Level 2 rows, and the third every row of the last 30 days.

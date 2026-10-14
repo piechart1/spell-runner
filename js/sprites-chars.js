@@ -24,6 +24,15 @@
 //   - Rows 0 to 11 of every hero_run frame are the same, and hero_cast (16x12, same anchor) covers
 //     every opaque pixel of those rows, so the overlay fits on any run frame.
 //
+// Level 2 (docs/LEVEL2.md 2, 3 and Appendix C) adds the remap `tin` and two marked regions: the
+// creatures after the Level 1 enemies, and Lady Ratchet with her projectiles at the end of the file.
+//   - Its sprites are drawn without a section's remap on PLUM and on DEEP_BLUE, where an INK outline
+//     does not separate a sprite from the backdrop. None uses PLUM, DEEP_BLUE, SHADOW, MAROON or
+//     DEEP_TEAL for a body, a wing or a limb (LEVEL2 3.1, rule 2).
+//   - Lady Ratchet's parts use STONE, TEAL, GOLD, PINK, WHITE and BRONZE between them. CREAM appears
+//     only as the lenses of her goggles, on boss2_head and on boss2_goggles, so that `lampred` changes
+//     the lenses and nothing else.
+//
 // Nothing here runs at load time except these definitions.
 (function (root) {
   'use strict';
@@ -78,6 +87,14 @@
     30: 2,   // LILAC      light
     31: 2    // PEACH      light
   };
+
+  // Level 2 (LEVEL2 3.6): the frog and its lily pad, through theme.skins. GRASS to SILVER, LIME to WHITE,
+  // WHITE to GOLD and FOREST to STONE, so that en_hoppet reads as a wind-up tin frog with brass eyes and
+  // fx_lilypad, whose underside is FOREST, as a tin disc. A colour that is not listed is unchanged.
+  // The pairs are not those of LEVEL2 Appendix C (GRASS to BRONZE, LIME to GOLD, WHITE to SILVER): a
+  // BRONZE and GOLD frog was lost on the brass floor of the Gear Hall, and that table left the pad's
+  // underside green.
+  TG.Remaps.tin = { 14: 3, 15: 4, 4: 18, 13: 2 };
 
   // ---------------------------------------------------------------------------------------------
   // Pip
@@ -1231,6 +1248,256 @@
     ]
   });
 
+  // ===== LEVEL 2: creatures (LEVEL2 3.5, 4.2, 4.4) =====
+
+  // Level 2's creatures are drawn on PLUM and on DEEP_BLUE without a section's remap, so each is carried
+  // by a light colour of its own: LILAC, AQUA and CREAM, GOLD. All face left, towards Pip.
+
+  // Dangle the cave spider: LILAC body with a VIOLET hourglass on the abdomen, VIOLET legs and fangs
+  // with a LILAC pixel at the outer joints, WHITE eyes. It hangs head down, and the thread the renderer
+  // draws meets the top row at the anchor's x. hang0 with the legs spread, hang1 with them drawn in; zip
+  // looks up with the legs bent and trailing, for the clear animation.
+  TG.Sprites.define('en_dangle', {
+    w: 16, h: 16, anchor: [8, 16], fps: 4, owner: 'C',
+    names: ['hang0', 'hang1', 'zip'],
+    frames: [
+      [
+        '..0...0000...0..',
+        '.0u0.0uuuu0.0u0.',
+        '0t0.0uttttu0.0t0',
+        '0t0.0uuttuu0.0t0',
+        '.0t00uuttuu00t0.',
+        '..0t0uttttu0t0..',
+        '...0t0uuuu0t0...',
+        '..000uuuuuu000..',
+        '.0utt44u44uttu0.',
+        '0t00u04u04u000t0',
+        '0t00t44u44ut00t0',
+        '.00t0uuuuuu0t00.',
+        '.0u0.0tuut0.0u0.',
+        '.0t00t0000t00t0.',
+        '..0.0t0..0t0.0..',
+        '.....0....0.....'
+      ],
+      [
+        '......0000......',
+        '..0..0uuuu0..0..',
+        '.0u00uttttu00u0.',
+        '.0t00uuttuu00t0.',
+        '.0t00uuttuu00t0.',
+        '..0t0uttttu0t0..',
+        '...0t0uuuu0t0...',
+        '...00uuuuuu00...',
+        '..0ut44u44utu0..',
+        '.0t0u04u04u00t0.',
+        '.0t0t44u44ut0t0.',
+        '..0t0uuuuuu0t0..',
+        '..0u00tuut00u0..',
+        '...00t0000t00...',
+        '.....0....0.....',
+        '................'
+      ],
+      [
+        '......0000......',
+        '.....0uuuu0.....',
+        '....0uttttu0....',
+        '....0uuttuu0....',
+        '....0uuttuu0....',
+        '....0uttttu0....',
+        '..0.00uuuu00.0..',
+        '.0u0tuuuuuut0u0.',
+        '.0ttu04u04u0tt0.',
+        '.0t0u44u44u00t0.',
+        '0t00t44u44ut00t0',
+        '0t0u0uuuuuu0u0t0',
+        '.00t00tuut00t00.',
+        '..0t0t0000t0t0..',
+        '..0t0t0..0t0t0..',
+        '...0.0....0.0...'
+      ]
+    ]
+  });
+
+  // Flit the bat: LILAC wings with VIOLET finger bones, VIOLET fur, CREAM eyes and ear linings. Its face is
+  // turned to the left, with the snout and both eyes on that side. flap0 wings up, flap1 wings down, with
+  // the head and body in the same place; dive with the head leading at the lower left and the near wing
+  // swept up and back over the body as one membrane: its tip and two finger points trail behind, with a
+  // VIOLET bone running into each point.
+  TG.Sprites.define('en_flit', {
+    w: 24, h: 16, anchor: [12, 16], fps: 8, owner: 'C',
+    names: ['flap0', 'flap1', 'dive'],
+    frames: [
+      [
+        '...0...............00...',
+        '..0u0...0..0......0uu0..',
+        '.0uuu0.0t00t0....0utuu0.',
+        '0uuut00tjttjt0..0uutuuu0',
+        '0uuut00tttttt0.0uuutuuu0',
+        '0uuutu0jjtjjt00utuutuuu0',
+        '0u0utut0jt0jt0uutuutuuu0',
+        '0u00tutttttttuuutuut00u0',
+        '.0.0tuujtttttuuutu0t0.0.',
+        '...0tuu0tttt0uuut00t0...',
+        '...0t000tttt0000t0.0....',
+        '....0..0tttt0...0.......',
+        '........0tt0............',
+        '.......0t00t0...........',
+        '........0..0............',
+        '........................'
+      ],
+      [
+        '........................',
+        '........0..0............',
+        '.......0t00t0...........',
+        '......0tjttjt0..........',
+        '......0tttttt0..........',
+        '......0jjtjjt0..........',
+        '.....0t0jt0jt0..........',
+        '....00ttttttt00000......',
+        '...0uuujtttttuuuuu00....',
+        '..0utuu0tttt0uutuuuu0...',
+        '.0uutuu0tttt0uutuuutu0..',
+        '0uuutu00tttt00utuuutuu0.',
+        '0uu0t0..0tt0..0t00utuuu0',
+        '0u00t0.0t00t0.0t0.0t0uu0',
+        '0u0.0...0..0...0..0t00u0',
+        '.0.................0..0.'
+      ],
+      [
+        '....................00..',
+        '..................00uu0.',
+        '................00uuuu0.',
+        '..............00uuuuu0..',
+        '............00uutuuu0...',
+        '...........0uuuuutuu00..',
+        '..........0uutuuuuttuu0.',
+        '...0..0..0uuuutuuuuuttu0',
+        '..0t00t00uuuuuutuuu0000.',
+        '.0tjttjt0tuuuuuutu0.....',
+        '.0tttttttttuuuuuutu0....',
+        '.0jjtjjtttttuuuuuutu0...',
+        '0t0jt0jtttt0t000uuuu0...',
+        '0tttttttt00.0...0000....',
+        '.0jttttt0...............',
+        '..000000................'
+      ]
+    ]
+  });
+
+  // Glimmer the glow-moth, drawn in the place of the bee and in its rows (0 to 11): AQUA wings with TEAL
+  // spots, CREAM body with TEAL bands, TEAL antennae. Seen from above, heading up and to the left.
+  // fly0 wings spread, fly1 wings folded in to 10 px, with the body and the antennae in the same place.
+  TG.Sprites.define('en_glimmer', {
+    w: 16, h: 16, anchor: [8, 16], fps: 16, owner: 'C',
+    names: ['fly0', 'fly1'],
+    frames: [
+      [
+        '....0...0...000.',
+        '...0a0.0a000bbb0',
+        '..000a0a00bbbbb0',
+        '.0bbb0jj0bbbabb0',
+        '0bbbbbjjbbbbbbb0',
+        '0bbabbbjjbbbb00.',
+        '0bbbbbbjjbbbbbb0',
+        '.0bbb00ajjbbabb0',
+        '..00bbbbjjbbbb0.',
+        '...0bbabajj0bb0.',
+        '....0bbb0jj000..',
+        '.....000.00.....',
+        '................',
+        '................',
+        '................',
+        '................'
+      ],
+      [
+        '....0...0.00....',
+        '...0a0.0a0bb0...',
+        '....0a0a00bbb0..',
+        '...00bjj0bbab0..',
+        '..0bbbjjbbbbb0..',
+        '..0babbjjbbb0...',
+        '..0bbbbjjbbbb0..',
+        '...0bb0ajjbab0..',
+        '....0bbbjjbb0...',
+        '....0babajj0....',
+        '.....0bb0jj0....',
+        '......00.00.....',
+        '................',
+        '................',
+        '................',
+        '................'
+      ]
+    ]
+  });
+
+  // The Baronet: the Baron at minion size, drawn in the place of a Digby. GOLD spare helmet a size too
+  // big, with a WHITE shine and a WHITE lamp glass boxed off at the front; SOIL fur; WHITE eyebrow and
+  // handlebar moustache, two rows thick in two lobes, its ends hanging past the cheeks (they show either
+  // side of en_mound); a monocle with a GOLD rim and WHITE glass over the front eye. The nose is INK:
+  // three colours leave no PINK. peek with the helmet down over his eyes, up with it pushed up two rows
+  // and the monocle hanging from the brim, spin from the front with helmet and monocle gone (they fly
+  // off as fx_helmet and boss_monocle). The moustache is on rows 9 to 11 in peek and up.
+  TG.Sprites.define('en_baronet', {
+    w: 16, h: 16, anchor: [8, 16], fps: 0, owner: 'C',
+    names: ['peek', 'up', 'spin'],
+    frames: [
+      [
+        '................',
+        '................',
+        '.....000000.....',
+        '...00iiiiii00...',
+        '.00ii44iiiiii0..',
+        '0440iiiiiiiiii0.',
+        '0440iiiiiiiiiii0',
+        '0iiiiiiiiiiiiii0',
+        '.00llll00llll00.',
+        '0444444ll444440.',
+        '044444l00l444440',
+        '0440lllllll00440',
+        '.00llllllllll00.',
+        '..0llllllllll0..',
+        '...0llllllll0...',
+        '....00000000....'
+      ],
+      [
+        '.....000000.....',
+        '...00iiiiii00...',
+        '.00ii44iiiiii0..',
+        '0440iiiiiiiiii0.',
+        '0440iiiiiiiiiii0',
+        '0iiiiiiiiiiiiii0',
+        '.00i44illl44l00.',
+        '..0i04illl0ll0..',
+        '.00liil00llll0..',
+        '0444444ll444440.',
+        '044444l00l444440',
+        '0440lllllll00440',
+        '.00llllllllll00.',
+        '..0llllllllll0..',
+        '...0llllllll0...',
+        '....00000000....'
+      ],
+      [
+        '................',
+        '......0000......',
+        '....00llll00....',
+        '...0llllllll0...',
+        '..0llllllllll0..',
+        '..0l44lll44ll0..',
+        '..0ll0lll0lll0..',
+        '.00lll00lllll00.',
+        '0444444ll4444440',
+        '044444l00l444440',
+        '0440llllllll0440',
+        '.000llllllll000.',
+        '...0llllllll0...',
+        '....0llllll0....',
+        '.....0llll0.....',
+        '......0000......'
+      ]
+    ]
+  });
+
   // ---------------------------------------------------------------------------------------------
   // Baron von Burrow. The renderer puts him together from these parts (CONTRACT 6.4).
   // ---------------------------------------------------------------------------------------------
@@ -1700,4 +1967,597 @@
       ]
     ]
   });
+
+  // ===== LEVEL 2: Lady Ratchet and her projectiles (LEVEL2 2, 3.5, 10.1) =====
+
+  // ---------------------------------------------------------------------------------------------
+  // Lady Ratchet. The renderer puts her together from these parts as it does the Baron: body, far arm,
+  // key, head, near arm, and the engine in front (LEVEL2 10.1).
+  // ---------------------------------------------------------------------------------------------
+
+  // Lady Ratchet's body, seen from the front: a TEAL waistcoat over a WHITE shirt front, two GOLD buttons,
+  // a GOLD watch chain to the pocket, a breast pocket with a pencil (GOLD, PINK rubber) and a WHITE rule,
+  // STONE fur and a PINK tail that rises in a wave on the right and thins towards its tip. Rows 24 to 31 are
+  // behind the engine: STONE haunches and PINK feet with toes. b1: the near foot is lifted (behind the
+  // engine), the hem rides up a pixel, the chain swings and the tip of the tail flicks to the other side.
+  TG.Sprites.define('boss2_body', {
+    w: 48, h: 32, anchor: [24, 32], fps: 0, owner: 'C',
+    names: ['b0', 'b1'],
+    frames: [
+      [
+        '................................................',
+        '................................................',
+        '...................00000000000..................',
+        '..................0222222222220.................',
+        '..................0222222222220.................',
+        '.................004444444444400................',
+        '...............00aa04444444440aa00..............',
+        '.............00aaaa04444444440aaaa00............',
+        '...........00aaaaaaa044444440aaaaaaa00..........',
+        '..........0aaaaaaaaaa0444440aaaaaaaaaa0.........',
+        '..........0aaaraaaaaa0444440aaaaaaaaaa0......00.',
+        '..........0aaaiaaaaaaa04440aaaaaaaaaaa0.....0rr0',
+        '..........0aaaia4aaaaa04440aaaaaaaaaaa0....0r000',
+        '..........0aaaia4aaaaaa040aaaaaaaaaaaa0....0r0..',
+        '..........0aa00000aaaaaa0aaaaaaaaaaaaa0....0rr0.',
+        '..........0aaaaaaaaaaaaa0iiaaaaaaaaaaa0.....0rr0',
+        '..........0aaaaaaaaaaaaa0iiaaaa00000aa0.....0rr0',
+        '.........0aaaaaaaaaaaaaa0aaiaaaiaaaaaaa0....0rr0',
+        '.........0aaaaaaaaaaaaaa0aaaiiiaaaaaaaa0....0rr0',
+        '.........0aaaaaaaaaaaaaa0iiaaaaaaaaaaaa0...0rrr0',
+        '.........0aaaaaaaaaaaaaa0iiaaaaaaaaaaaa00000rrr0',
+        '.........0aaaaaaaaaaaaaa0aaaaaaaaaaaaaa0rrrrrrr0',
+        '.........0aaaaaaaaaaaaa020aaaaaaaaaaaaa0rrrrrr0.',
+        '..........00aaaaaaaaa0022200aaaaaaaaa000000000..',
+        '.........0220000000002222222000000000220........',
+        '.........0222222222222222222222222222220........',
+        '.........0222222222222222222222222222220........',
+        '.........0222222222222222222222222222220........',
+        '..........0rrrrrrrrr2222222rrrrrrrrr200.........',
+        '..........0rrrrrrrrr2222222rrrrrrrrr0...........',
+        '..........0rr0rr0rrr2222222rrr0rr0rr0...........',
+        '...........0000000000000000000000000............'
+      ],
+      [
+        '................................................',
+        '................................................',
+        '...................00000000000..................',
+        '..................0222222222220.................',
+        '..................0222222222220.................',
+        '.................004444444444400................',
+        '...............00aa04444444440aa00..............',
+        '.............00aaaa04444444440aaaa00............',
+        '...........00aaaaaaa044444440aaaaaaa00..........',
+        '..........0aaaaaaaaaa0444440aaaaaaaaaa0.........',
+        '..........0aaaraaaaaa0444440aaaaaaaaaa0....00...',
+        '..........0aaaiaaaaaaa04440aaaaaaaaaaa0...0rr0..',
+        '..........0aaaia4aaaaa04440aaaaaaaaaaa0....0r0..',
+        '..........0aaaia4aaaaaa040aaaaaaaaaaaa0....0r0..',
+        '..........0aa00000aaaaaa0aaaaaaaaaaaaa0....0rr0.',
+        '..........0aaaaaaaaaaaaa0iiaaaaaaaaaaa0.....0rr0',
+        '..........0aaaaaaaaaaaaa0iiaaaa00000aa0.....0rr0',
+        '.........0aaaaaaaaaaaaaa0aaiaaaiaaaaaaa0....0rr0',
+        '.........0aaaaaaaaaaaaaa0aaaiaiaaaaaaaa0....0rr0',
+        '.........0aaaaaaaaaaaaaa0iiaaiaaaaaaaaa0...0rrr0',
+        '.........0aaaaaaaaaaaaaa0iiaaaaaaaaaaaa00000rrr0',
+        '.........0aaaaaaaaaaaaa020aaaaaaaaaaaaa0rrrrrrr0',
+        '..........00aaaaaaaaa0022200aaaaaaaaa000rrrrrr0.',
+        '.........0220000000002222222000000000220000000..',
+        '.........0222222222222222222222222222220........',
+        '.........0rrrrrrrrr222222222222222222220........',
+        '.........0rrrrrrrrr222222222222222222220........',
+        '.........0rr0rr0rrr222222222222222222220........',
+        '.........000000000002222222rrrrrrrrr200.........',
+        '...................02222222rrrrrrrrr0...........',
+        '...................02222222rrr0rr0rr0...........',
+        '....................0000000000000000............'
+      ]
+    ]
+  });
+
+  // Lady Ratchet's head: STONE fur, a long snout that narrows to a PINK nose, two WHITE buck teeth under
+  // its tip and the lower jaw set back behind them, WHITE whiskers, a round PINK ear at the back of the
+  // skull, brass goggles with GOLD rims pushed up on her brow, a BRONZE strap. The two lenses are CREAM, so
+  // `lampred` turns just the lenses RED. Rows 0 and 1 are empty in every frame: at rise 40 the whole head is
+  // behind the engine. normal: eyes half shut, unimpressed; laugh: eyes shut, mouth open; hurt: the goggles
+  // are gone, the eyes are wide and crossed and three tufts of fur stand up from a crown no higher than
+  // her brow was; dizzy: two round spiral eyes, WHITE on INK, the goggles knocked crooked, the ear down, the
+  // snout a row lower and the tongue out.
+  TG.Sprites.define('boss2_head', {
+    w: 32, h: 24, anchor: [16, 24], fps: 0, owner: 'C',
+    names: ['normal', 'laugh', 'hurt', 'dizzy'],
+    frames: [
+      [
+        '................................',
+        '................................',
+        '.........000...000.......00000..',
+        '........0iii0.0iii0....00rrrrr0.',
+        '.......0ijjji0ijjji000.0rrrrrrr0',
+        '.......0ijjjiiijjji0gg0rr0rrrrr0',
+        '.......0ijjji0ijjji0gg0r0rrrrrr0',
+        '........0iii0.0iii002g0r0rrrrrr0',
+        '.........00000000022220rr0rrrrr0',
+        '........0022222222222220rrrrrr0.',
+        '.4...4.02222222222222222000000..',
+        '..4.400222000020000022222220....',
+        '.0000222222042220442222222220...',
+        '0rr22222222042220442222222220...',
+        '0rr22020222222222222222222220...',
+        '.0022202222222222222222222220...',
+        '..000000022222222222222222220...',
+        '..04404400002222222222222220....',
+        '..0440440222002222222222220.....',
+        '..044044022222222222222220......',
+        '...00.00.0002222222222220.......',
+        '............0000222222200.......',
+        '................000222000.......',
+        '...................000..........'
+      ],
+      [
+        '................................',
+        '................................',
+        '.........000...000.......00000..',
+        '........0iii0.0iii0....00rrrrr0.',
+        '.......0ijjji0ijjji000.0rrrrrrr0',
+        '.......0ijjjiiijjji0gg0rr0rrrrr0',
+        '.......0ijjji0ijjji0gg0r0rrrrrr0',
+        '........0iii0.0iii002g0r0rrrrrr0',
+        '.........00000000022220rr0rrrrr0',
+        '........0022222222222220rrrrrr0.',
+        '.4...4.02222222222222222000000..',
+        '..4.400222200222200022222220....',
+        '.0000222220220220222022222220...',
+        '0rr22222222222222222222222220...',
+        '0rr22020222222222222222222220...',
+        '.0022202222222222222222222220...',
+        '..000000022222222222222222220...',
+        '..04404400000002222222222220....',
+        '..0440440rrrrr0222222222220.....',
+        '..0440440rrrrr022222222220......',
+        '...00.000rrrr022222222220.......',
+        '........02222222222222200.......',
+        '.........0000000000222000.......',
+        '...................000..........'
+      ],
+      [
+        '................................',
+        '................................',
+        '................................',
+        '................................',
+        '.........................00000..',
+        '.............0...0..0...00rrr00.',
+        '............020.020020..0rrrrr0.',
+        '............0200020020..0rr0rrr0',
+        '..........00222222222200rr0rrrr0',
+        '........0022220002222220rr0rrrr0',
+        '.4...4.02002204440222220rrr0rrr0',
+        '..4.400204402044402222220rrrrr0.',
+        '.000022204002004402222222000000.',
+        '0rr22222200222000222222222220...',
+        '0rr22020222222222222222222220...',
+        '.0022202222222222222222222220...',
+        '..000000022222222222222222220...',
+        '..04404400000222222222222220....',
+        '..0440440rrr022222222222220.....',
+        '..044044022222222222222220......',
+        '...00.00.0002222222222220.......',
+        '............0000222222200.......',
+        '................000222000.......',
+        '...................000..........'
+      ],
+      [
+        '................................',
+        '................................',
+        '...............000..............',
+        '..............0iii0......00000..',
+        '.........000.0ijjji000..00rrr00.',
+        '........0iii00ijjji0gg0.0rrrrr0.',
+        '.......0ijjjiiijjji0gg00rr0rrr0.',
+        '.......0ijjji00iii002220rr0rrrr0',
+        '.......0ijjji000002222220r0rrrr0',
+        '........0iii00222222222220rr0rr0',
+        '.......000002222244422222200rrr0',
+        '.4...4.022444222400042222220000.',
+        '..4.4002240004224040422222220...',
+        '.0000222240404224044422222220...',
+        '0rr22222240444222400222222220...',
+        '0rr22222224002222222222222220...',
+        '.0022222222222222222222222220...',
+        '..00000002222222222222222220....',
+        '..0440440000002222222222220.....',
+        '..0440440rr022222222222220......',
+        '..0440440rr02222222222220.......',
+        '...00.00.0r00000222222200.......',
+        '..........0.....000222000.......',
+        '...................000..........'
+      ]
+    ]
+  });
+
+  // The left arm as drawn, shoulder at the right on rows 4 to 7 in every frame: STONE fur, a WHITE cuff, a
+  // PINK hand. rest: hand on hip; raise: a spanner held up, WHITE with a STONE shade; throw: flung forward,
+  // hand open; watch: her GOLD pocket watch held up under her nose, crown at the top, the hands at three.
+  TG.Sprites.define('boss2_arm', {
+    w: 16, h: 16, anchor: [8, 8], fps: 0, owner: 'C',
+    names: ['rest', 'raise', 'throw', 'watch'],
+    frames: [
+      [
+        '................',
+        '................',
+        '................',
+        '................',
+        '............000.',
+        '..........002220',
+        '.........0222220',
+        '........02222220',
+        '.......02222200.',
+        '.......022220...',
+        '.......0222220..',
+        '........0222200.',
+        '.........0444rr0',
+        '..........044rr0',
+        '..........00rrr0',
+        '............000.'
+      ],
+      [
+        '0000000.........',
+        '0440440.........',
+        '0440440.........',
+        '0444420.........',
+        '.04420......000.',
+        '.0442000...02220',
+        '.0rrrr4400022220',
+        '.0rrrr4422222220',
+        '..0420022222220.',
+        '..042002222220..',
+        '...00..0022200..',
+        '.........000....',
+        '................',
+        '................',
+        '................',
+        '................'
+      ],
+      [
+        '.000............',
+        '0rrr00..........',
+        '0rrrr00000......',
+        '0rrrr44222000...',
+        '.0rr04422222200.',
+        '..00.04222222220',
+        '.....00022222220',
+        '........00222220',
+        '..........00000.',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................'
+      ],
+      [
+        '....0...........',
+        '...0i0..........',
+        '..0iii0.........',
+        '.0i444i0........',
+        '.0i404i0....000.',
+        '.0i400i0..002220',
+        '.0i444i0.0222220',
+        '..0iiirr00222220',
+        '...00rrr02222220',
+        '.....0rr4422220.',
+        '......00002220..',
+        '..........000...',
+        '................',
+        '................',
+        '................',
+        '................'
+      ]
+    ]
+  });
+
+  // The wind-up key in her back: a GOLD bow of two wings with a hole in each, BRONZE shade, on a stem one
+  // pixel wide that stands clear under the bow and ends on row 8, on her far shoulder. Four steps of half a
+  // turn about the stem, after which the bow looks the same again: k0 face on; k1 the left wing near and
+  // wide, the right one turned away, narrow and BRONZE; k2 edge on; k3 as k1 mirrored. So k0 to k3 is a
+  // turn one way and k3 to k0 the other.
+  TG.Sprites.define('boss2_key', {
+    w: 16, h: 16, anchor: [8, 8], fps: 0, owner: 'C',
+    names: ['k0', 'k1', 'k2', 'k3'],
+    frames: [
+      [
+        '..000.......000.',
+        '.0iii0.....0iii0',
+        '.0i0ii00000ii0g0',
+        '.0i0iiiiiiiii0g0',
+        '.0iiig00i00gigg0',
+        '..0000.0i0.0000.',
+        '.......0i0......',
+        '.......0g0......',
+        '........0.......',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................'
+      ],
+      [
+        '..000...........',
+        '.0iii0...0000...',
+        '.0i0ii0000ggg0..',
+        '.0i0iiiiiig0g0..',
+        '.0iiig00i00gg0..',
+        '..0000.0i0.000..',
+        '.......0i0......',
+        '.......0g0......',
+        '........0.......',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................'
+      ],
+      [
+        '.......000......',
+        '......0iig0.....',
+        '......0iig0.....',
+        '......0iig0.....',
+        '......0igg0.....',
+        '.......0i0......',
+        '.......0i0......',
+        '.......0g0......',
+        '........0.......',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................'
+      ],
+      [
+        '............000.',
+        '....0000...0iii0',
+        '...0ggg0000ii0i0',
+        '...0g0giiiiii0i0',
+        '...0gg00i00giii0',
+        '...000.0i0.0000.',
+        '.......0i0......',
+        '.......0g0......',
+        '........0.......',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................',
+        '................'
+      ]
+    ]
+  });
+
+  // The brass engine she stands behind: BRONZE with a GOLD top edge over a row of rivets, a STONE skid, a
+  // TEAL sight glass with louvres beside it, and on the left the boiler gauge, a WHITE dial in a GOLD rim.
+  // The renderer draws the needle from the dial's centre, column 6, row 6. The hatch is the arched door in
+  // the middle. shut: the door closed, a TEAL porthole in it and two STONE strap hinges on its right; open:
+  // the door swung aside on those hinges and the dark inside.
+  TG.Sprites.define('boss2_engine', {
+    w: 48, h: 16, anchor: [24, 16], fps: 0, owner: 'C',
+    names: ['shut', 'open'],
+    frames: [
+      [
+        '..........0000000000000000000000000000000000000.',
+        '....000000iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii0',
+        '...00i0i00ggigggigggigggigggigggigggigggigggigg0',
+        '..00i444i00gg0ggggggg000000ggggggg0gggggggggggg0',
+        '.00i44444i00g0giggg00iiiiii00gggig0gggg000ggggg0',
+        '.0i4444444i0g0gggg0iiggggggii0gggg0gggg040g000g0',
+        '.00444444400g0ggg0iggggggg22220ggg0gggg0a0ggggg0',
+        '.0i4444444i0g0ggg0iggg000ggggi0ggg0gggg0a0g000g0',
+        '.00i44444i00g0ggg0igg04aa0gggi0ggg0gggg0a0ggggg0',
+        '.000iiiii00gg0ggg0igg0aaa0gggi0ggg0gggg0a0g000g0',
+        '.0g00iii00ggg0ggg0igg0aaa0gggi0ggg0gggg0a0ggggg0',
+        '.0gg00000gggg0ggg0iggg000ggggi0ggg0gggg000g000g0',
+        '.0ggggggggggg0ggg0iggggggg22220ggg0gggggggggggg0',
+        '.0ggigggggigg0ggg0iggggggggggi0ggg0gggggggggggg0',
+        '.02222222222202220iggggggggggi022202222222222220',
+        '.00000000000000000000000000000000000000000000000'
+      ],
+      [
+        '..........0000000000000000000000000000000000000.',
+        '....000000iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii0',
+        '...00i0i00ggigggigggigggigggigggigggigggigggigg0',
+        '..00i444i00gg0ggggggg000000ggggggg0gggggggggggg0',
+        '.00i44444i00g0giggg0000000000gggig0gggg000ggggg0',
+        '.0i4444444i0g0gggg0i00000000i0gi0g0gggg040g000g0',
+        '.00444444400g0ggg0i0000000000i2i0g0gggg0a0ggggg0',
+        '.0i4444444i0g0ggg0i0000000000i0i0g0gggg0a0g000g0',
+        '.00i44444i00g0ggg0i0000000000i0i0g0gggg0a0ggggg0',
+        '.000iiiii00gg0ggg0i0000000000i0i0g0gggg0a0g000g0',
+        '.0g00iii00ggg0ggg0i0000000000i0i0g0gggg0a0ggggg0',
+        '.0gg00000gggg0ggg0i0000000000i0i0g0gggg000g000g0',
+        '.0ggggggggggg0ggg0i0000000000i2i0g0gggggggggggg0',
+        '.0ggigggggigg0ggg0i0000000000i0i0g0gggggggggggg0',
+        '.02222222222202220i0000000000i0i0202222222222220',
+        '.00000000000000000000000000000000000000000000000'
+      ]
+    ]
+  });
+
+  // The goggles that pop off on a hit: two CREAM lenses in GOLD rims with a GOLD bridge, so that `lampred`
+  // turns them RED like the pair on her head.
+  TG.Sprites.define('boss2_goggles', {
+    w: 8, h: 8, anchor: [4, 4], fps: 0, owner: 'C',
+    names: ['goggles'],
+    frames: [
+      [
+        '........',
+        '.00..00.',
+        '0ii00ii0',
+        '0jjiijj0',
+        '0jjiijj0',
+        '0ii00ii0',
+        '.00..00.',
+        '........'
+      ]
+    ]
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // Projectiles of Lady Ratchet (LEVEL2 3.5)
+  // ---------------------------------------------------------------------------------------------
+
+  // Cog, in the place of the rock: GOLD with BRONZE shade and a hole for the axle. The eight teeth of k1
+  // stand where the gaps of k0 are.
+  TG.Sprites.define('pr_cog', {
+    w: 12, h: 12, anchor: [6, 12], fps: 10, owner: 'C',
+    names: ['k0', 'k1'],
+    frames: [
+      [
+        '.....00.....',
+        '..000ii000..',
+        '.0ii0ii0ii0.',
+        '.0iiiiiiii0.',
+        '.00iiggii00.',
+        '0iiig00giig0',
+        '0iiig00gigg0',
+        '.00iiggig00.',
+        '.0iiiiiggg0.',
+        '.0ii0ig0gg0.',
+        '..000gg000..',
+        '.....00.....'
+      ],
+      [
+        '...00..00...',
+        '..0ii00ii0..',
+        '.00iiiiii00.',
+        '0iiiiiiiiii0',
+        '0iiiiggiiig0',
+        '.00ig00gi00.',
+        '.00ig00gg00.',
+        '0iiiiggiggg0',
+        '0iiiiiggggg0',
+        '.00iigggg00.',
+        '..0ig00gg0..',
+        '...00..00...'
+      ]
+    ]
+  });
+
+  // Rolling gear, in the place of the shockwave: the upper half of a big gear that runs along the floor, a
+  // round GOLD rim with small teeth, a BRONZE web in one piece, a STONE hub on the floor. The teeth of s1
+  // stand between those of s0.
+  TG.Sprites.define('pr_rollgear', {
+    w: 16, h: 8, anchor: [8, 8], fps: 10, owner: 'C',
+    names: ['s0', 's1'],
+    frames: [
+      [
+        '....00.00.00....',
+        '..000i0ii0i000..',
+        '.0i0iiiiiiii0i0.',
+        '.0iiiiggggiiii0.',
+        '00iiggggggggii00',
+        '0iiigg0220ggiii0',
+        '0iiig022220giii0',
+        '0000000000000000'
+      ],
+      [
+        '......0000......',
+        '...00.0ii0.00...',
+        '..0ii0iiii0ii0..',
+        '00iiiiggggiiii00',
+        '0iiiggggggggiii0',
+        '.0iigg0220ggii0.',
+        '0iiig022220giii0',
+        '0000000000000000'
+      ]
+    ]
+  });
+
+  // Pendulum, in the place of the pickaxe: a round GOLD bob with BRONZE shade on a SILVER rod one pixel
+  // wide, a BRONZE hanger. Four steps of a swing: p0 to the left and a row higher, p1 down, p2 to the right
+  // and a row higher, p3 down again, the glint on the other side.
+  TG.Sprites.define('pr_pendulum', {
+    w: 16, h: 16, anchor: [8, 16], fps: 12, owner: 'C',
+    names: ['p0', 'p1', 'p2', 'p3'],
+    frames: [
+      [
+        '......00000.....',
+        '......0ggg0.....',
+        '.......030......',
+        '......030.......',
+        '......030.......',
+        '.....030........',
+        '...00030........',
+        '..0iiii0........',
+        '.0i3iiii0.......',
+        '0i3iiiiig0......',
+        '0iiiiiiig0......',
+        '0iiiiiggg0......',
+        '.0iigggg0.......',
+        '..0gggg0........',
+        '...0000.........',
+        '................'
+      ],
+      [
+        '......00000.....',
+        '......0ggg0.....',
+        '.......030......',
+        '.......030......',
+        '.......030......',
+        '.......030......',
+        '.......030......',
+        '......0030......',
+        '.....0iiii0.....',
+        '....0i3iiii0....',
+        '...0i3iiiiig0...',
+        '...0iiiiiiig0...',
+        '...0iiiiiggg0...',
+        '....0iigggg0....',
+        '.....0gggg0.....',
+        '......0000......'
+      ],
+      [
+        '......00000.....',
+        '......0ggg0.....',
+        '.......030......',
+        '........030.....',
+        '........030.....',
+        '.........030....',
+        '.........0300...',
+        '........0iiii0..',
+        '.......0i3iiii0.',
+        '......0i3iiiiig0',
+        '......0iiiiiiig0',
+        '......0iiiiiggg0',
+        '.......0iigggg0.',
+        '........0gggg0..',
+        '.........0000...',
+        '................'
+      ],
+      [
+        '......00000.....',
+        '......0ggg0.....',
+        '.......030......',
+        '.......030......',
+        '.......030......',
+        '.......030......',
+        '.......030......',
+        '......0030......',
+        '.....0iiii0.....',
+        '....0iiii3i0....',
+        '...0iiiiii3g0...',
+        '...0iiiiiiig0...',
+        '...0iiiiiggg0...',
+        '....0iigggg0....',
+        '.....0gggg0.....',
+        '......0000......'
+      ]
+    ]
+  });
+
 })(typeof window !== 'undefined' ? window : globalThis);

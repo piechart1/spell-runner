@@ -1,9 +1,9 @@
 // js/level.js
 // SPELL RUNNER levels (WP-E). Defines TG.Level.
 //
-// Contract: docs/CONTRACT.md sections 4.14, 5.8 and 5.9. Design: docs/DESIGN.md sections 5, 6 and 11.
+// Contract: docs/CONTRACT.md sections 4.14, 5.8 and 5.9. Design: docs/DESIGN.md sections 5, 6, 11 and 11A.
 //
-// A level is registered as data in TG.Levels (js/levels/level1.js). TG.Level.build turns that data
+// A level is registered as data in TG.Levels (the files under js/levels/). TG.Level.build turns that data
 // into the runtime level for one difficulty: positions in world px, hazards with their input windows,
 // the spawn list, ink drop positions and checkpoints. TG.Level.update is called by TG.Game once per
 // step on the 'playing' screen and handles sections, checkpoints, spawn triggers, hazard cues and
@@ -38,11 +38,11 @@
     beehive: { action: 'duck', hold: false },
     arch:    { action: 'duck', hold: true }
   };
-  var POWERS = ['shield', 'hourglass', 'quill', 'blast', 'cap'];
+  var POWERS = ['shield', 'hourglass', 'quill', 'blast', 'cap', 'watch'];
   // Used by validate when entities.js is not loaded.
   var FALLBACK_SPAWN_KINDS = {
     boulder: 'threat', dawdle: 'threat', hoppet: 'threat', buzzle: 'threat', swoop: 'threat',
-    truffle: 'threat', digby: 'threat', rock: 'threat', crate: 'crate'
+    truffle: 'threat', digby: 'threat', dangle: 'threat', flit: 'threat', rock: 'threat', crate: 'crate'
   };
   var ARC_OFFSETS = [-16, -8, 0, 8, 16];     // px from the gap's centre (DESIGN Appendix B)
   var ARC_TAKEOFF = 24;                      // the arc is that of a jump taking off 24 px before the centre
@@ -569,6 +569,14 @@
     var player = state.player;
     if (!level || !player) return;
 
+    // On a step the world does not move, the level waits. TG.Game calls this on the playing screen, where
+    // such a step is one a Pocket Watch holds (LEVEL2 6.3). Everything below follows Pip's x, and the world
+    // step plays no part in it. So without this, what Pip passed on the step the watch began (the world
+    // still moves on that step) would happen with the world stopped: a section change, a checkpoint, a new
+    // threat, a cue, the boss warning, the arena start. So would what a rescue carries him past while a
+    // watch runs. All of it happens on the first step the world moves again.
+    if (!(wdt > 0)) return;
+
     // 1. Section change.
     var s = sectionAt(level, player.x);
     if (s !== state.section) {
@@ -582,8 +590,10 @@
       if (!cp.raised && player.x >= cp.x) passCheckpoint(state, cp);
     }
 
-    // 3. Spawn triggers and retries (not once the arena has been reached).
-    if (player.x < level.arenaX) updateSpawns(state, wdt);
+    // 3. Spawn triggers and retries (not once the arena has been reached). Nothing new appears while a
+    // Pocket Watch runs (LEVEL2 6.3). On the steps it holds the level waits altogether (above), so what
+    // this leaves out is the spawn step of the step the watch began on, after its crate was typed.
+    if (player.x < level.arenaX && !(state.power.watchT > 0)) updateSpawns(state, wdt);
 
     // 4. Hazard cues and the boss warning.
     updateCues(state);

@@ -412,6 +412,69 @@ async function main() {
     bad.B.stat('end', {});
   });
 
+  await check('stat from Level 2 sends level: 2 and nothing else new; from Level 1 the body is the one of before Level 2, with no such field', function () {
+    const t = board();
+    t.token('hard');
+    t.B.stat('start', { level: 1 });
+    t.B.stat('end', { time: 286.9, cleared: true, section: 3, level: 1 });
+    t.B.stat('start', { level: 2 });
+    t.B.stat('end', { time: 303.4, cleared: false, section: 2, level: 2 });
+    const sent = t.world.calls.filter(function (c) { return c.path === '/v1/stats'; }).map(function (c) { return c.body; });
+    const token = sent[0].token;
+    assert.deepStrictEqual(sent, [
+      { token: token, event: 'start' },
+      { token: token, event: 'end', time: 286, cleared: true, section: 3 },
+      { token: token, event: 'start', level: 2 },
+      { token: token, event: 'end', time: 303, cleared: false, section: 2, level: 2 }
+    ]);
+    // The text that leaves the game for Level 1 is, character for character, what the released game sends.
+    const texts = t.world.calls.filter(function (c) { return c.path === '/v1/stats'; }).map(function (c) { return c.init.body; });
+    assert.strictEqual(texts[0], '{"token":"' + token + '","event":"start"}');
+    assert.strictEqual(texts[1], '{"token":"' + token + '","event":"end","time":286,"cleared":true,"section":3}');
+    // Only the number 2 names a stage: any other value is a Level 1 count, as is no value at all.
+    [3, 0, '2', true, null, undefined, [2], { level: 2 }, 2.5].forEach(function (level) {
+      const before = t.world.calls.length;
+      t.B.stat('start', { level: level });
+      t.B.stat('end', { time: 10, cleared: false, section: 0, level: level });
+      assert.deepStrictEqual(t.world.calls.slice(before).map(function (c) { return c.body; }), [
+        { token: token, event: 'start' }, { token: token, event: 'end', time: 10, cleared: false, section: 0 }
+      ], 'level ' + JSON.stringify(level));
+    });
+    [undefined, null, 'x', 2, [], function () {}].forEach(function (info) {
+      const before = t.world.calls.length;
+      t.B.stat('start', info);
+      assert.deepStrictEqual(t.world.calls[before].body, { token: token, event: 'start' }, 'info ' + String(info));
+    });
+  });
+
+  await check('A run of two stages, as TG.UI calls the module: one token request, four counts that leave the token held, then one submission with the fields of LEADERBOARD 3.2 and nothing else', function () {
+    const t = board();
+    t.B.startRun('medium');                        // the difficulty is confirmed
+    t.B.stat('start', { level: 1 });               // the run starts from the menus
+    t.wait(286);
+    t.B.stat('end', { time: 286.7, cleared: true, section: 3, level: 1 });   // STAGE 1 CLEAR
+    assert.strictEqual(t.B.hasToken('medium'), true, 'the token was dropped at STAGE 1 CLEAR');
+    t.B.stat('start', { level: 2 });               // NEXT STAGE
+    t.wait(300);
+    t.B.stat('end', { time: 299.4, cleared: true, section: 3, level: 2 });   // STAGE 2 CLEAR
+    assert.strictEqual(t.B.hasToken('medium'), true, 'the token was dropped by the counts of the second stage');
+    assert.strictEqual(t.B.state.send, 'none');
+    assert.deepStrictEqual(t.paths(), ['POST /v1/runs', 'POST /v1/stats', 'POST /v1/stats', 'POST /v1/stats', 'POST /v1/stats']);
+    const tokens = t.world.calls.slice(1).map(function (c) { return c.body.token; });
+    assert.deepStrictEqual(tokens, ['run-1.medium', 'run-1.medium', 'run-1.medium', 'run-1.medium'], 'the counts carry the token of the run');
+    // The entry and the result of the run's end: the run total, and the time of the whole run.
+    const entry = { name: 'DAV', score: 236060, wpm: 141, accuracy: 100, rank: 'S', cleared: true, date: '2026-10-12' };
+    const result = { difficulty: 'medium', levelId: 2, score: 236060, time: 586.08, stageTime: 299.4, stageScore: 108160, stages: 2, cleared: true, rank: 'S' };
+    t.B.submit(entry, result);
+    const sends = t.world.calls.filter(function (c) { return c.path === '/v1/scores'; });
+    assert.strictEqual(sends.length, 1);
+    assert.deepStrictEqual(sends[0].body, { token: 'run-1.medium', name: 'DAV', score: 236060, wpm: 141, accuracy: 100, rank: 'S', cleared: true, time: 586 });
+    assert.deepStrictEqual(Object.keys(sends[0].body), ['token', 'name', 'score', 'wpm', 'accuracy', 'rank', 'cleared', 'time']);
+    assert.strictEqual(t.world.calls.filter(function (c) { return c.path === '/v1/runs'; }).length, 1, 'a second token was asked for');
+    assert.strictEqual(t.B.hasToken(), false, 'the token is still held after the run was sent');
+    assert.strictEqual(t.B.state.send, 'sent');
+  });
+
   await check('startRun with an unknown difficulty makes no request', function () {
     const t = board();
     [undefined, null, 'extreme', '', 3, {}, ['easy']].forEach(function (d) { t.B.startRun(d); });

@@ -3,7 +3,9 @@
 //
 //   node test/run-all.js                    every test/test-*.js file and test/sim.js
 //   node test/run-all.js --quick            the same, with --quick passed to the files that have it
-//                                           (test-render.js and test-integration.js run shorter)
+//                                           (test-render.js and test-integration.js run shorter;
+//                                           test-level1-pixels.js compares one of its three runs;
+//                                           sim.js plays the first level only)
 //   node test/run-all.js core words         only the files whose name contains one of these words
 //   node test/run-all.js --serial           one file at a time (the default runs several at once)
 //   node test/run-all.js --verbose          also print the whole output of every file
@@ -22,7 +24,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const QUICK_FILES = ['test/test-render.js', 'test/test-integration.js'];
+const QUICK_FILES = ['test/test-render.js', 'test/test-integration.js', 'test/test-level1-pixels.js', 'test/sim.js'];
 
 function parseArgs(argv) {
   const o = { quick: false, serial: false, verbose: false, filters: [] };

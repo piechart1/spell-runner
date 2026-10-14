@@ -5,6 +5,10 @@
 // picker (CONTRACT 4.6, DESIGN 10 and Appendix A). The picker is checked against a reference filter
 // written here from DESIGN 10.4, over 5,000 picks per difficulty and section. The "doc:" check reads
 // Appendix A of docs/DESIGN.md and is skipped if the document is absent.
+//
+// Level 2's word flavour, `clockwork` (LEVEL2 section 7 and Appendix A; the cases of LEVEL2 13.5), has
+// its own part below: the counts of LEVEL2 7.2, the rules of each tier, and where the picker draws its
+// words. Its "doc:" check reads Appendix A of docs/LEVEL2.md and is skipped in the same way.
 'use strict';
 
 const fs = require('fs');
@@ -56,6 +60,9 @@ const RANGES = {
   hard:   { 1: [5, 7], 2: [7, 9], 3: [8, 11], boss: [9, 12], finisher: [13, 15] }
 };
 
+// LEVEL2 7.2: the words of the `clockwork` flavour in tiers 1, 2 and 3. 251 in all.
+const CLOCKWORK_COUNTS = { easy: [0, 31, 39], medium: [32, 35, 24], hard: [33, 29, 28] };
+
 function load() {
   return stubs.load({ files: FILES });
 }
@@ -88,12 +95,16 @@ check('TG.Words exposes POOLS, SAMPLES, ADJACENT, createPicker, has and validate
     typeof W.createPicker === 'function' && typeof W.has === 'function' && typeof W.validate === 'function';
 });
 
-check('POOLS has the five pools and a flavour object for every difficulty; Level 1 needs no flavour', function () {
+check('POOLS has the five pools and a flavour object for every difficulty; the one flavour is Level 2\'s clockwork, with a list for tiers 1 to 3 only; Level 1 needs no flavour', function () {
   const POOLS = load().TG.Words.POOLS;
   for (const d of DIFFS) {
     for (const k of POOL_KEYS) if (!Array.isArray(POOLS[d][k])) return d + '.' + k + ' missing';
     if (typeof POOLS[d].flavour !== 'object') return d + '.flavour missing';
-    if (Object.keys(POOLS[d].flavour).length !== 0) return d + '.flavour is not empty';
+    // No `meadow`: Level 1's words are already in the tiers (CONTRACT 4.6).
+    if (!same(Object.keys(POOLS[d].flavour), ['clockwork'])) return d + '.flavour holds ' + (Object.keys(POOLS[d].flavour).join(', ') || 'nothing');
+    const lists = POOLS[d].flavour.clockwork;
+    if (!same(Object.keys(lists), THREAT_TIERS)) return d + '.flavour.clockwork has the lists ' + Object.keys(lists).join(', ');
+    for (const k of THREAT_TIERS) if (!Array.isArray(lists[k])) return d + '.flavour.clockwork.' + k + ' is not a list';
   }
   return true;
 });
@@ -680,16 +691,19 @@ check('a test flavour list added to POOLS.easy.flavour is picked from, and valid
   return a === 'jazzland' && b !== 'jazzland' && b.length === 5 && c === 'toolset' && has && reported && clean;
 });
 
-check('a valid flavour list passes validate and its words are picked alongside the tier\'s own words', function () {
+check('a valid flavour list passes validate and its words are picked alongside the tier\'s own words, with none from another flavour', function () {
   const env = load();
   const TG = env.TG, W = TG.Words;
-  W.POOLS.medium.flavour.tools = { 1: ['gear', 'bolt'], 2: ['wrench', 'chisel'], 3: ['spanner', 'toolkit'] };
+  // Words that are in no list. A word of the clockwork flavour (gear, wrench, spanner) would be reported as a duplicate.
+  W.POOLS.medium.flavour.tools = { 1: ['nail', 'rasp'], 2: ['staple', 'sander'], 3: ['hacksaw', 'toolkit'] };
   const problems = W.validate();
   const picker = W.createPicker('medium', TG.RNG.create(1), { flavour: 'tools' });
   const seen = new Set();
   for (let i = 0; i < 3000; i++) seen.add(picker.pick({ tier: 2, minLen: 5, maxLen: 6, active: [] }));
   delete W.POOLS.medium.flavour.tools;
-  return problems.length === 0 && seen.has('wrench') && seen.has('chisel') && seen.has('bridge');
+  if (problems.length !== 0) return problems.slice(0, 3).join('; ');
+  // 'wrench' is a clockwork word of the same tier and difficulty: this picker was not given that flavour.
+  return seen.has('staple') && seen.has('sander') && seen.has('bridge') && !seen.has('wrench');
 });
 
 check('a flavour word that duplicates a pool word is reported by validate', function () {
@@ -699,6 +713,146 @@ check('a flavour word that duplicates a pool word is reported by validate', func
   const problems = W.validate();
   delete W.POOLS.hard.flavour.dup;
   return problems.length === 1 && problems[0].indexOf('zephyr') !== -1;
+});
+
+// =================================================================================================
+// The clockwork flavour of Level 2 (LEVEL2 section 7 and Appendix A)
+// =================================================================================================
+
+check('the clockwork flavour has the word counts of LEVEL2 7.2: 0 / 31 / 39 on Easy, 32 / 35 / 24 on Medium, 33 / 29 / 28 on Hard, 251 in all', function () {
+  const POOLS = load().TG.Words.POOLS;
+  let total = 0;
+  for (const d of DIFFS) {
+    const counts = THREAT_TIERS.map(function (k) { return POOLS[d].flavour.clockwork[k].length; });
+    if (!same(counts, CLOCKWORK_COUNTS[d])) return d + ': ' + counts.join(' / ');
+    total += counts[0] + counts[1] + counts[2];
+  }
+  return total === 251 || String(total);
+});
+
+check('the clockwork flavour passes validate(): every word is a to z, within its tier\'s range, obeys its tier\'s letter rules and is in no other list of any difficulty', function () {
+  const W = load().TG.Words;
+  const problems = W.validate();
+  if (problems.length !== 0) return problems.slice(0, 3).join('; ');
+  // The rules again, written here, because the checks of "The pools" above read the five pools only.
+  const home = /^[asdfghjkl]+$/, t2 = /^[asdfghjkleirtou]+$/;
+  const seen = new Map();
+  for (const d of DIFFS) for (const k of POOL_KEYS) for (const w of W.POOLS[d][k]) seen.set(w, d + '.' + k);
+  for (const d of DIFFS) for (const k of THREAT_TIERS) {
+    const r = RANGES[d][k];
+    const where = d + '.clockwork.' + k;
+    for (const w of W.POOLS[d].flavour.clockwork[k]) {
+      if (!/^[a-z]+$/.test(w)) return where + ': ' + w;
+      if (w.length < r[0] || w.length > r[1]) return where + ': ' + w + ' (' + w.length + ')';
+      if (seen.has(w)) return where + ': ' + w + ' is also in ' + seen.get(w);
+      seen.set(w, where);
+      if (d === 'easy' && k === '1' && !home.test(w)) return where + ': ' + w + ' leaves the home row';
+      if (d === 'easy' && k === '2' && (!t2.test(w) || !/[eirtou]/.test(w))) return where + ': ' + w + ' breaks the letter rule of tier 2';
+      if (d === 'easy' && k === '3' && !/[bcmnpqvwxyz]/.test(w)) return where + ': ' + w + ' has no letter outside tier 2\'s set';
+      if (d === 'medium' && k === '1' && /[qxz]/.test(w)) return where + ': ' + w + ' has a Q, X or Z';
+      for (const o of DIFFS) if (W.has(o, w) !== (o === d)) return where + ': has("' + o + '", "' + w + '") is ' + W.has(o, w);
+    }
+  }
+  return true;
+});
+
+(function () {
+  const name = 'doc: the clockwork lists are the lists of LEVEL2 Appendix A, word for word and in order';
+  const file = path.join(stubs.ROOT, 'docs', 'LEVEL2.md');
+  if (!fs.existsSync(file)) {
+    skip(name + ' (docs/LEVEL2.md not found)');
+    return;
+  }
+  const text = fs.readFileSync(file, 'utf8');
+  const start = text.indexOf('## Appendix A');
+  const end = text.indexOf('## Appendix B');
+  if (start === -1 || end === -1) {
+    skip(name + ' (Appendix A not found)');
+    return;
+  }
+  const lists = {};      // 'easy.1' -> words
+  let diff = null, id = null;
+  for (const raw of text.slice(start, end).split('\n')) {
+    const line = raw.trim();
+    let m;
+    if ((m = /^### (Easy|Medium|Hard)$/.exec(line))) { diff = m[1].toLowerCase(); id = null; continue; }
+    if ((m = /^\*\*Tier (\d) \(/.exec(line))) { id = diff + '.' + m[1]; lists[id] = []; continue; }
+    // A line of words is lowercase letters and spaces. Easy tier 1 has a note in brackets and no words.
+    if (id && /^[a-z ]+$/.test(line)) lists[id] = lists[id].concat(line.split(/\s+/));
+  }
+
+  check(name, function () {
+    const POOLS = load().TG.Words.POOLS;
+    for (const d of DIFFS) for (const k of THREAT_TIERS) {
+      const given = lists[d + '.' + k];
+      const mine = POOLS[d].flavour.clockwork[k];
+      if (!given) return 'Appendix A has no list for ' + d + ' tier ' + k;
+      for (let i = 0; i < Math.max(given.length, mine.length); i++) {
+        if (mine[i] !== given[i]) return d + ' tier ' + k + ' at ' + i + ': ' + mine[i] + ' vs ' + given[i];
+      }
+    }
+    return true;
+  });
+})();
+
+check('a picker created with { flavour: "clockwork" } draws the words of a tier and of that tier\'s clockwork list, each once before any repeat, and no other word', function () {
+  const env = load();
+  const TG = env.TG, W = TG.Words;
+  // A threat's word has at most MAX_WORD_LEN letters, which leaves out the 11-letter words of Hard tier 3.
+  const cap = TG.C.MAX_WORD_LEN;
+  function fits(w) { return w.length <= cap; }
+  for (const d of DIFFS) {
+    const picker = W.createPicker(d, TG.RNG.create(8), { flavour: 'clockwork' });
+    for (const k of THREAT_TIERS) {
+      const want = new Set(W.POOLS[d][k].filter(fits).concat(W.POOLS[d].flavour.clockwork[k].filter(fits)));
+      const seen = new Set();
+      for (let i = 0; i < want.size; i++) {
+        const w = picker.pick({ tier: k, minLen: RANGES[d][k][0], maxLen: Math.min(RANGES[d][k][1], cap), active: [] });
+        if (!want.has(w)) return d + ' tier ' + k + ' pick ' + i + ': ' + w + ' is not in the tier or its clockwork list';
+        if (seen.has(w)) return d + ' tier ' + k + ' pick ' + i + ' repeated ' + w + ' with ' + (want.size - seen.size) + ' words not yet drawn';
+        seen.add(w);
+      }
+    }
+  }
+  return true;
+});
+
+check('boss and finisher picks take no flavour words: with the clockwork flavour they are words of the shared pools, and a boss or finisher list in a flavour is not read', function () {
+  const env = load();
+  const TG = env.TG, W = TG.Words;
+  for (const d of DIFFS) {
+    const picker = W.createPicker(d, TG.RNG.create(9), { flavour: 'clockwork' });
+    for (const k of ['boss', 'finisher']) {
+      for (let i = 0; i < 100; i++) {
+        const w = picker.pick({ tier: k, minLen: RANGES[d][k][0], maxLen: RANGES[d][k][1], active: [] });
+        if (W.POOLS[d][k].indexOf(w) === -1) return d + ' ' + k + ': ' + w;
+      }
+    }
+  }
+  // CONTRACT 4.6: a flavour's lists are added to tiers 1 to 3. Neither made-up word is in a pool, and each
+  // is the only word of its length, so a picker that read these two lists would return it.
+  W.POOLS.medium.flavour.spare = { 1: [], 2: [], 3: [], boss: ['cogcogcogcog'], finisher: ['ticktockticktock'] };
+  const spare = W.createPicker('medium', TG.RNG.create(1), { flavour: 'spare' });
+  const b = spare.pick({ tier: 'boss', minLen: 12, maxLen: 12, active: [] });
+  const f = spare.pick({ tier: 'finisher', minLen: 16, maxLen: 16, active: [] });
+  delete W.POOLS.medium.flavour.spare;
+  return W.POOLS.medium.boss.indexOf(b) !== -1 && W.POOLS.medium.finisher.indexOf(f) !== -1 || 'picked ' + b + ' and ' + f;
+});
+
+check('Easy tier 1 has no clockwork words (LEVEL2 7.2): with the flavour on, its picks are the same sequence as without it; tier 1 on Medium and Hard is not', function () {
+  const env = load();
+  const TG = env.TG, W = TG.Words;
+  function run(d, opts) {
+    const picker = W.createPicker(d, TG.RNG.create(31), opts);
+    const out = [];
+    for (let i = 0; i < 60; i++) {
+      out.push(picker.pick({ tier: 1, minLen: RANGES[d][1][0], maxLen: RANGES[d][1][1], active: out.slice(-2) }));
+    }
+    return out;
+  }
+  const on = { flavour: 'clockwork' };
+  if (!same(run('easy', undefined), run('easy', on))) return 'the Easy tier 1 picks changed';
+  return !same(run('medium', undefined), run('medium', on)) && !same(run('hard', undefined), run('hard', on));
 });
 
 // =================================================================================================

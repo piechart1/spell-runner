@@ -139,7 +139,13 @@
     INTRO_FACTOR: 1.5,      // budget factor for intro and tutorial spawns
     SPAWN_RETRY: 0.25,      // ws between retries of a waiting spawn
     SWOOP_HOVER_DX: 120, SWOOP_HOVER_ELEV: 120, SWOOP_ENTER_T: 0.15, SWOOP_DIVE_T: 0.65,
-    FLY_HIT_ELEV: 12,       // elevation at which Swoop ends its dive, px
+    FLY_HIT_ELEV: 12,       // elevation at which Swoop and Flit end their dive, px
+    DANGLE_ELEV: 20,        // elevation at which Dangle hangs, px
+    DANGLE_DROP_T: 0.2,     // t by which Dangle has dropped from the roof to DANGLE_ELEV
+    DANGLE_CLEAR: 128,      // Dangle's anchor is at least this far from the box of a branch, beehive or arch, px
+    FLIT_ENTER_T: 0.15, FLIT_CROSS_T: 0.55, FLIT_BEHIND_T: 0.70,   // t at which Flit's enter, cross and behind phases end; the dive ends at t = 1
+    FLIT_FROM_DX: 150, FLIT_BEHIND_DX: -72,     // dx at which Flit comes in, and of its hover point behind Pip, px
+    FLIT_CROSS_ELEV: 100, FLIT_BEHIND_ELEV: 80, // elevation at which Flit crosses over Pip, and from which it dives, px
     BUZZLE_ELEV: 16, BUZZLE_BOB: 4, BUZZLE_BOB_HZ: 1.5,
     HOP_LEN: 24, HOP_HEIGHT: 10,
     DIGBY_POP_T: 0.85,      // t at which the mole starts to rise
@@ -200,6 +206,7 @@
     SHIELD_INVULN: 1.0,
     HOURGLASS_TIME: 6, HOURGLASS_SCALE: 0.5,
     QUILL_TIME: 10,
+    WATCH_TIME: 3, WATCH_SCALE: 0,          // the Pocket Watch stops the world (LEVEL2 6.3)
     TUTOR_SCALE: 0.25, TUTOR_T: 0.6,
     CONTINUE_COUNT: 9, CONTINUE_LOCKOUT: 0.8,
     RESUME_STEP: 0.5,       // seconds per step of the 3-2-1 resume countdown
@@ -596,7 +603,8 @@
 
       wordLen: {                      // [min, max] before the section shift
         boulder: [2, 4], dawdle: [3, 5], hoppet: [2, 4], buzzle: [2, 4],
-        swoop: [3, 4], truffle: [2, 3], digby: [3, 4], crate: [3, 5], rock: [2, 4]
+        swoop: [3, 4], truffle: [2, 3], digby: [3, 4], crate: [3, 5], rock: [2, 4],
+        dangle: [3, 4], flit: [3, 4]
       },
       lenShift: [0, 0, 1],            // added to both ends in sections 0, 1, 2
       tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.3, 1: 0.1 }, { 1: 0.6, 2: 0.4 } ],   // sections 0, 1, 2, boss arena
@@ -665,7 +673,8 @@
 
       wordLen: {
         boulder: [4, 6], dawdle: [5, 8], hoppet: [4, 6], buzzle: [4, 6],
-        swoop: [5, 6], truffle: [4, 5], digby: [5, 6], crate: [5, 8], rock: [4, 5]
+        swoop: [5, 6], truffle: [4, 5], digby: [5, 6], crate: [5, 8], rock: [4, 5],
+        dangle: [5, 6], flit: [5, 6]
       },
       lenShift: [0, 1, 2],
       tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.4 }, { 1: 0.6, 2: 0.4 } ],
@@ -734,7 +743,8 @@
 
       wordLen: {
         boulder: [5, 9], dawdle: [7, 10], hoppet: [5, 8], buzzle: [5, 8],
-        swoop: [6, 9], truffle: [5, 7], digby: [6, 8], crate: [7, 10], rock: [5, 7]
+        swoop: [6, 9], truffle: [5, 7], digby: [6, 8], crate: [7, 10], rock: [5, 7],
+        dangle: [6, 8], flit: [6, 9]
       },
       lenShift: [0, 1, 2],
       tierMix: [ { 1: 1 }, { 2: 0.7, 1: 0.3 }, { 3: 0.6, 2: 0.4 }, { 1: 0.6, 2: 0.4 } ],
@@ -926,7 +936,21 @@
     ['boss_helmet',  16,  8, 'helmet',                        0,  8,  4],
     ['pr_rock',      12, 12, 'k0 k1',                        10,  6, 12],
     ['pr_pickaxe',   16, 16, 'p0 p1 p2 p3',                  12,  8, 16],
-    ['pr_shock',     16,  8, 's0 s1',                        10,  8,  8]
+    ['pr_shock',     16,  8, 's0 s1',                        10,  8,  8],
+    // Level 2 (LEVEL2 Appendix C). A row with a Level 1 name beside it is a copy of that sprite's row.
+    ['en_dangle',        16, 16, 'hang0 hang1 zip',            4,  8, 16],
+    ['en_flit',          24, 16, 'flap0 flap1 dive',           8, 12, 16],   // en_swoop
+    ['en_glimmer',       16, 16, 'fly0 fly1',                 16,  8, 16],   // en_buzzle
+    ['en_baronet',       16, 16, 'peek up spin',               0,  8, 16],   // en_digby
+    ['boss2_body',       48, 32, 'b0 b1',                      0, 24, 32],   // boss_body; fps 0, the renderer picks the frame (10.1)
+    ['boss2_head',       32, 24, 'normal laugh hurt dizzy',    0, 16, 24],   // boss_head
+    ['boss2_arm',        16, 16, 'rest raise throw watch',     0,  8,  8],   // boss_arm, plus watch
+    ['boss2_key',        16, 16, 'k0 k1 k2 k3',                0,  8,  8],
+    ['boss2_engine',     48, 16, 'shut open',                  0, 24, 16],   // boss_mound's size and anchor
+    ['boss2_goggles',     8,  8, 'goggles',                    0,  4,  4],   // boss_monocle
+    ['pr_cog',           12, 12, 'k0 k1',                     10,  6, 12],   // pr_rock
+    ['pr_rollgear',      16,  8, 's0 s1',                     10,  8,  8],   // pr_shock
+    ['pr_pendulum',      16, 16, 'p0 p1 p2 p3',               12,  8, 16]    // pr_pickaxe
   ];
 
   var MANIFEST_D = [
@@ -1001,7 +1025,50 @@
     ['bg_molehill',  16,  8, 'hill',                          0,  0,  8],
     ['bg_moon',      32, 32, 'moon',                          0,  0, 32],
     ['bg_star',       8,  8, 's0 s1',                         2,  0,  8],
-    ['fg_tuft',      16,  8, 't0 t1',                         0,  0,  8]
+    ['fg_tuft',      16,  8, 't0 t1',                         0,  0,  8],
+    // Level 2 (LEVEL2 Appendix C). A row with a Level 1 name beside it is a copy of that sprite's row.
+    // Tiles (16x16, anchor 0,0)
+    ['tile_cave_top',    16, 16, 'g0 g1',                      0,  0,  0],   // tile_grass
+    ['tile_cave_fill',   16, 16, 's0 s1',                      0,  0,  0],   // tile_soil
+    ['tile_cave_edge_l', 16, 16, 'edge',                       0,  0,  0],   // tile_edge_l
+    ['tile_cave_edge_r', 16, 16, 'edge',                       0,  0,  0],   // tile_edge_r
+    ['tile_cave_wall_l', 16, 16, 'wall',                       0,  0,  0],   // tile_wall_l
+    ['tile_cave_wall_r', 16, 16, 'wall',                       0,  0,  0],   // tile_wall_r
+    ['tile_pool',        16, 16, 'w0 w1',                      3,  0,  0],   // tile_water
+    ['tile_girder',      16, 16, 'plank',                      0,  0,  0],   // tile_plank
+    ['tile_clockfloor',  16, 16, 'a0 a1',                      0,  0,  0],   // tile_arena
+    // Hazard skins
+    ['haz_crystal',      16, 16, 'bramble',                    0,  0, 16],   // haz_bramble
+    ['haz_pipe',         16, 16, 'branch',                     0,  0, 16],   // haz_branch
+    ['haz_pipe_riser',   16, 16, 'trunk',                      0,  0, 16],   // haz_trunk
+    ['haz_lantern',      16, 24, 'hive',                       0,  0, 24],   // haz_beehive
+    ['haz_chain',        16, 16, 'rope',                       0,  0, 16],   // haz_rope
+    ['haz_tunnel',       48, 16, 'arch',                       0,  0, 16],   // haz_arch
+    ['haz_ceiling',      48, 16, 'canopy',                     0,  0, 16],   // haz_canopy
+    ['haz_column',       16, 16, 'trunk',                      0,  0, 16],   // haz_trunk
+    // The Pocket Watch, effects and decor
+    ['pw_watch',         16, 16, 'p0 p1',                      4,  8, 16],   // every pw_ row
+    ['fx_cogbit',         8,  8, 'c0 c1',                      0,  4,  4],   // fx_chunk
+    ['fx_flake',          8,  8, 'f0 f1',                      6,  4,  4],   // fx_feather
+    ['decor_hole',       32, 32, 'hole',                       0,  0, 32],
+    // Backdrop pieces of `cavern` (anchor bottom left)
+    ['bg_mist',          64, 16, 'm0 m1',                      2,  0, 16],
+    ['bg_gearstar',       8,  8, 's0 s1',                      2,  0,  8],   // bg_star
+    ['bg_clockface',     48, 48, 'c0 c1',                      1,  0, 48],
+    ['bg_cave_far',     128, 48, 'w0 w1',                      2,  0, 48],
+    ['bg_cave_mid',     128, 56, 'wall',                       0,  0, 56],
+    ['bg_roots',         32, 24, 'roots',                      0,  0, 24],
+    ['bg_lantern',       16, 24, 'l0 l1',                      3,  0, 24],
+    ['bg_cog_l',         48, 48, 'c0 c1 c2 c3',                4,  0, 48],
+    ['bg_pipe_v',        16, 48, 'pipe',                       0,  0, 48],
+    ['bg_crystal_l',     32, 24, 'crystal',                    0,  0, 24],
+    ['bg_stalagmite',    16, 24, 'spike',                      0,  0, 24],
+    ['bg_pipe_h',        32, 16, 'pipe',                       0,  0, 16],
+    ['bg_baronpeek',     16, 16, 'out in',                     1,  0, 16],
+    ['bg_rail',          32,  8, 'rail',                       0,  0,  8],
+    ['bg_boiler',        32, 32, 'b0 b1',                      2,  0, 32],
+    ['bg_crystal_s',     16, 16, 'crystal',                    0,  0, 16],
+    ['fg_stalagmite',    16,  8, 't0 t1',                      0,  0,  8]    // fg_tuft
   ];
 
   function buildManifest() {
@@ -1187,6 +1254,13 @@
 
   var TRI_STATE = ['auto', 'on', 'off'];
   var RANKS = ['S', 'A', 'B', 'C'];
+  // The settings that are whole numbers, each with its lowest and highest value (LEVEL2 12.6). The game
+  // has levels 1 and 2. A `cleared` number is the highest level cleared on that difficulty, 0 for none.
+  var LAST_LEVEL = 2;
+  var NUMBER_SETTINGS = {
+    lastLevel: [1, LAST_LEVEL], clearedEasy: [0, LAST_LEVEL], clearedMedium: [0, LAST_LEVEL], clearedHard: [0, LAST_LEVEL]
+  };
+  var CLEARED_KEYS = { easy: 'clearedEasy', medium: 'clearedMedium', hard: 'clearedHard' };
 
   var storage = null;        // the localStorage object kept by init, or null
 
@@ -1211,7 +1285,11 @@
       tutorialDone: false,
       lastDifficulty: 'medium',
       initials: 'PIP',
-      worldScores: true       // send scores to, and show, the world boards (js/board.js)
+      worldScores: true,      // send scores to, and show, the world boards (js/board.js)
+      lastLevel: 1,           // the stage last chosen on the STAGE row (LEVEL2 12.3)
+      clearedEasy: 0,         // the highest level cleared on each difficulty (LEVEL2 12.6). They are numbers
+      clearedMedium: 0,       // among the settings so that an older copy of the game, which keeps a setting
+      clearedHard: 0          // it does not know, keeps them
     };
   }
 
@@ -1221,7 +1299,8 @@
       settings: defaultSettings(),
       scores: { easy: seededScores('easy'), medium: seededScores('medium'), hard: seededScores('hard') },
       best: { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } },
-      assist: { easy: 1, medium: 1, hard: 1 }
+      assist: { easy: 1, medium: 1, hard: 1 },
+      pending: null           // { difficulty, entry }: the entry of a run that went on to the next stage, or null
     };
   }
 
@@ -1281,6 +1360,24 @@
     return TG.Util.clamp(v, TG.C.ASSIST_MIN_CONTINUE, TG.C.ASSIST_MAX);
   }
 
+  // A pending entry (LEVEL2 12.6) from anything: { difficulty, entry } with a known difficulty and a valid
+  // entry, or null.
+  function cleanPending(raw) {
+    if (!isPlainObject(raw) || DIFFICULTY_NAMES.indexOf(raw.difficulty) === -1) return null;
+    var e = cleanEntry(raw.entry);
+    return e ? { difficulty: raw.difficulty, entry: e } : null;
+  }
+
+  // The highest level cleared on any difficulty, from settings.
+  function highestCleared(settings) {
+    var top = 0;
+    for (var i = 0; i < DIFFICULTY_NAMES.length; i++) {
+      var v = settings[CLEARED_KEYS[DIFFICULTY_NAMES[i]]];
+      if (isNumber(v) && v > top) top = v;
+    }
+    return top;
+  }
+
   // Builds valid data from anything: fields that are missing or of the wrong kind take their default.
   function cleanData(raw) {
     var d = defaultData();
@@ -1299,6 +1396,9 @@
             if (DIFFICULTY_NAMES.indexOf(v) !== -1) d.settings[k] = v;
           } else if (k === 'initials') {
             d.settings[k] = cleanInitials(v, d.settings[k]);
+          } else if (hasOwn(NUMBER_SETTINGS, k)) {
+            // A whole number in range; anything that is not a number keeps the default.
+            if (isNumber(v)) d.settings[k] = TG.Util.clamp(Math.floor(v), NUMBER_SETTINGS[k][0], NUMBER_SETTINGS[k][1]);
           } else if (typeof v === 'boolean') {
             d.settings[k] = v;
           }
@@ -1307,10 +1407,20 @@
         }
       }
     }
+    // A record written before Level 2 has none of the `cleared` numbers (LEVEL2 12.6). Its tables are then
+    // the only sign that a level was cleared: an entry a player made has a date, and the seeded ones have none.
+    var written = isPlainObject(s) ? s : {};
+    var before = !hasOwn(written, CLEARED_KEYS.easy) && !hasOwn(written, CLEARED_KEYS.medium) && !hasOwn(written, CLEARED_KEYS.hard);
 
     for (var i = 0; i < DIFFICULTY_NAMES.length; i++) {
       var name = DIFFICULTY_NAMES[i];
       if (isPlainObject(raw.scores)) d.scores[name] = cleanScores(raw.scores[name], name);
+      if (before) {
+        for (var j = 0; j < d.scores[name].length; j++) {
+          var entry = d.scores[name][j];
+          if (entry.cleared && entry.date !== '') d.settings[CLEARED_KEYS[name]] = 1;
+        }
+      }
       if (isPlainObject(raw.best) && isPlainObject(raw.best[name])) {
         var b = raw.best[name];
         d.best[name] = {
@@ -1320,6 +1430,9 @@
       }
       if (isPlainObject(raw.assist)) d.assist[name] = clampAssist(raw.assist[name]);
     }
+    // The stage last chosen must be one that is open (levelOpen below).
+    if (d.settings.lastLevel > highestCleared(d.settings) + 1) d.settings.lastLevel = 1;
+    d.pending = cleanPending(raw.pending);
     return d;
   }
 
@@ -1463,6 +1576,9 @@
 
     // Updates best wpm and best score for result.difficulty and stores result.assist; also saves. A run
     // played with adaptive pacing off (result.adaptive === false) keeps the saved assist value as it was.
+    // A cleared stage (result.cleared) raises the `cleared` number of the difficulty to result.levelId,
+    // which is what opens the next level (levelOpen; LEVEL2 12.6). Everything written here is a highest
+    // value or a state, so recording a run again at its end, after its first stage, counts nothing twice.
     recordRun: function (result) {
       if (!isPlainObject(result) || !knownDifficulty(result.difficulty)) return;
       var data = currentData();
@@ -1477,7 +1593,60 @@
         if (!isPlainObject(data.assist)) data.assist = {};
         data.assist[d] = clampAssist(result.assist);
       }
+      var level = result.levelId;
+      if (result.cleared === true && isNumber(level) && level === Math.floor(level) && level >= 1 && level <= LAST_LEVEL) {
+        if (!isPlainObject(data.settings)) data.settings = defaultSettings();
+        var had = data.settings[CLEARED_KEYS[d]];
+        if (!isNumber(had) || had < level) data.settings[CLEARED_KEYS[d]] = level;
+      }
       TG.Save.save();
+    },
+
+    // Level 1 is always open. A later level is open once the level before it has been cleared on any
+    // difficulty (LEVEL2 12.3, decision 5: the unlock is global). The STAGE row is shown when levelOpen(2).
+    levelOpen: function (levelId) {
+      var data = currentData();
+      if (!isNumber(levelId) || levelId !== Math.floor(levelId) || levelId < 1 || levelId > LAST_LEVEL) return false;
+      return levelId === 1 || (isPlainObject(data.settings) && highestCleared(data.settings) >= levelId - 1);
+    },
+
+    // The pending entry (LEVEL2 12.6, decision 32): the table entry a run would have made when it went on
+    // to the next stage instead. It is cleared when the run ends in the game. One that is still there when
+    // the game starts belongs to a run that never ended (a closed tab), and enterPending adds it then.
+    // pending() returns a copy, { difficulty, entry }, or null.
+    pending: function () {
+      return cleanPending(currentData().pending);
+    },
+
+    // Keeps the entry (section 5.12; its name is not used) for the difficulty when its score would reach
+    // the table, and saves; false, with nothing kept and nothing saved, when it would not.
+    setPending: function (difficulty, entry) {
+      var e = cleanEntry(entry);
+      if (!knownDifficulty(difficulty) || !e || !TG.Save.qualifies(difficulty, e.score)) return false;
+      currentData().pending = { difficulty: difficulty, entry: e };
+      TG.Save.save();
+      return true;
+    },
+
+    // Forgets the pending entry and saves; does nothing, and writes nothing, when there is none.
+    clearPending: function () {
+      var data = currentData();
+      if (data.pending === null || data.pending === undefined) return;
+      data.pending = null;
+      TG.Save.save();
+    },
+
+    // For the start of the game: adds a pending entry to its table under the initials used last, forgets
+    // it and saves. Returns { difficulty, pos } with the 0-based position, or null when there was no
+    // pending entry or its score no longer reaches the table. With none it writes nothing.
+    enterPending: function () {
+      var p = TG.Save.pending();
+      if (!p) return null;
+      p.entry.name = cleanInitials(TG.Save.getSetting('initials'), 'PIP');
+      currentData().pending = null;
+      var pos = TG.Save.addScore(p.difficulty, p.entry);
+      if (pos < 0) TG.Save.save();     // addScore saves only when the entry is placed
+      return pos < 0 ? null : { difficulty: p.difficulty, pos: pos };
     },
 
     // Returns the three score tables to the seeded entries and the personal bests to 0; also saves.

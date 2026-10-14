@@ -266,7 +266,7 @@ With logs switched on, Cloudflare would also record a line of its own for every 
 
 ## What is stored
 
-One row per accepted run: three initials, the difficulty, score, WPM, accuracy, rank, whether the level was cleared, the run's length and the time it was submitted. Only the best 200 runs of each difficulty are kept.
+One row per accepted run: three initials, the difficulty, score, WPM, accuracy, rank, whether the run cleared a level, the run's length and the time it was submitted. Only the best 200 runs of each difficulty are kept.
 
 The player's network address is not stored. To limit how often one source can submit, the service keeps a hash of the address mixed with `TOKEN_SECRET` in the `hits` table (for an IPv6 address, a hash of its first 64 bits). Hashes older than an hour are deleted the next time a score is submitted, and by a clean-up that Cloudflare starts once an hour (the cron trigger in `wrangler.toml`), so none stays for more than about two hours. While a hash is kept, its row has the same time as the score that came with it, so the two can be matched by somebody who can read the database.
 

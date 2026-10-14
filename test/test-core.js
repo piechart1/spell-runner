@@ -69,9 +69,10 @@ const CORE = ['js/core.js'];
 // Loading
 // =================================================================================================
 
-check('stubs.FILES lists the 20 files of CONTRACT section 1 in load order', function () {
-  return stubs.FILES.length === 20 && stubs.FILES[0] === 'js/core.js' && stubs.FILES[12] === 'js/levels/level1.js' &&
-    stubs.FILES[17] === 'js/board.js' && stubs.FILES[19] === 'js/main.js' && fs.existsSync(path.join(stubs.ROOT, 'js', 'core.js'));
+check('stubs.FILES lists the 21 files of CONTRACT section 1 in load order', function () {
+  return stubs.FILES.length === 21 && stubs.FILES[0] === 'js/core.js' && stubs.FILES[12] === 'js/levels/level1.js' &&
+    stubs.FILES[13] === 'js/levels/level2.js' &&
+    stubs.FILES[18] === 'js/board.js' && stubs.FILES[20] === 'js/main.js' && fs.existsSync(path.join(stubs.ROOT, 'js', 'core.js'));
 });
 
 check('stubs.load() with the default file list succeeds and reports the files that do not exist as missing', function () {
@@ -79,13 +80,13 @@ check('stubs.load() with the default file list succeeds and reports the files th
   const existing = stubs.FILES.filter(function (f) { return fs.existsSync(path.join(stubs.ROOT, f)); });
   const absent = stubs.FILES.filter(function (f) { return !fs.existsSync(path.join(stubs.ROOT, f)); });
   return same(env.loaded, existing) && same(env.missing, absent) && env.loaded.indexOf('js/core.js') === 0 &&
-    env.loaded.length + env.missing.length === 20;
+    env.loaded.length + env.missing.length === 21;
 });
 
-check('stubs.load with core.js and 19 names that do not exist loads core.js and reports the rest as missing', function () {
+check('stubs.load with core.js and 20 names that do not exist loads core.js and reports the rest as missing', function () {
   const files = stubs.FILES.map(function (f, i) { return i === 0 ? f : 'js/absent/' + path.basename(f); });
   const env = stubs.load({ files: files });
-  return same(env.loaded, ['js/core.js']) && env.missing.length === 19 && typeof env.TG === 'object';
+  return same(env.loaded, ['js/core.js']) && env.missing.length === 20 && typeof env.TG === 'object';
 });
 
 check('stubs.load with allowMissing false throws and names the missing file', function () {
@@ -174,6 +175,23 @@ check('TG.C has the key values of CONTRACT section 3', function () {
     C.SLIDE_TIME === 0.875 && C.MAX_LIVES === 9 && C.MAX_SHIELD === 2 && C.SCORE_SLOTS === 5 &&
     same(C.SIM_SCREENS, ['playing', 'lifeLost', 'bossIntro', 'boss', 'levelComplete']) &&
     same(C.MIN_SPEED, { dawdle: 6, hoppet: 20, buzzle: 28 }) && same(C.MULT_STEPS, [0, 3, 6, 10, 15]);
+});
+
+check('TG.C has the Dangle and Flit constants of LEVEL2 4.3', function () {
+  const C = TG.C;
+  return C.DANGLE_ELEV === 20 && C.DANGLE_DROP_T === 0.2 && C.DANGLE_CLEAR === 128 && C.DANGLE_CLEAR === 8 * C.TILE &&
+    C.FLIT_ENTER_T === 0.15 && C.FLIT_CROSS_T === 0.55 && C.FLIT_BEHIND_T === 0.70 &&
+    C.FLIT_FROM_DX === 150 && C.FLIT_BEHIND_DX === -72 && C.FLIT_CROSS_ELEV === 100 && C.FLIT_BEHIND_ELEV === 80 &&
+    // The phases come in this order, and the hover point behind Pip is inside the view (Pip is at screen x 96).
+    0 < C.FLIT_ENTER_T && C.FLIT_ENTER_T < C.FLIT_CROSS_T && C.FLIT_CROSS_T < C.FLIT_BEHIND_T && C.FLIT_BEHIND_T < 1 &&
+    C.HERO_SCREEN_X + C.FLIT_BEHIND_DX - 12 >= 0;
+});
+
+check('TG.C has the Pocket Watch constants of LEVEL2 6.3', function () {
+  const C = TG.C;
+  // 3 real seconds on every difficulty (decision 22), and a scale of 0: the watch stops the world, where
+  // the Hourglass slows it to HOURGLASS_SCALE.
+  return C.WATCH_TIME === 3 && C.WATCH_SCALE === 0;
 });
 
 check('TG.PAL has 32 hex strings, TG.PAL_KEYS has 32 distinct keys, TG.COLOR has 32 names for 0 to 31', function () {
@@ -412,8 +430,10 @@ check('Save: before init and load, TG.Save.data equals TG.Save.defaults() by val
 check('Save: defaults have the shape and the seeded scores of CONTRACT 5.12', function () {
   const d = stubs.plain(TG.Save.defaults());
   assert.deepStrictEqual(d.settings, { music: true, sfx: true, crt: 'auto', reduceFlash: false, keyGuide: 'auto',
-    adaptive: true, tutorialDone: false, lastDifficulty: 'medium', initials: 'PIP', worldScores: true });
-  assert.deepStrictEqual(Object.keys(d), ['version', 'settings', 'scores', 'best', 'assist']);
+    adaptive: true, tutorialDone: false, lastDifficulty: 'medium', initials: 'PIP', worldScores: true,
+    lastLevel: 1, clearedEasy: 0, clearedMedium: 0, clearedHard: 0 });
+  assert.deepStrictEqual(Object.keys(d), ['version', 'settings', 'scores', 'best', 'assist', 'pending']);
+  assert.strictEqual(d.pending, null);
   assert.strictEqual(d.version, 1);
   assert.deepStrictEqual(d.best, { easy: { wpm: 0, score: 0 }, medium: { wpm: 0, score: 0 }, hard: { wpm: 0, score: 0 } });
   assert.deepStrictEqual(d.assist, { easy: 1, medium: 1, hard: 1 });
@@ -640,6 +660,298 @@ check('Save: resetScores returns the tables to the seeded entries and keeps the 
     stored.scores.hard[0].name === 'PIP' && stored.settings.music === false;
 });
 
+// -------------------------------------------------------------------------------------------------
+// TG.Save and Level 2 (docs/LEVEL2.md 12.6): the version stays 1 and nothing is migrated. A record of the
+// game as it was before is loaded as it is and gains the new fields.
+// -------------------------------------------------------------------------------------------------
+
+// The stored strings of test/fixtures/save-before-level2.json: its "what" says how they were made.
+const OLD_RECORDS = JSON.parse(fs.readFileSync(path.join(stubs.ROOT, 'test', 'fixtures', 'save-before-level2.json'), 'utf8')).records;
+const NEW_SETTINGS = ['lastLevel', 'clearedEasy', 'clearedMedium', 'clearedHard'];
+
+// A page load with `text` stored under the game's key.
+function loadStored(text) {
+  const e2 = stubs.load({ files: CORE, storage: 'memory' });
+  e2.storage.set('spellrunner.v1', text);
+  e2.TG.Save.init(e2.window);
+  e2.TG.Save.load();
+  return e2;
+}
+
+// The record `played` with changes: fn is given the parsed record and changes it.
+function changedRecord(fn) {
+  const record = JSON.parse(OLD_RECORDS.played);
+  fn(record);
+  return JSON.stringify(record);
+}
+
+function clearedNumbers(S) {
+  return [S.getSetting('clearedEasy'), S.getSetting('clearedMedium'), S.getSetting('clearedHard')];
+}
+
+check('Save: the records of the fixture are records of the game before Level 2: version 1, the five keys and ten settings of that time, dated entries', function () {
+  const played = JSON.parse(OLD_RECORDS.played), reset = JSON.parse(OLD_RECORDS.reset);
+  for (const r of [played, reset]) {
+    assert.deepStrictEqual(Object.keys(r), ['version', 'settings', 'scores', 'best', 'assist']);
+    assert.deepStrictEqual(Object.keys(r.settings), ['music', 'sfx', 'crt', 'reduceFlash', 'keyGuide', 'adaptive', 'tutorialDone', 'lastDifficulty', 'initials', 'worldScores']);
+    assert.strictEqual(r.version, 1);
+  }
+  const dated = function (r, d) { return r.scores[d].filter(function (e) { return e.date !== ''; }); };
+  assert.deepStrictEqual([dated(played, 'easy').length, dated(played, 'medium').length, dated(played, 'hard').length], [1, 2, 1]);
+  assert.strictEqual(dated(played, 'hard')[0].cleared, false);
+  assert.deepStrictEqual([dated(reset, 'easy').length, dated(reset, 'medium').length, dated(reset, 'hard').length], [0, 0, 0]);
+  // Every setting but sfx and adaptive is away from its default, so a setting that was lost would show.
+  const defaults = TG.Save.defaults().settings;
+  const moved = Object.keys(played.settings).filter(function (k) { return played.settings[k] !== defaults[k]; });
+  assert.deepStrictEqual(moved, ['music', 'crt', 'reduceFlash', 'keyGuide', 'tutorialDone', 'lastDifficulty', 'initials', 'worldScores']);
+  assert.ok(played.best.easy.score > 0 && played.best.medium.wpm > 0 && played.assist.easy < 1 && played.assist.medium < 1);
+});
+
+check('Save: a record stored before Level 2 loads with its scores, bests, assist and settings as they were, and loading writes nothing', function () {
+  const old = JSON.parse(OLD_RECORDS.played);
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  const data = stubs.plain(S.data);
+  assert.strictEqual(e2.storage.get('spellrunner.v1'), OLD_RECORDS.played, 'the stored string was changed by loading');
+  assert.strictEqual(data.version, 1);
+  assert.deepStrictEqual(data.scores, old.scores);
+  assert.deepStrictEqual(data.best, old.best);
+  assert.deepStrictEqual(data.assist, old.assist);
+  Object.keys(old.settings).forEach(function (k) { assert.strictEqual(S.getSetting(k), old.settings[k], 'setting ' + k); });
+  ['easy', 'medium', 'hard'].forEach(function (d) {
+    assert.deepStrictEqual(stubs.plain(S.scores(d)), old.scores[d]);
+    assert.deepStrictEqual(stubs.plain(S.best(d)), old.best[d]);
+    assert.strictEqual(S.assist(d), old.assist[d]);
+  });
+  assert.ok(S.qualifies('hard', 18551) && !S.qualifies('hard', 18550), 'the last place of the hard table is the entry of 18550');
+});
+
+check('Save: that record gains the new fields on loading, keeps everything through a save and a reload, and is still version 1', function () {
+  const old = JSON.parse(OLD_RECORDS.played);
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  assert.deepStrictEqual(Object.keys(stubs.plain(S.data)), ['version', 'settings', 'scores', 'best', 'assist', 'pending']);
+  assert.deepStrictEqual(Object.keys(stubs.plain(S.data.settings)), Object.keys(old.settings).concat(NEW_SETTINGS));
+  assert.strictEqual(S.getSetting('lastLevel'), 1);
+  assert.strictEqual(S.pending(), null);
+  // An option is changed, which saves, as any change does.
+  S.setSetting('sfx', false);
+  const written = JSON.parse(e2.storage.get('spellrunner.v1'));
+  assert.strictEqual(written.version, 1);
+  assert.deepStrictEqual(written.scores, old.scores);
+  assert.deepStrictEqual(written.best, old.best);
+  assert.deepStrictEqual(written.assist, old.assist);
+  assert.strictEqual(written.pending, null);
+  const expected = Object.assign({}, old.settings, { sfx: false, lastLevel: 1, clearedEasy: 1, clearedMedium: 1, clearedHard: 0 });
+  assert.deepStrictEqual(written.settings, expected);
+  // The next page load reads what was written: the same again.
+  const e3 = loadStored(e2.storage.get('spellrunner.v1'));
+  assert.deepStrictEqual(stubs.plain(e3.TG.Save.data), written);
+});
+
+check('Save: a dated cleared entry in a table opens Level 2 for a record stored before it, on that difficulty\'s number; a dated entry that is not cleared does not', function () {
+  const S = loadStored(OLD_RECORDS.played).TG.Save;
+  // Easy and Medium hold cleared entries with a date. Hard's dated entry is of a run that was ended.
+  assert.deepStrictEqual(clearedNumbers(S), [1, 1, 0]);
+  assert.ok(S.levelOpen(1) && S.levelOpen(2), 'level 2 is not open');
+  // One difficulty is enough (decision 5): the unlock is global.
+  const onlyEasy = loadStored(changedRecord(function (r) { r.scores.medium = JSON.parse(OLD_RECORDS.reset).scores.medium; })).TG.Save;
+  assert.deepStrictEqual(clearedNumbers(onlyEasy), [1, 0, 0]);
+  assert.strictEqual(onlyEasy.levelOpen(2), true);
+});
+
+check('Save: seeded tables alone do not open Level 2 (a record after RESET SCORES), and the rest of that record is kept', function () {
+  const old = JSON.parse(OLD_RECORDS.reset);
+  const e2 = loadStored(OLD_RECORDS.reset);
+  const S = e2.TG.Save;
+  assert.deepStrictEqual(clearedNumbers(S), [0, 0, 0]);
+  assert.strictEqual(S.levelOpen(2), false);
+  assert.strictEqual(S.levelOpen(1), true);
+  assert.deepStrictEqual(stubs.plain(S.data.scores), stubs.plain(S.defaults().scores));
+  assert.deepStrictEqual(stubs.plain(S.data.assist), old.assist);
+  Object.keys(old.settings).forEach(function (k) { assert.strictEqual(S.getSetting(k), old.settings[k], 'setting ' + k); });
+});
+
+check('Save: once a record has its cleared numbers they are the record: the tables are not read again, and absent ones are 0', function () {
+  // The numbers written as 0 beside dated cleared entries: an older copy of the game played on a newer record.
+  const zeros = loadStored(changedRecord(function (r) { r.settings.clearedEasy = 0; r.settings.clearedMedium = 0; r.settings.clearedHard = 0; })).TG.Save;
+  assert.deepStrictEqual(clearedNumbers(zeros), [0, 0, 0]);
+  assert.strictEqual(zeros.levelOpen(2), false);
+  const one = loadStored(changedRecord(function (r) { r.settings.clearedHard = 2; })).TG.Save;
+  assert.deepStrictEqual(clearedNumbers(one), [0, 0, 2]);
+  assert.strictEqual(one.levelOpen(2), true);
+});
+
+check('Save: a number out of range in lastLevel or a cleared setting is clamped to a whole number in range, and a value that is not a number takes the default', function () {
+  const load = function (settings) { return loadStored(changedRecord(function (r) { Object.assign(r.settings, settings); })).TG.Save; };
+  const values = function (S) { return [S.getSetting('lastLevel')].concat(clearedNumbers(S)); };
+  assert.deepStrictEqual(values(load({ lastLevel: 7, clearedEasy: -3, clearedMedium: 2.9, clearedHard: 99 })), [2, 0, 2, 2]);
+  assert.deepStrictEqual(values(load({ lastLevel: 0, clearedEasy: 1, clearedMedium: 0, clearedHard: 0 })), [1, 1, 0, 0]);
+  assert.deepStrictEqual(values(load({ lastLevel: 2.5, clearedEasy: 1.5, clearedMedium: 0, clearedHard: 0 })), [2, 1, 0, 0]);
+  assert.deepStrictEqual(values(load({ lastLevel: '2', clearedEasy: true, clearedMedium: null, clearedHard: 'x' })), [1, 0, 0, 0]);
+  // The stage last chosen must be open: Level 2 with nothing cleared is not.
+  assert.deepStrictEqual(values(load({ lastLevel: 2, clearedEasy: 0, clearedMedium: 0, clearedHard: 0 })), [1, 0, 0, 0]);
+  assert.deepStrictEqual(values(load({ lastLevel: 2, clearedEasy: 0, clearedMedium: 0, clearedHard: 1 })), [2, 0, 0, 1]);
+  // In a record stored before Level 2 the tables open it, so a lastLevel of 2 beside them is kept.
+  assert.deepStrictEqual(values(load({ lastLevel: 2 })), [2, 1, 1, 0]);
+  // The other settings of such a record are untouched by any of this.
+  const S = load({ lastLevel: 7, clearedEasy: -3, clearedMedium: 2.9, clearedHard: 99 });
+  const old = JSON.parse(OLD_RECORDS.played);
+  Object.keys(old.settings).forEach(function (k) { assert.strictEqual(S.getSetting(k), old.settings[k], 'setting ' + k); });
+});
+
+check('Save: a record of any other version is still read as defaults, whatever it holds', function () {
+  ['2', '0', '"1"', '3'].forEach(function (version) {
+    const text = OLD_RECORDS.played.replace('{"version":1,', '{"version":' + version + ',');
+    assert.notStrictEqual(text, OLD_RECORDS.played);
+    const S = loadStored(text).TG.Save;
+    assert.ok(same(S.data, S.defaults()), 'version ' + version + ' was not read as defaults');
+  });
+  const none = changedRecord(function (r) { delete r.version; r.settings.clearedEasy = 2; r.pending = { difficulty: 'easy', entry: { score: 99999 } }; });
+  const S = loadStored(none).TG.Save;
+  assert.ok(same(S.data, S.defaults()) && S.levelOpen(2) === false && S.pending() === null);
+});
+
+check('Save: recordRun opens the next level on a cleared run and not on an ended one; the number only rises; RESET SCORES keeps it', function () {
+  const e2 = stubs.load({ files: CORE, storage: 'memory' });
+  const S = e2.TG.Save;
+  S.init(e2.window);
+  S.load();
+  const run = function (over) { return Object.assign({ difficulty: 'medium', levelId: 1, cleared: true, score: 5000, typing: { wpm: 20 }, assist: 1 }, over); };
+  assert.strictEqual(S.levelOpen(2), false);
+  // Ended runs: a game over or a quit, in either level.
+  S.recordRun(run({ cleared: false }));
+  S.recordRun(run({ cleared: false, levelId: 2, difficulty: 'hard' }));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 0, 0]);
+  assert.strictEqual(S.levelOpen(2), false);
+  // A result without the two fields, as some tests and older callers pass it, changes nothing either.
+  S.recordRun({ difficulty: 'easy', score: 100, typing: { wpm: 5 }, assist: 1 });
+  S.recordRun(run({ levelId: 3 }));
+  S.recordRun(run({ levelId: 0 }));
+  S.recordRun(run({ levelId: 1.5 }));
+  S.recordRun(run({ levelId: 'test' }));
+  S.recordRun(run({ cleared: 'yes' }));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 0, 0]);
+  // Level 1 cleared on Medium: its number is 1, the others stay 0, and Level 2 is open for every difficulty.
+  S.recordRun(run({}));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 1, 0]);
+  assert.strictEqual(S.levelOpen(2), true);
+  assert.strictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).settings.clearedMedium, 1);
+  // Level 2 cleared, then Level 1 again and an ended run: the number does not go back.
+  S.recordRun(run({ levelId: 2, score: 9000 }));
+  S.recordRun(run({}));
+  S.recordRun(run({ cleared: false, levelId: 2 }));
+  assert.deepStrictEqual(clearedNumbers(S), [0, 2, 0]);
+  // Recording a run again, as the end of a run does after its first stage, counts nothing twice.
+  const before = e2.storage.get('spellrunner.v1');
+  S.recordRun(run({ levelId: 2, score: 9000 }));
+  assert.strictEqual(e2.storage.get('spellrunner.v1'), before);
+  assert.deepStrictEqual(stubs.plain(S.best('medium')), { wpm: 20, score: 9000 });
+  S.resetScores();
+  assert.deepStrictEqual(clearedNumbers(S), [0, 2, 0]);
+  assert.strictEqual(S.levelOpen(2), true);
+  assert.ok(!S.levelOpen(3) && !S.levelOpen(0) && !S.levelOpen(1.5) && !S.levelOpen('2') && !S.levelOpen(undefined), 'levelOpen of a level that does not exist');
+});
+
+check('Save: the pending entry is kept through a reload, entered once under the initials used last, and gone after that', function () {
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  const entry = { name: 'ZZZ', score: 45000, wpm: 31.6, accuracy: 96, rank: 'A', cleared: true, date: '2026-10-12' };
+  assert.strictEqual(S.setPending('medium', entry), true);
+  const kept = { difficulty: 'medium', entry: { name: 'ZZZ', score: 45000, wpm: 32, accuracy: 96, rank: 'A', cleared: true, date: '2026-10-12' } };
+  assert.deepStrictEqual(stubs.plain(S.pending()), kept);
+  assert.deepStrictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).pending, kept);
+  // pending() hands out a copy, and the tables are as they were.
+  S.pending().entry.score = 1;
+  assert.strictEqual(S.pending().entry.score, 45000);
+  assert.deepStrictEqual(stubs.plain(S.scores('medium')), JSON.parse(OLD_RECORDS.played).scores.medium);
+  // The tab is closed. The next page load finds the entry and adds it, under EVE, the initials used last.
+  const e3 = loadStored(e2.storage.get('spellrunner.v1'));
+  const S3 = e3.TG.Save;
+  assert.deepStrictEqual(stubs.plain(S3.pending()), kept);
+  assert.deepStrictEqual(stubs.plain(S3.enterPending()), { difficulty: 'medium', pos: 1 });
+  assert.deepStrictEqual(stubs.plain(S3.scores('medium')[1]), Object.assign({}, kept.entry, { name: 'EVE' }));
+  assert.strictEqual(S3.pending(), null);
+  assert.strictEqual(JSON.parse(e3.storage.get('spellrunner.v1')).pending, null);
+  // Once: a second call, and the page load after that, add nothing.
+  const table = JSON.stringify(S3.scores('medium'));
+  assert.strictEqual(S3.enterPending(), null);
+  const e4 = loadStored(e3.storage.get('spellrunner.v1'));
+  assert.strictEqual(e4.TG.Save.enterPending(), null);
+  assert.strictEqual(JSON.stringify(e4.TG.Save.scores('medium')), table);
+  assert.strictEqual(e4.TG.Save.scores('medium').filter(function (e) { return e.score === 45000; }).length, 1);
+});
+
+check('Save: a pending entry that is cleared, as at the end of a run, is never entered; one whose score no longer places is dropped', function () {
+  const e2 = loadStored(OLD_RECORDS.played);
+  const S = e2.TG.Save;
+  const entry = function (score) { return { name: 'ZZZ', score: score, wpm: 30, accuracy: 95, rank: 'A', cleared: true, date: '2026-10-12' }; };
+  const table = JSON.stringify(S.scores('easy'));
+  assert.strictEqual(S.setPending('easy', entry(20000)), true);
+  S.clearPending();
+  assert.strictEqual(S.pending(), null);
+  assert.strictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).pending, null);
+  assert.strictEqual(S.enterPending(), null);
+  assert.strictEqual(loadStored(e2.storage.get('spellrunner.v1')).TG.Save.enterPending(), null);
+  assert.strictEqual(JSON.stringify(S.scores('easy')), table);
+  // A second one replaces the first.
+  S.setPending('easy', entry(20000));
+  S.setPending('easy', entry(21000));
+  assert.strictEqual(S.pending().entry.score, 21000);
+  // Five higher scores reach the table before the game is started again: the entry is dropped, and stays dropped.
+  for (let i = 0; i < 5; i++) S.addScore('easy', entry(40000 + i));
+  assert.strictEqual(S.enterPending(), null);
+  assert.strictEqual(S.pending(), null);
+  assert.strictEqual(JSON.parse(e2.storage.get('spellrunner.v1')).pending, null);
+  assert.ok(S.scores('easy').every(function (e) { return e.score >= 40000; }));
+});
+
+check('Save: setPending keeps nothing that would not reach the table or is not an entry; a damaged pending entry loads as none; with none, nothing is written', function () {
+  const e2 = stubs.load({ files: CORE, storage: 'memory' });
+  const S = e2.TG.Save;
+  S.init(e2.window);
+  S.load();
+  const entry = { name: 'ZZZ', score: 8000, wpm: 30, accuracy: 95, rank: 'A', cleared: true, date: '2026-10-12' };
+  // 8000 is the last place of the seeded Medium table, and a score must beat it.
+  assert.strictEqual(S.setPending('medium', entry), false);
+  assert.strictEqual(S.setPending('nightmare', Object.assign({}, entry, { score: 99999 })), false);
+  assert.strictEqual(S.setPending('easy', null), false);
+  assert.strictEqual(S.setPending('easy', { name: 'ZZZ', score: 'many' }), false);
+  assert.strictEqual(S.pending(), null);
+  S.clearPending();
+  assert.strictEqual(S.enterPending(), null);
+  assert.strictEqual(e2.storage.size, 0, 'something was written with no pending entry');
+  const damaged = ['"x"', '7', '[]', '{}', '{"difficulty":"nightmare","entry":{"score":5}}', '{"difficulty":"easy"}',
+    '{"difficulty":"easy","entry":{"name":"ZZZ","score":"many"}}', '{"difficulty":"easy","entry":{"score":-1}}'];
+  damaged.forEach(function (text) {
+    const S2 = loadStored(OLD_RECORDS.played.replace(/\}$/, ',"pending":' + text + '}')).TG.Save;
+    assert.strictEqual(S2.pending(), null, 'pending ' + text);
+    assert.strictEqual(S2.enterPending(), null, 'pending ' + text);
+    assert.deepStrictEqual(stubs.plain(S2.data.scores), JSON.parse(OLD_RECORDS.played).scores);
+  });
+  // And a whole one in the stored record is read: it is cleaned as an entry is.
+  const S3 = loadStored(OLD_RECORDS.played.replace(/\}$/, ',"pending":{"difficulty":"hard","entry":{"name":"ab","score":30000.7,"wpm":50,"accuracy":97,"rank":"S","cleared":true,"date":"2026-10-12","extra":1}}}')).TG.Save;
+  assert.deepStrictEqual(stubs.plain(S3.pending()), { difficulty: 'hard', entry: { name: 'ABA', score: 30000, wpm: 50, accuracy: 97, rank: 'S', cleared: true, date: '2026-10-12' } });
+});
+
+['none', 'throw'].forEach(function (mode) {
+  check('Save: the unlock and the pending entry work from memory with storage "' + mode + '"', function () {
+    const e2 = stubs.load({ files: CORE, storage: mode });
+    const S = e2.TG.Save;
+    S.init(e2.window);
+    S.load();
+    S.recordRun({ difficulty: 'easy', levelId: 1, cleared: true, score: 20000, typing: { wpm: 12 }, assist: 0.9 });
+    assert.strictEqual(S.levelOpen(2), true);
+    assert.strictEqual(S.setPending('easy', { name: 'AAA', score: 20000, wpm: 12, accuracy: 93, rank: 'A', cleared: true, date: '2026-10-12' }), true);
+    assert.strictEqual(S.load(), S.data);
+    assert.strictEqual(S.pending().entry.score, 20000);
+    assert.deepStrictEqual(stubs.plain(S.enterPending()), { difficulty: 'easy', pos: 0 });
+    S.clearPending();
+    assert.strictEqual(S.pending(), null);
+    assert.strictEqual(e2.errors.length, 0);
+  });
+});
+
 check('Save: the constants option is honoured (STORAGE_KEY and SCORE_SLOTS are read when the functions run)', function () {
   const e2 = stubs.load({ files: CORE, storage: 'memory', constants: { STORAGE_KEY: 'other.key', SCORE_SLOTS: 3 } });
   const S = e2.TG.Save;
@@ -685,6 +997,19 @@ check('Difficulty.wordRange: the boss arena (index 3) has no shift; the maximum 
     same(D.wordRange(h, 'crate', 1), [8, 10]) && same(D.wordRange(e, 'boulder', 0), [2, 4]) &&
     same(D.wordRange(e, 'boulder', 2), [3, 5]) && same(D.wordRange(e, 'truffle', 1), [2, 3]) &&
     same(D.wordRange(h, 'digby', 2), [8, 10]) && same(D.wordRange(h, 'rock', 3), [5, 7]);
+});
+
+check('Difficulty: wordLen.dangle and wordLen.flit are the rows of LEVEL2 4.2, and wordRange shifts them by section', function () {
+  const e2 = stubs.load({ files: CORE });
+  const D = e2.TG.Difficulty;
+  const e = D.get('easy'), m = D.get('medium'), h = D.get('hard');
+  // A kind with a row does not get the "no word length" warning.
+  return same(e.wordLen.dangle, [3, 4]) && same(m.wordLen.dangle, [5, 6]) && same(h.wordLen.dangle, [6, 8]) &&
+    same(e.wordLen.flit, [3, 4]) && same(m.wordLen.flit, [5, 6]) && same(h.wordLen.flit, [6, 9]) &&
+    same(D.wordRange(e, 'dangle', 0), [3, 4]) && same(D.wordRange(e, 'flit', 2), [4, 5]) &&
+    same(D.wordRange(m, 'dangle', 1), [6, 7]) && same(D.wordRange(m, 'flit', 2), [7, 8]) &&
+    same(D.wordRange(h, 'dangle', 1), [7, 9]) && same(D.wordRange(h, 'flit', 2), [8, 10]) &&
+    e2.warnings.length === 0;
 });
 
 check('Difficulty.wordRange returns a new array each time and follows the constants option', function () {
@@ -882,7 +1207,7 @@ check('Sprites.check accepts every palette key, an anchor outside the frame, fps
   return same(TG.Sprites.check(def), []);
 });
 
-check('Sprites.MANIFEST has 93 entries with distinct names: 27 of owner C and 66 of owner D', function () {
+check('Sprites.MANIFEST has 144 entries with distinct names: 40 of owner C and 104 of owner D', function () {
   const M = TG.Sprites.MANIFEST;
   const names = M.map(function (m) { return m.name; });
   const distinct = names.filter(function (n, i) { return names.indexOf(n) === i; });
@@ -892,7 +1217,7 @@ check('Sprites.MANIFEST has 93 entries with distinct names: 27 of owner C and 66
     return typeof m.name === 'string' && m.w > 0 && m.h > 0 && m.frames >= 1 && typeof m.ax === 'number' && typeof m.ay === 'number' &&
       (m.owner === 'C' || m.owner === 'D') && Array.isArray(m.names) && m.names.length === m.frames && typeof m.fps === 'number';
   });
-  return Array.isArray(M) && M.length === 93 && distinct.length === 93 && c === 27 && d === 66 && shapeOk;
+  return Array.isArray(M) && M.length === 144 && distinct.length === 144 && c === 40 && d === 104 && shapeOk;
 });
 
 check('Sprites.MANIFEST: fx_bracket has 4 frames (tl0 tl1 bl0 bl1); spot checks of other entries', function () {
@@ -908,12 +1233,49 @@ check('Sprites.MANIFEST: fx_bracket has 4 frames (tl0 tl1 bl0 bl1); spot checks 
   assert.deepStrictEqual(entry('key_wide'), { name: 'key_wide', w: 32, h: 16, frames: 2, ax: 0, ay: 0, owner: 'D', fps: 0, names: ['up', 'down'] });
 });
 
+// The skins rule (LEVEL2 4.5 and Appendix C): the renderer draws a Level 2 sprite where it would draw the
+// Level 1 sprite, with the same frame choice and the same placement, so the two rows must agree.
+check('Sprites.MANIFEST: a Level 2 sprite that takes the place of a Level 1 sprite has its size, frame names, fps and anchor', function () {
+  const M = TG.Sprites.MANIFEST;
+  function entry(name) {
+    const e = M.filter(function (m) { return m.name === name; })[0];
+    if (!e) throw new Error(name + ' is not in the manifest');
+    return stubs.plain(e);
+  }
+  // Level 2 name: the Level 1 row it copies in full
+  const COPIES = {
+    en_flit: 'en_swoop', en_glimmer: 'en_buzzle', en_baronet: 'en_digby', boss2_head: 'boss_head',
+    pr_cog: 'pr_rock', pr_rollgear: 'pr_shock', pr_pendulum: 'pr_pickaxe',
+    tile_cave_top: 'tile_grass', tile_cave_fill: 'tile_soil', tile_cave_edge_l: 'tile_edge_l', tile_cave_edge_r: 'tile_edge_r',
+    tile_cave_wall_l: 'tile_wall_l', tile_cave_wall_r: 'tile_wall_r', tile_pool: 'tile_water', tile_girder: 'tile_plank',
+    tile_clockfloor: 'tile_arena',
+    haz_crystal: 'haz_bramble', haz_pipe: 'haz_branch', haz_pipe_riser: 'haz_trunk', haz_lantern: 'haz_beehive',
+    haz_chain: 'haz_rope', haz_tunnel: 'haz_arch', haz_ceiling: 'haz_canopy', haz_column: 'haz_trunk',
+    pw_watch: 'pw_shield', fx_cogbit: 'fx_chunk', fx_flake: 'fx_feather', bg_gearstar: 'bg_star', fg_stalagmite: 'fg_tuft'
+  };
+  // Level 2 name: the Level 1 sprite whose size and anchor it has; its frames or its fps are its own
+  const PLACED_AS = { boss2_body: 'boss_body', boss2_arm: 'boss_arm', boss2_engine: 'boss_mound', boss2_goggles: 'boss_monocle' };
+  const bad = [];
+  Object.keys(COPIES).forEach(function (n) {
+    const a = entry(n), b = entry(COPIES[n]);
+    a.name = b.name;
+    if (!same(a, b)) bad.push(n + ' is not the row of ' + COPIES[n]);
+  });
+  Object.keys(PLACED_AS).forEach(function (n) {
+    const a = entry(n), b = entry(PLACED_AS[n]);
+    if (a.w !== b.w || a.h !== b.h || a.ax !== b.ax || a.ay !== b.ay) bad.push(n + ' has not the size and anchor of ' + PLACED_AS[n]);
+  });
+  // boss2_arm is boss_arm's three frames and one more
+  if (!same(entry('boss2_arm').names, entry('boss_arm').names.concat(['watch']))) bad.push('boss2_arm frame names');
+  return bad.length === 0 ? true : bad.join('; ');
+});
+
 check('Sprites.missing lists manifest names that are undefined or differ in size or frame count', function () {
   const e2 = stubs.load({ files: CORE });
   const S = e2.TG.Sprites;
   const all = S.missing();
   const c = S.missing('C'), d = S.missing('D');
-  if (all.length !== 93 || c.length !== 27 || d.length !== 66) return 'before: ' + [all.length, c.length, d.length];
+  if (all.length !== 144 || c.length !== 40 || d.length !== 104) return 'before: ' + [all.length, c.length, d.length];
   function blank(w, h, frames, names) {
     const rows = [];
     for (let y = 0; y < h; y++) rows.push(new Array(w + 1).join('0'));
@@ -926,8 +1288,8 @@ check('Sprites.missing lists manifest names that are undefined or differ in size
   S.define('pr_rock', blank(16, 12, 2, ['k0', 'k1']));             // wrong size
   S.define('test_extra', blank(8, 8, 1, ['x']));                   // not in the manifest
   const after = S.missing('C');
-  return after.length === 26 && after.indexOf('ink_bolt') === -1 && after.indexOf('ink_spark') !== -1 &&
-    after.indexOf('pr_rock') !== -1 && S.missing('D').length === 66 && S.missing().length === 92 &&
+  return after.length === 39 && after.indexOf('ink_bolt') === -1 && after.indexOf('ink_spark') !== -1 &&
+    after.indexOf('pr_rock') !== -1 && S.missing('D').length === 104 && S.missing().length === 143 &&
     S.missing().indexOf('test_extra') === -1;
 });
 
@@ -1529,7 +1891,7 @@ if (contract === null || design === null) {
     const re = /<script src="([^"]+)"><\/script>/g;
     let m;
     while ((m = re.exec(sec)) !== null) tags.push(m[1]);
-    return numbered.length === 20 && same(numbered, stubs.FILES) && same(tags, stubs.FILES);
+    return numbered.length === 21 && same(numbered, stubs.FILES) && same(tags, stubs.FILES);
   });
 
   check('doc: TG.Difficulty.TUNABLE equals the list in CONTRACT 4.5', function () {
