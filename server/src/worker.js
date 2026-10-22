@@ -79,7 +79,9 @@ export const RULES = Object.freeze({
 // (http://localhost, http://127.0.0.1 or http://[::1], any port) is accepted for development.
 // html-classic.itch.zone is where itch.io serves every browser game from, this one included. It is
 // shared by all games there, so for that address the rule only keeps out ordinary websites.
-export const ORIGINS = Object.freeze(['https://piechart1.github.io', 'https://html-classic.itch.zone']);
+// spellrunner.piechartstudios.com is the game's own address; piechart1.github.io redirects to it and
+// stays in the list for copies of the page that were loaded before the move.
+export const ORIGINS = Object.freeze(['https://piechart1.github.io', 'https://html-classic.itch.zone', 'https://spellrunner.piechartstudios.com']);
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?$/;
 
 // Section 6: error code -> HTTP status.

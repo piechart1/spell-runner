@@ -657,6 +657,7 @@ async function main() {
   });
 
   const GAME_ORIGIN = 'https://piechart1.github.io';
+  const NEW_ORIGIN = 'https://spellrunner.piechartstudios.com';
   const OTHER_ORIGINS = ['https://some-other-site.example', 'http://piechart1.github.io', 'https://piechart1.github.io.example.com',
     'https://evil-piechart1.github.io', 'https://piechart1.github.io:8443', 'https://github.io', 'null', 'http://localhost.example.com',
     'https://localhost', 'http://127.0.0.1.example.com', 'http://127.0.0.2:8000', 'http://localhost:8787/', 'file://'];
@@ -664,7 +665,10 @@ async function main() {
   await check('origin: a POST from a page of another site gives 403 origin on both paths, and nothing is issued or stored', async () => {
     const s = service();
     // The game's own page, and the address itch.io serves every browser game from.
-    assert.deepStrictEqual(Array.from(W.ORIGINS), [GAME_ORIGIN, 'https://html-classic.itch.zone']);
+    assert.deepStrictEqual(Array.from(W.ORIGINS), [GAME_ORIGIN, 'https://html-classic.itch.zone', NEW_ORIGIN]);
+    for (const near of ['http://spellrunner.piechartstudios.com', 'https://spellrunner.piechartstudios.com.example.com', 'https://piechartstudios.com', 'https://evil.spellrunner.piechartstudios.com', 'https://spellrunner.piechartstudios.com:8443']) {
+      expectError(await s.call('POST', '/v1/runs', { body: { difficulty: 'easy' }, headers: { Origin: near } }), 403, 'origin', near);
+    }
     const itch = await s.call('POST', '/v1/runs', { body: { difficulty: 'easy' }, headers: { Origin: 'https://html-classic.itch.zone' } });
     assert.strictEqual(itch.status, 200, 'the itch.io address was refused');
     for (const near of ['https://itch.zone', 'https://html-classic.itch.zone.example.com', 'http://html-classic.itch.zone', 'https://evil.itch.zone']) {
@@ -689,7 +693,7 @@ async function main() {
 
   await check('origin: the game\'s address, a local address and a request without an Origin header can POST; anybody can read the boards', async () => {
     const s = service();
-    const origins = [GAME_ORIGIN, 'http://localhost', 'http://localhost:8417', 'http://127.0.0.1:8417', 'http://[::1]:8000', undefined];
+    const origins = [GAME_ORIGIN, NEW_ORIGIN, 'http://localhost', 'http://localhost:8417', 'http://127.0.0.1:8417', 'http://[::1]:8000', undefined];
     for (const origin of origins) {
       const headers = origin === undefined ? {} : { Origin: origin };
       const run = await s.call('POST', '/v1/runs', { body: { difficulty: 'easy' }, headers: headers });
